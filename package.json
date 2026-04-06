@@ -1,0 +1,26 @@
+{
+  "name": "xenakube",
+  "version": "1.0.0",
+  "description": "",
+  "main": "src/engine.ts",
+  "scripts": {
+    "dev": "tsx src/engine.ts",
+    "build": "tsc",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "@types/ws": "^8.18.1",
+    "node-osc": "^11.3.0",
+    "tsx": "^4.21.0",
+    "typescript": "^6.0.2",
+    "ws": "^8.20.0"
+  },
+  "devDependencies": {
+    "vitest": "^4.1.2"
+  }
+}
