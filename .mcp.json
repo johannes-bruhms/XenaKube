@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "maxmsp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "G:/XenaKube/maxmsp-mcp",
+        "run",
+        "server.py"
+      ]
+    }
+  }
+}
