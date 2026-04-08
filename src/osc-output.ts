@@ -1,4 +1,4 @@
-// === OSC Output: Formats and sends state to Max/MSP and TouchDesigner ===
+// === OSC Output: Formats and sends state to SuperCollider and TouchDesigner ===
 
 import type { XenaKubeState } from './types.js';
 
