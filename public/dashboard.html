@@ -1,0 +1,1241 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XenaKube</title>
+<style>
+  :root {
+    --bg: #0a0a0f;
+    --panel: #12121a;
+    --border: #1e1e2e;
+    --text: #c8c8d8;
+    --dim: #555568;
+    --accent: #00ff88;
+    --accent2: #00ccff;
+    --warm: #ff6644;
+    --gold: #ffcc00;
+    --active-glow: rgba(0, 255, 136, 0.25);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    overflow-x: hidden;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 10px 20px;
+    border-bottom: 1px solid var(--border);
+    background: var(--panel);
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+  header h1 {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--accent);
+    letter-spacing: 2px;
+  }
+  .header-connect {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+  .header-connect input {
+    padding: 5px 10px;
+    font-size: 12px;
+    width: 180px;
+    text-align: center;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--accent);
+    font-family: monospace;
+  }
+  .header-connect button, .ctrl-btn {
+    padding: 5px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    cursor: pointer;
+    background: var(--accent);
+    color: var(--bg);
+    border: none;
+    border-radius: 4px;
+    font-family: monospace;
+  }
+  .header-connect button:hover, .ctrl-btn:hover { opacity: 0.85; }
+  .header-connect button:disabled, .ctrl-btn:disabled {
+    background: var(--dim);
+    cursor: default;
+  }
+  #zeroBtn { background: var(--accent2); }
+  #cube-status {
+    font-size: 11px;
+    color: var(--dim);
+  }
+  #cube-status.ok { color: var(--accent); }
+  #cube-status.err { color: var(--warm); }
+
+  .header-status {
+    display: flex;
+    gap: 16px;
+    font-size: 12px;
+    color: var(--dim);
+  }
+  .header-status .val { color: var(--text); }
+  .ws-dot {
+    display: inline-block;
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #ff3333;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+  .ws-dot.connected { background: var(--accent); }
+
+  /* Main grid */
+  .grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    grid-template-rows: auto auto auto auto auto auto;
+    gap: 1px;
+    background: var(--border);
+    max-width: 1400px;
+    margin: 0 auto;
+  }
+
+  .panel {
+    background: var(--panel);
+    padding: 16px;
+  }
+  .panel-title {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--dim);
+    text-transform: uppercase;
+    margin-bottom: 12px;
+  }
+
+  /* Cube 3D panel */
+  .cube-panel { grid-column: 1 / 2; grid-row: 1 / 2; min-height: 320px; position: relative; }
+  #cube-canvas { width: 100%; height: 280px; display: block; }
+
+  /* State panel */
+  .state-panel { grid-column: 2 / 3; grid-row: 1 / 2; }
+  .state-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 6px 0;
+    border-bottom: 1px solid var(--border);
+    font-size: 13px;
+  }
+  .state-row:last-child { border-bottom: none; }
+  .state-label { color: var(--dim); }
+  .state-val { font-weight: 600; }
+  .state-val.accent { color: var(--accent); }
+  .state-val.accent2 { color: var(--accent2); }
+  .state-val.warm { color: var(--warm); }
+  .state-val.gold { color: var(--gold); }
+
+  .sub-heading {
+    font-size: 11px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    margin: 14px 0 8px;
+    text-transform: uppercase;
+  }
+
+  /* Sequence Control panel */
+  .sequence-panel { grid-column: 1 / -1; }
+  .seq-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .seq-controls label {
+    font-size: 11px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .seq-controls select, .seq-controls input[type="text"] {
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-family: monospace;
+  }
+  .seq-controls select { min-width: 180px; }
+  .ctrl-btn.active {
+    background: var(--warm);
+    color: white;
+  }
+  .seq-status {
+    font-size: 12px;
+    color: var(--dim);
+    margin-left: auto;
+  }
+  .seq-status .val { color: var(--accent); font-weight: 600; }
+
+  /* Active vertex indicator in sequence bar */
+  .seq-vertex-bar {
+    display: flex;
+    gap: 4px;
+    margin-top: 12px;
+  }
+  .seq-vertex-pip {
+    flex: 1;
+    height: 32px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--dim);
+    transition: all 0.2s;
+    position: relative;
+  }
+  .seq-vertex-pip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--active-glow);
+    box-shadow: 0 0 12px var(--active-glow);
+  }
+  .seq-vertex-pip .pip-complex {
+    position: absolute;
+    bottom: -14px;
+    font-size: 8px;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  .seq-vertex-pip.active .pip-complex { color: var(--text); }
+
+  /* Vertices panel */
+  .vertices-panel { grid-column: 1 / -1; }
+  .vertex-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 6px;
+  }
+  .vertex-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    text-align: center;
+    transition: all 0.25s;
+  }
+  .vertex-card.active {
+    border-color: var(--accent);
+    background: var(--active-glow);
+    box-shadow: 0 0 16px var(--active-glow), inset 0 0 8px rgba(0, 255, 136, 0.08);
+  }
+  .vertex-card.inactive {
+    opacity: 0.35;
+  }
+  .vertex-label {
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 4px;
+  }
+  .vertex-param {
+    font-size: 11px;
+    color: var(--dim);
+    line-height: 1.6;
+  }
+  .vertex-param .val { color: var(--text); }
+  .vertex-card.active .vertex-param .val { color: #fff; }
+  .intensity-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 4px;
+    overflow: hidden;
+  }
+  .intensity-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s;
+  }
+
+  /* Complexes panel */
+  .complexes-panel { grid-column: 1 / -1; }
+  .complex-grid {
+    display: grid;
+    grid-template-columns: repeat(8, 1fr);
+    gap: 6px;
+  }
+  .complex-card {
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 8px;
+    text-align: center;
+    transition: all 0.25s;
+  }
+  .complex-card.inactive { opacity: 0.35; }
+  .complex-card.active {
+    box-shadow: 0 0 12px rgba(255, 255, 255, 0.1);
+  }
+  .complex-num {
+    font-size: 14px;
+    font-weight: 700;
+    margin-bottom: 2px;
+  }
+  .complex-name {
+    font-size: 9px;
+    color: var(--dim);
+    line-height: 1.3;
+  }
+
+  /* Complex type colors */
+  .ct-1 { border-color: #ff4444; color: #ff4444; }
+  .ct-2 { border-color: #ffaa22; color: #ffaa22; }
+  .ct-3 { border-color: #44cc44; color: #44cc44; }
+  .ct-4 { border-color: #44dddd; color: #44dddd; }
+  .ct-5 { border-color: #4488ff; color: #4488ff; }
+  .ct-6 { border-color: #aa44ff; color: #aa44ff; }
+  .ct-7 { border-color: #ff44cc; color: #ff44cc; }
+  .ct-8 { border-color: #cccccc; color: #cccccc; }
+
+  /* Sieve panel */
+  .sieve-panel { grid-column: 1 / -1; }
+  .sieve-strip {
+    display: flex;
+    gap: 1px;
+    height: 48px;
+    align-items: flex-end;
+  }
+  .sieve-cell {
+    flex: 1;
+    min-width: 0;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 2px;
+    position: relative;
+    height: 100%;
+    transition: background 0.2s, border-color 0.2s;
+  }
+  .sieve-cell.active {
+    background: rgba(0, 204, 255, 0.15);
+    border-color: var(--accent2);
+  }
+  .sieve-cell.active .sieve-bar {
+    background: var(--accent2);
+  }
+  .sieve-bar {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    height: 0;
+    background: var(--border);
+    transition: height 0.3s;
+  }
+  .sieve-labels {
+    display: flex;
+    gap: 1px;
+    margin-top: 4px;
+  }
+  .sieve-labels span {
+    flex: 1;
+    text-align: center;
+    font-size: 8px;
+    color: var(--dim);
+  }
+  .sieve-labels span.active { color: var(--accent2); }
+
+  /* Bottom row: Move log + Gyro */
+  .log-panel { grid-column: 1 / 2; max-height: 200px; }
+  .gyro-panel { grid-column: 2 / 3; }
+
+  .move-log {
+    font-size: 12px;
+    max-height: 150px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .move-entry {
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+    animation: flash-in 0.3s ease-out;
+  }
+  .move-entry .move-name { color: var(--gold); font-weight: 600; min-width: 30px; }
+  .move-entry .move-detail { color: var(--dim); }
+  .move-entry .move-vertex { color: var(--accent); font-weight: 600; }
+
+  @keyframes flash-in {
+    0% { background: rgba(0, 255, 136, 0.15); }
+    100% { background: transparent; }
+  }
+
+  /* Gyro display */
+  .gyro-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
+  }
+  .gyro-axis {
+    background: var(--bg);
+    border-radius: 4px;
+    padding: 8px;
+    text-align: center;
+  }
+  .gyro-axis-label { font-size: 11px; color: var(--dim); }
+  .gyro-axis-val { font-size: 18px; font-weight: 600; color: var(--accent2); }
+  .gyro-bar-wrap {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 4px;
+    overflow: hidden;
+    position: relative;
+  }
+  .gyro-bar-center {
+    position: absolute;
+    left: 50%;
+    top: 0;
+    width: 1px;
+    height: 100%;
+    background: var(--dim);
+  }
+  .gyro-bar {
+    position: absolute;
+    top: 0;
+    height: 100%;
+    background: var(--accent2);
+    border-radius: 2px;
+    transition: left 0.1s, width 0.1s;
+  }
+
+  /* Permutation display */
+  .perm-display {
+    display: flex;
+    gap: 4px;
+    margin-top: 6px;
+  }
+  .perm-slot {
+    width: 28px;
+    height: 28px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--accent);
+    transition: all 0.3s;
+  }
+  .perm-slot.active {
+    border-color: var(--accent);
+    background: var(--active-glow);
+    color: #fff;
+  }
+
+  /* No data overlay */
+  .waiting {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    min-height: 200px;
+    color: var(--dim);
+    font-size: 14px;
+  }
+  .waiting::after {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--dim);
+    margin-left: 8px;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>XENAKUBE</h1>
+  <div class="header-connect">
+    <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
+    <button id="connectBtn">Connect Cube</button>
+    <button id="zeroBtn">Zero Gyro</button>
+    <span id="cube-status"></span>
+  </div>
+  <div class="header-status">
+    <span><span class="ws-dot" id="ws-dot"></span><span id="ws-status">disconnected</span></span>
+    <span>step <span class="val" id="h-step">0</span></span>
+    <span>path <span class="val" id="h-path">--</span></span>
+    <span>cycle <span class="val" id="h-cycle">--</span></span>
+    <span>orbit <span class="val" id="h-orbit">--</span></span>
+  </div>
+</header>
+
+<div class="grid">
+
+  <!-- 3D Cube -->
+  <div class="panel cube-panel">
+    <div class="panel-title">Cube</div>
+    <canvas id="cube-canvas"></canvas>
+  </div>
+
+  <!-- State Panel -->
+  <div class="panel state-panel">
+    <div class="panel-title">Engine State</div>
+
+    <div class="sub-heading">K_i Cube (Parameters)</div>
+    <div class="state-row">
+      <span class="state-label">S4 element</span>
+      <span class="state-val accent" id="s-k-group">0</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">path</span>
+      <span class="state-val" id="s-path">V1</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">tetra orbit</span>
+      <span class="state-val" id="s-tetra">even</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">permutation</span>
+      <div class="perm-display" id="s-perm"></div>
+    </div>
+
+    <div class="sub-heading">C_i Cube (Complexes)</div>
+    <div class="state-row">
+      <span class="state-label">S4 element</span>
+      <span class="state-val accent2" id="s-c-group">0</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">cyclic phase</span>
+      <span class="state-val gold" id="s-cycle">alpha</span>
+    </div>
+
+    <div class="sub-heading">Active Voice</div>
+    <div class="state-row">
+      <span class="state-label">vertex</span>
+      <span class="state-val accent" id="s-active-vertex">K1</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">sieve pitches</span>
+      <span class="state-val" id="s-sieve-count">0</span>
+    </div>
+  </div>
+
+  <!-- Sequence Controls -->
+  <div class="panel sequence-panel">
+    <div class="panel-title">Sequence Control</div>
+    <div class="seq-controls">
+      <label>Diagram</label>
+      <select id="diagram-select">
+        <option value="">direct (free)</option>
+      </select>
+      <label>Path</label>
+      <select id="path-select">
+        <option value="V1">V1 (strong D/G)</option>
+        <option value="V2">V2 (strong D/U)</option>
+      </select>
+      <label>C_i Mode</label>
+      <select id="cmode-select">
+        <option value="algorithmic">algorithmic</option>
+        <option value="gyro">gyro snap</option>
+      </select>
+      <button class="ctrl-btn" id="resetBtn">Reset</button>
+      <div class="seq-status">
+        <span>diagram pos: <span class="val" id="seq-pos">--</span></span>
+      </div>
+    </div>
+    <div class="seq-vertex-bar" id="seq-vertex-bar"></div>
+  </div>
+
+  <!-- Vertices -->
+  <div class="panel vertices-panel">
+    <div class="panel-title">Vertices K1-K8 (D x G x U)</div>
+    <div class="vertex-grid" id="vertex-grid"></div>
+  </div>
+
+  <!-- Complexes -->
+  <div class="panel complexes-panel">
+    <div class="panel-title">Sound Complexes C1-C8</div>
+    <div class="complex-grid" id="complex-grid"></div>
+  </div>
+
+  <!-- Sieve -->
+  <div class="panel sieve-panel">
+    <div class="panel-title">Sieve (semitone offsets from C2)</div>
+    <div class="sieve-strip" id="sieve-strip"></div>
+    <div class="sieve-labels" id="sieve-labels"></div>
+  </div>
+
+  <!-- Move Log -->
+  <div class="panel log-panel">
+    <div class="panel-title">Move Log</div>
+    <div class="move-log" id="move-log">
+      <div class="waiting" id="waiting-msg">Waiting for cube data</div>
+    </div>
+  </div>
+
+  <!-- Gyro -->
+  <div class="panel gyro-panel">
+    <div class="panel-title">Gyro Quaternion</div>
+    <div class="gyro-grid" id="gyro-grid">
+      <div class="gyro-axis">
+        <div class="gyro-axis-label">X</div>
+        <div class="gyro-axis-val" id="gyro-x">0.000</div>
+        <div class="gyro-bar-wrap"><div class="gyro-bar-center"></div><div class="gyro-bar" id="gyro-bar-x"></div></div>
+      </div>
+      <div class="gyro-axis">
+        <div class="gyro-axis-label">Y</div>
+        <div class="gyro-axis-val" id="gyro-y">0.000</div>
+        <div class="gyro-bar-wrap"><div class="gyro-bar-center"></div><div class="gyro-bar" id="gyro-bar-y"></div></div>
+      </div>
+      <div class="gyro-axis">
+        <div class="gyro-axis-label">Z</div>
+        <div class="gyro-axis-val" id="gyro-z">0.000</div>
+        <div class="gyro-bar-wrap"><div class="gyro-bar-center"></div><div class="gyro-bar" id="gyro-bar-z"></div></div>
+      </div>
+      <div class="gyro-axis">
+        <div class="gyro-axis-label">W</div>
+        <div class="gyro-axis-val" id="gyro-w">1.000</div>
+        <div class="gyro-bar-wrap"><div class="gyro-bar-center"></div><div class="gyro-bar" id="gyro-bar-w"></div></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { connectGanCube } from 'https://cdn.jsdelivr.net/npm/gan-web-bluetooth@latest/+esm';
+
+// ============================================================
+// Constants
+// ============================================================
+
+const COMPLEX_SHORT = {
+  1: 'pizz scatter',
+  2: 'bowed sweep',
+  3: 'bowed sustain',
+  4: 'harm+legno',
+  5: 'wild gliss',
+  6: 'ord. gliss',
+  7: 'tasto sust.',
+  8: 'ponticello',
+};
+
+const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.75, 'fff': 0.92 };
+
+const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
+
+function semitoneName(s) {
+  const midi = 36 + s;
+  const octave = Math.floor(midi / 12) - 1;
+  return NOTE_NAMES[midi % 12] + octave;
+}
+
+// Cube vertex positions (matching group.ts labeling)
+const CUBE_VERTS = [
+  new THREE.Vector3( 1,  1,  1),  // 0 FTR
+  new THREE.Vector3(-1,  1,  1),  // 1 FTL
+  new THREE.Vector3(-1,  1, -1),  // 2 BTL
+  new THREE.Vector3( 1,  1, -1),  // 3 BTR
+  new THREE.Vector3( 1, -1,  1),  // 4 FBR
+  new THREE.Vector3(-1, -1,  1),  // 5 FBL
+  new THREE.Vector3(-1, -1, -1),  // 6 BBL
+  new THREE.Vector3( 1, -1, -1),  // 7 BBR
+];
+
+const CUBE_EDGES = [
+  [0,1],[1,2],[2,3],[3,0],
+  [4,5],[5,6],[6,7],[7,4],
+  [0,4],[1,5],[2,6],[3,7],
+];
+
+const TETRA_A = [0, 2, 5, 7];
+const TETRA_B = [1, 3, 4, 6];
+
+// ============================================================
+// Three.js Cube Scene
+// ============================================================
+
+const canvas = document.getElementById('cube-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
+camera.position.set(4, 3, 4);
+camera.lookAt(0, 0, 0);
+
+// Wireframe cube
+const edgeGeo = new THREE.BufferGeometry();
+const edgePositions = [];
+for (const [a, b] of CUBE_EDGES) {
+  edgePositions.push(CUBE_VERTS[a].x, CUBE_VERTS[a].y, CUBE_VERTS[a].z);
+  edgePositions.push(CUBE_VERTS[b].x, CUBE_VERTS[b].y, CUBE_VERTS[b].z);
+}
+edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
+const edgeMat = new THREE.LineBasicMaterial({ color: 0x333355 });
+const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+scene.add(edgeLines);
+
+// Tetrahedra wireframes
+function makeTetraLines(indices, color) {
+  const geo = new THREE.BufferGeometry();
+  const pos = [];
+  for (let i = 0; i < indices.length; i++) {
+    for (let j = i + 1; j < indices.length; j++) {
+      const a = CUBE_VERTS[indices[i]], b = CUBE_VERTS[indices[j]];
+      pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+  }
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.3 }));
+}
+const tetraALines = makeTetraLines(TETRA_A, 0x00ff88);
+const tetraBLines = makeTetraLines(TETRA_B, 0xff6644);
+scene.add(tetraALines);
+scene.add(tetraBLines);
+
+// Vertex spheres + labels
+const vertexMeshes = [];
+const vertexLabels = [];
+
+// Active vertex glow ring
+const activeRingGeo = new THREE.RingGeometry(0.15, 0.22, 16);
+const activeRingMat = new THREE.MeshBasicMaterial({
+  color: 0x00ff88,
+  transparent: true,
+  opacity: 0.7,
+  side: THREE.DoubleSide,
+});
+const activeRing = new THREE.Mesh(activeRingGeo, activeRingMat);
+activeRing.visible = false;
+
+function makeLabel(text, color) {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 32;
+  const ctx = c.getContext('2d');
+  ctx.font = 'bold 20px monospace';
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(text, 32, 16);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(0.6, 0.3, 1);
+  return { sprite, canvas: c, ctx, tex };
+}
+
+for (let i = 0; i < 8; i++) {
+  const isTetraA = TETRA_A.includes(i);
+  const geo = new THREE.SphereGeometry(0.06, 8, 8);
+  const mat = new THREE.MeshBasicMaterial({ color: isTetraA ? 0x00ff88 : 0xff6644 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(CUBE_VERTS[i]);
+  scene.add(mesh);
+  vertexMeshes.push(mesh);
+
+  const label = makeLabel(`K${i + 1}`, isTetraA ? '#00ff88' : '#ff6644');
+  label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.35);
+  scene.add(label.sprite);
+  vertexLabels.push(label);
+}
+
+// Rotation group for gyro
+const cubeGroup = new THREE.Group();
+scene.add(cubeGroup);
+cubeGroup.add(edgeLines, tetraALines, tetraBLines, activeRing);
+vertexMeshes.forEach(m => cubeGroup.add(m));
+vertexLabels.forEach(l => cubeGroup.add(l.sprite));
+
+// OrbitControls for mouse-drag camera rotation
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.1;
+controls.enablePan = false;
+controls.minDistance = 3;
+controls.maxDistance = 12;
+
+let idleAngle = 0;
+let currentGyro = new THREE.Quaternion(0, 0, 0, 1);
+let hasGyro = false;
+let currentActiveVertex = 0;
+
+// Gyro zero calibration
+let gyroZeroInv = new THREE.Quaternion(0, 0, 0, 1);
+
+document.getElementById('zeroBtn').addEventListener('click', () => {
+  gyroZeroInv.copy(currentGyro).invert();
+});
+
+function resizeCube() {
+  const rect = canvas.getBoundingClientRect();
+  renderer.setSize(rect.width, rect.height, false);
+  camera.aspect = rect.width / rect.height;
+  camera.updateProjectionMatrix();
+}
+resizeCube();
+window.addEventListener('resize', resizeCube);
+
+const calibratedGyro = new THREE.Quaternion();
+
+// Pulse animation for active ring
+let ringPulse = 0;
+
+function animateCube() {
+  requestAnimationFrame(animateCube);
+  controls.update();
+  if (hasGyro) {
+    calibratedGyro.copy(gyroZeroInv).multiply(currentGyro);
+    cubeGroup.quaternion.copy(calibratedGyro);
+  } else {
+    idleAngle += 0.003;
+    cubeGroup.rotation.set(0.3, idleAngle, 0.15);
+  }
+
+  // Pulse active ring
+  ringPulse += 0.04;
+  if (activeRing.visible) {
+    activeRingMat.opacity = 0.4 + 0.3 * Math.sin(ringPulse);
+  }
+
+  renderer.render(scene, camera);
+}
+animateCube();
+
+function updateActiveVertexIn3D(idx) {
+  // Enlarge active vertex sphere, shrink others
+  for (let i = 0; i < 8; i++) {
+    const scale = (i === idx) ? 2.5 : 1.0;
+    vertexMeshes[i].scale.setScalar(scale);
+  }
+  // Position glow ring at active vertex
+  activeRing.visible = true;
+  activeRing.position.copy(CUBE_VERTS[idx]);
+  activeRing.lookAt(camera.position);
+}
+
+function updateVertexLabels(perm) {
+  for (let i = 0; i < 8; i++) {
+    const kIndex = perm ? perm[i] : i;
+    const isTetraA = TETRA_A.includes(i);
+    const color = isTetraA ? '#00ff88' : '#ff6644';
+    const label = vertexLabels[i];
+    label.ctx.clearRect(0, 0, 64, 32);
+    label.ctx.font = 'bold 20px monospace';
+    label.ctx.fillStyle = color;
+    label.ctx.textAlign = 'center';
+    label.ctx.textBaseline = 'middle';
+    label.ctx.fillText(`K${kIndex + 1}`, 32, 16);
+    label.tex.needsUpdate = true;
+  }
+}
+
+// ============================================================
+// Build static DOM elements
+// ============================================================
+
+const vertexGrid = document.getElementById('vertex-grid');
+const vertexCards = [];
+for (let i = 0; i < 8; i++) {
+  const card = document.createElement('div');
+  card.className = 'vertex-card';
+  card.innerHTML = `
+    <div class="vertex-label">K${i + 1}</div>
+    <div class="vertex-param">D <span class="val" data-v="d">--</span></div>
+    <div class="vertex-param">G <span class="val" data-v="g">--</span></div>
+    <div class="vertex-param">U <span class="val" data-v="u">--</span>s</div>
+    <div class="intensity-bar"><div class="intensity-fill" data-v="bar"></div></div>
+  `;
+  vertexGrid.appendChild(card);
+  vertexCards.push(card);
+}
+
+const complexGrid = document.getElementById('complex-grid');
+const complexCards = [];
+for (let i = 0; i < 8; i++) {
+  const card = document.createElement('div');
+  card.className = 'complex-card';
+  card.innerHTML = `
+    <div class="complex-num">C${i + 1}</div>
+    <div class="complex-name">--</div>
+  `;
+  complexGrid.appendChild(card);
+  complexCards.push(card);
+}
+
+// Sequence vertex bar (shows all 8 positions, highlights active)
+const seqVertexBar = document.getElementById('seq-vertex-bar');
+const seqPips = [];
+for (let i = 0; i < 8; i++) {
+  const pip = document.createElement('div');
+  pip.className = 'seq-vertex-pip';
+  pip.innerHTML = `K${i + 1}<span class="pip-complex"></span>`;
+  seqVertexBar.appendChild(pip);
+  seqPips.push(pip);
+}
+
+const sieveStrip = document.getElementById('sieve-strip');
+const sieveLabelsEl = document.getElementById('sieve-labels');
+const SIEVE_RANGE = 49;
+const sieveCells = [];
+for (let i = 0; i < SIEVE_RANGE; i++) {
+  const cell = document.createElement('div');
+  cell.className = 'sieve-cell';
+  cell.innerHTML = '<div class="sieve-bar"></div>';
+  sieveStrip.appendChild(cell);
+  sieveCells.push(cell);
+
+  const lbl = document.createElement('span');
+  if (i % 12 === 0) lbl.textContent = semitoneName(i);
+  else if (i % 12 === 7) lbl.textContent = semitoneName(i);
+  sieveLabelsEl.appendChild(lbl);
+}
+
+const permDisplay = document.getElementById('s-perm');
+const permSlots = [];
+for (let i = 0; i < 8; i++) {
+  const slot = document.createElement('div');
+  slot.className = 'perm-slot';
+  slot.textContent = i + 1;
+  permDisplay.appendChild(slot);
+  permSlots.push(slot);
+}
+
+// ============================================================
+// State Update
+// ============================================================
+
+let moveCount = 0;
+
+function updateState(state, move) {
+  const activeIdx = state.activeVertex ?? 0;
+  currentActiveVertex = activeIdx;
+
+  document.getElementById('h-step').textContent = state.step;
+  document.getElementById('h-path').textContent = state.path;
+  document.getElementById('h-cycle').textContent = state.cyclicPhase;
+  document.getElementById('h-orbit').textContent = state.tetraIndex === 0 ? 'even' : 'odd';
+
+  document.getElementById('s-k-group').textContent = state.kGroup;
+  document.getElementById('s-c-group').textContent = state.cGroup;
+  document.getElementById('s-path').textContent = state.path;
+  document.getElementById('s-tetra').textContent = state.tetraIndex === 0 ? 'even (warm)' : 'odd (dry)';
+  document.getElementById('s-tetra').className = 'state-val ' + (state.tetraIndex === 0 ? 'accent' : 'warm');
+  document.getElementById('s-cycle').textContent = state.cyclicPhase;
+  document.getElementById('s-sieve-count').textContent = state.sieve.length;
+  document.getElementById('s-active-vertex').textContent = `K${activeIdx + 1}`;
+
+  // Diagram position
+  if (state.diagramPosition) {
+    document.getElementById('seq-pos').textContent =
+      `${state.diagramPosition.index + 1} / ${state.diagramPosition.total}`;
+  } else {
+    document.getElementById('seq-pos').textContent = 'free';
+  }
+
+  if (state.kPermutation) {
+    for (let i = 0; i < 8; i++) {
+      permSlots[i].textContent = state.kPermutation[i] + 1;
+      permSlots[i].className = 'perm-slot' + (i === activeIdx ? ' active' : '');
+    }
+    updateVertexLabels(state.kPermutation);
+  }
+
+  tetraALines.material.opacity = state.tetraIndex === 0 ? 0.6 : 0.15;
+  tetraBLines.material.opacity = state.tetraIndex === 1 ? 0.6 : 0.15;
+
+  // Update vertex cards — highlight active, dim others
+  if (state.kVertices) {
+    for (let i = 0; i < 8; i++) {
+      const v = state.kVertices[i];
+      const card = vertexCards[i];
+      card.querySelector('[data-v="d"]').textContent = v.density.toFixed(1);
+      card.querySelector('[data-v="g"]').textContent = v.intensity;
+      card.querySelector('[data-v="u"]').textContent = v.duration;
+      const pct = (INTENSITY_LEVELS[v.intensity] || 0.5) * 100;
+      card.querySelector('[data-v="bar"]').style.width = pct + '%';
+
+      // Active/inactive styling
+      card.className = 'vertex-card' + (i === activeIdx ? ' active' : ' inactive');
+    }
+  }
+
+  // Update complex cards — highlight active vertex's complex
+  if (state.cAssignments) {
+    for (let i = 0; i < 8; i++) {
+      const ct = state.cAssignments[i];
+      const card = complexCards[i];
+      const isActive = i === activeIdx;
+      card.className = `complex-card ct-${ct}` + (isActive ? ' active' : ' inactive');
+      card.querySelector('.complex-num').textContent = `C${ct}`;
+      card.querySelector('.complex-name').textContent = COMPLEX_SHORT[ct] || '';
+    }
+
+    // Update sequence bar pips
+    for (let i = 0; i < 8; i++) {
+      const ct = state.cAssignments[i];
+      seqPips[i].className = 'seq-vertex-pip' + (i === activeIdx ? ' active' : '');
+      seqPips[i].querySelector('.pip-complex').textContent = COMPLEX_SHORT[ct] || '';
+    }
+  }
+
+  // Update 3D active vertex
+  updateActiveVertexIn3D(activeIdx);
+
+  const activeSet = new Set(state.sieve);
+  for (let i = 0; i < SIEVE_RANGE; i++) {
+    const isActive = activeSet.has(i);
+    sieveCells[i].className = 'sieve-cell' + (isActive ? ' active' : '');
+    sieveCells[i].querySelector('.sieve-bar').style.height = isActive ? '100%' : '0';
+    const lbl = sieveLabelsEl.children[i];
+    if (lbl) lbl.className = isActive ? 'active' : '';
+  }
+
+  if (state.gyro) {
+    const [x, y, z, w] = state.gyro;
+    document.getElementById('gyro-x').textContent = x.toFixed(3);
+    document.getElementById('gyro-y').textContent = y.toFixed(3);
+    document.getElementById('gyro-z').textContent = z.toFixed(3);
+    document.getElementById('gyro-w').textContent = w.toFixed(3);
+    updateGyroBar('gyro-bar-x', x);
+    updateGyroBar('gyro-bar-y', y);
+    updateGyroBar('gyro-bar-z', z);
+    updateGyroBar('gyro-bar-w', w);
+
+    currentGyro.set(-x, z, y, w);
+    hasGyro = true;
+  }
+
+  if (move) {
+    const waiting = document.getElementById('waiting-msg');
+    if (waiting) waiting.remove();
+
+    moveCount++;
+    const log = document.getElementById('move-log');
+    const entry = document.createElement('div');
+    entry.className = 'move-entry';
+    const ct = state.cAssignments ? state.cAssignments[activeIdx] : '?';
+    entry.innerHTML = `
+      <span class="move-name">${move}</span>
+      <span class="move-vertex">K${activeIdx + 1}</span>
+      <span class="move-detail">C${ct} ${state.cyclicPhase} step ${state.step}</span>
+    `;
+    log.insertBefore(entry, log.firstChild);
+    while (log.children.length > 50) log.removeChild(log.lastChild);
+  }
+}
+
+function updateGyroBar(id, value) {
+  const bar = document.getElementById(id);
+  const clamped = Math.max(-1, Math.min(1, value));
+  if (clamped >= 0) {
+    bar.style.left = '50%';
+    bar.style.width = (clamped * 50) + '%';
+  } else {
+    const w = Math.abs(clamped) * 50;
+    bar.style.left = (50 - w) + '%';
+    bar.style.width = w + '%';
+  }
+}
+
+// ============================================================
+// WebSocket — receives state broadcasts from relay
+// ============================================================
+
+const dot = document.getElementById('ws-dot');
+const wsStatusEl = document.getElementById('ws-status');
+let ws;
+let gyroThrottleFrame = null;
+let pendingGyroState = null;
+
+function wsSend(obj) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify(obj));
+  }
+}
+
+function wsConnect() {
+  ws = new WebSocket('ws://' + window.location.host);
+
+  ws.onopen = () => {
+    dot.classList.add('connected');
+    wsStatusEl.textContent = 'connected';
+    // Request diagram list
+    wsSend({ type: 'get_diagrams' });
+  };
+
+  ws.onclose = () => {
+    dot.classList.remove('connected');
+    wsStatusEl.textContent = 'reconnecting...';
+    setTimeout(wsConnect, 2000);
+  };
+
+  ws.onerror = () => ws.close();
+
+  ws.onmessage = (evt) => {
+    try {
+      const msg = JSON.parse(evt.data);
+      if (msg.type === 'state') {
+        updateState(msg.data, msg.move);
+      } else if (msg.type === 'gyro_state') {
+        pendingGyroState = msg.data;
+        if (!gyroThrottleFrame) {
+          gyroThrottleFrame = requestAnimationFrame(() => {
+            if (pendingGyroState) {
+              updateState(pendingGyroState, null);
+              pendingGyroState = null;
+            }
+            gyroThrottleFrame = null;
+          });
+        }
+      } else if (msg.type === 'diagrams') {
+        populateDiagramSelect(msg.data);
+      }
+    } catch (e) {
+      console.error('Parse error:', e);
+    }
+  };
+}
+
+wsConnect();
+
+// ============================================================
+// Sequence Control Handlers
+// ============================================================
+
+const diagramSelect = document.getElementById('diagram-select');
+const pathSelect = document.getElementById('path-select');
+const cmodeSelect = document.getElementById('cmode-select');
+const resetBtn = document.getElementById('resetBtn');
+
+function populateDiagramSelect(diagrams) {
+  // Keep the "direct" option, add diagram options
+  while (diagramSelect.options.length > 1) diagramSelect.remove(1);
+  for (const d of diagrams) {
+    const opt = document.createElement('option');
+    opt.value = d.name;
+    opt.textContent = `${d.name} (${d.path.length} steps)`;
+    diagramSelect.appendChild(opt);
+  }
+}
+
+diagramSelect.addEventListener('change', () => {
+  const name = diagramSelect.value;
+  if (name) {
+    wsSend({ type: 'set_diagram', name });
+  } else {
+    wsSend({ type: 'clear_diagram' });
+  }
+});
+
+pathSelect.addEventListener('change', () => {
+  wsSend({ type: 'set_mode', path: pathSelect.value });
+});
+
+cmodeSelect.addEventListener('change', () => {
+  wsSend({ type: 'set_mode', cCube: cmodeSelect.value });
+});
+
+resetBtn.addEventListener('click', () => {
+  wsSend({ type: 'reset' });
+});
+
+// ============================================================
+// Cube BLE Connection (Web Bluetooth)
+// ============================================================
+
+const cubeStatus = document.getElementById('cube-status');
+const connectBtn = document.getElementById('connectBtn');
+const macInput = document.getElementById('macAddress');
+
+if (localStorage.getItem('ganMacAddress')) {
+  macInput.value = localStorage.getItem('ganMacAddress');
+}
+
+connectBtn.addEventListener('click', async () => {
+  const macAddress = macInput.value.trim().toUpperCase();
+  const macRegex = /^([0-9A-F]{2}[:-]){5}([0-9A-F]{2})$/;
+  if (!macRegex.test(macAddress)) {
+    cubeStatus.textContent = 'invalid MAC';
+    cubeStatus.className = 'err';
+    return;
+  }
+
+  localStorage.setItem('ganMacAddress', macAddress);
+  cubeStatus.textContent = 'select cube in popup...';
+  cubeStatus.className = '';
+  connectBtn.disabled = true;
+
+  try {
+    const cube = await connectGanCube(async (device, isFallbackCall) => {
+      return macAddress;
+    });
+
+    cubeStatus.textContent = 'connected';
+    cubeStatus.className = 'ok';
+    connectBtn.textContent = 'Connected';
+    connectBtn.disabled = true;
+
+    cube.events$.subscribe((event) => {
+      if (event.type === 'MOVE') {
+        wsSend({ type: 'move', value: event.move });
+      } else if (event.type === 'GYRO' || event.type === 'GYROSCOPE' || event.gyro) {
+        wsSend({ type: 'gyro', data: event.gyro || event });
+      } else if (event.type === 'DISCONNECT') {
+        cubeStatus.textContent = 'disconnected';
+        cubeStatus.className = 'err';
+        connectBtn.textContent = 'Connect Cube';
+        connectBtn.disabled = false;
+      }
+    });
+
+  } catch (err) {
+    console.error('Cube connect error:', err);
+    cubeStatus.textContent = 'failed: ' + err.message;
+    cubeStatus.className = 'err';
+    connectBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

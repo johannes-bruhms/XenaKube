@@ -4,7 +4,9 @@ require('tsx/cjs');
 const { Client } = require('node-osc');
 const WebSocket = require('ws');
 const http = require('http');
-const { XenaKubeEngine, stateToOsc } = require('./src/index.ts');
+const fs = require('fs');
+const path = require('path');
+const { XenaKubeEngine, stateToOsc, getBuiltinDiagrams } = require('./src/index.ts');
 
 /*
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
@@ -20,125 +22,54 @@ const engine = new XenaKubeEngine();
 const oscSC  = new Client('127.0.0.1', 57120);  // SuperCollider — receives /xk/* engine state
 const oscTD  = new Client('127.0.0.1', 8000);   // TouchDesigner — receives raw /gan/* + /xk/gyro
 
-// Forward engine state over OSC on every state change
+// Track last move for dashboard broadcast
+let lastMove = null;
+
+// Forward engine state over OSC on every state change + broadcast to dashboard
 engine.onState((state) => {
   const msgs = stateToOsc(state);
   for (const msg of msgs) {
     oscSC.send(msg.address, ...msg.args);
   }
+
+  // Broadcast state to all dashboard WS clients
+  broadcastState(state, lastMove);
+  lastMove = null; // clear after broadcast
 });
 
-const HTML_CONTENT = `<!DOCTYPE html>
-<html>
-<head>
-    <title>GAN Cube Bridge - macOS Fixed</title>
-    <style>
-        body { font-family: sans-serif; background: #111; color: #eee; text-align: center; padding: 50px; }
-        button { padding: 15px 30px; font-size: 20px; cursor: pointer; background: #00ff88; border: none; font-weight: bold; border-radius: 8px;}
-        #status { margin-top: 20px; font-size: 18px; color: #888; }
-        #debug { margin-top: 20px; font-size: 14px; color: #ffaa00; text-align: left; background: #222; padding: 10px; border-radius: 5px; display: none; white-space: pre-wrap; word-wrap: break-word;}
-        .mac-input { margin-bottom: 25px; }
-        .mac-input input { padding: 12px; font-size: 18px; width: 280px; text-align: center; border-radius: 5px; border: 1px solid #444; background: #222; color: #00ff88; font-family: monospace; }
-        .mac-label { display: block; margin-bottom: 8px; font-size: 14px; color: #aaa; }
-    </style>
-</head>
-<body>
-    <h1>Live Performance Cube Bridge <small>(macOS Fixed v2)</small></h1>
+/** Broadcast engine state to all connected WS clients */
+function broadcastState(state, move) {
+  const isGyro = move === null;
+  const payload = JSON.stringify({
+    type: isGyro ? 'gyro_state' : 'state',
+    data: state,
+    move: move || undefined,
+  });
+  wss?.clients?.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  });
+}
 
-    <div class="mac-input">
-        <label class="mac-label" for="macAddress">Your GAN Cube MAC Address:</label>
-        <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
-    </div>
-
-    <button id="connectBtn">Connect to GAN Cube</button>
-    <div id="status">Status: Waiting...</div>
-    <div id="debug"></div>
-
-    <script type="module">
-        import { connectGanCube } from 'https://cdn.jsdelivr.net/npm/gan-web-bluetooth@latest/+esm';
-
-        const statusText = document.getElementById('status');
-        const connectBtn = document.getElementById('connectBtn');
-        const debugBox = document.getElementById('debug');
-        const macInput = document.getElementById('macAddress');
-        const ws = new WebSocket('ws://' + window.location.host);
-
-        ws.onopen = () => console.log("Connected to Node.js Relay");
-
-        // Auto-load saved MAC
-        if (localStorage.getItem('ganMacAddress')) {
-            macInput.value = localStorage.getItem('ganMacAddress');
-        }
-
-        connectBtn.addEventListener('click', async () => {
-            const macAddress = macInput.value.trim().toUpperCase();
-
-            const macRegex = /^([0-9A-F]{2}[:-]){5}([0-9A-F]{2})$/;
-            if (!macRegex.test(macAddress)) {
-                statusText.innerText = "Status: Invalid MAC format!";
-                statusText.style.color = "red";
-                return;
-            }
-
-            localStorage.setItem('ganMacAddress', macAddress);
-
-            statusText.innerText = "Status: Please select the cube in the popup...";
-            statusText.style.color = "#888";
-            debugBox.style.display = "none";
-            debugBox.innerText = "";
-
-            console.log("Starting connectGanCube with custom MAC provider...");
-
-            try {
-                // OFFICIAL WAY: pass custom MAC provider (this is what the library expects)
-                const cube = await connectGanCube(async (device, isFallbackCall) => {
-                    console.log(\`Custom MAC Provider called (fallback: \${isFallbackCall})\`);
-                    console.log(\`Returning real MAC: \${macAddress}\`);
-                    return macAddress;
-                });
-
-                console.log("%cSUCCESS: Cube connected!", "color:#0f0; font-size:16px");
-
-                statusText.innerText = "Status: Connected to GAN Cube!";
-                statusText.style.color = "#00ff88";
-
-                cube.events$.subscribe((event) => {
-                    if (event.type === 'MOVE') {
-                        if (ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({ type: 'move', value: event.move }));
-                        }
-                    } else if (event.type === 'GYRO' || event.type === 'GYROSCOPE' || event.gyro) {
-                        if (ws.readyState === WebSocket.OPEN) {
-                            ws.send(JSON.stringify({ type: 'gyro', data: event.gyro || event }));
-                        }
-                    } else if (event.type === 'DISCONNECT') {
-                        statusText.innerText = "Status: Cube disconnected!";
-                        statusText.style.color = "red";
-                    }
-                });
-
-            } catch (err) {
-                console.error("=== RAW ERROR ===", err);
-                statusText.innerText = "Status: Connection failed.";
-                statusText.style.color = "red";
-
-                debugBox.style.display = "block";
-                debugBox.innerText = "ERROR DETAILS:\\n" + err.message + "\\n\\nSTACK:\\n" + (err.stack || "No stack trace");
-            }
-        });
-    </script>
-</body>
-</html>`;
+// Load dashboard HTML (single page: connect + live visualization)
+const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
+let DASHBOARD_HTML = '';
+try {
+  DASHBOARD_HTML = fs.readFileSync(DASHBOARD_PATH, 'utf-8');
+} catch (e) {
+  console.warn('Dashboard not found at', DASHBOARD_PATH);
+}
 
 // 1. HTTP Server
 const server = http.createServer((req, res) => {
     res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(HTML_CONTENT);
+    res.end(DASHBOARD_HTML);
 });
 
 server.listen(3000, () => {
     console.log("--------------------------------------------------");
-    console.log("1. OPEN CHROME → http://localhost:3000");
+    console.log("  OPEN CHROME → http://localhost:3000");
     console.log("--------------------------------------------------");
 });
 
@@ -149,8 +80,38 @@ console.log("2. OSC → SuperCollider on port 57120, TouchDesigner on port 8000"
 const wss = new WebSocket.Server({ server });
 console.log("3. Waiting for browser...");
 
+// Auto-shutdown when all browser clients disconnect
+let shutdownTimer = null;
+const SHUTDOWN_DELAY = 5000; // 5s grace period for page refresh
+
+function scheduleShutdown() {
+  if (wss.clients.size === 0) {
+    console.log(`All clients disconnected. Shutting down in ${SHUTDOWN_DELAY / 1000}s (reconnect to cancel)...`);
+    shutdownTimer = setTimeout(() => {
+      if (wss.clients.size === 0) {
+        console.log("No clients reconnected. Shutting down.");
+        oscSC.close();
+        oscTD.close();
+        wss.close();
+        server.close();
+        process.exit(0);
+      }
+    }, SHUTDOWN_DELAY);
+  }
+}
+
 wss.on('connection', function connection(ws) {
     console.log("Chrome webpage connected!");
+    if (shutdownTimer) {
+      clearTimeout(shutdownTimer);
+      shutdownTimer = null;
+      console.log("Shutdown cancelled — client reconnected.");
+    }
+
+    ws.on('close', () => {
+      console.log("Client disconnected.");
+      scheduleShutdown();
+    });
 
     ws.on('message', function incoming(message) {
         try {
@@ -170,7 +131,8 @@ wss.on('connection', function connection(ws) {
                 // Forward raw turn to TD
                 oscTD.send('/gan/turn', moveStr);
 
-                // Feed the engine — this triggers onState → OSC to SC
+                // Tag move for dashboard broadcast, then feed engine
+                lastMove = moveStr;
                 engine.onTurn(moveStr);
             }
             else if (data.type === 'gyro') {
@@ -184,6 +146,38 @@ wss.on('connection', function connection(ws) {
 
                     console.log(`[GYRO] x:${q.x.toFixed(3)} y:${q.y.toFixed(3)} z:${q.z.toFixed(3)} w:${q.w.toFixed(3)}`);
                 }
+            }
+            else if (data.type === 'get_diagrams') {
+                const diagrams = engine.getDiagrams().map(d => ({
+                  name: d.name,
+                  description: d.description,
+                  path: d.path,
+                }));
+                ws.send(JSON.stringify({ type: 'diagrams', data: diagrams }));
+            }
+            else if (data.type === 'set_diagram') {
+                const diagrams = engine.getDiagrams();
+                const found = diagrams.find(d => d.name === data.name);
+                if (found) {
+                  engine.setKDiagram(found);
+                  console.log(`[DIAGRAM] Set K_i diagram: ${found.name}`);
+                }
+            }
+            else if (data.type === 'clear_diagram') {
+                engine.clearKDiagram();
+                console.log('[DIAGRAM] Cleared K_i diagram (direct mode)');
+            }
+            else if (data.type === 'set_mode') {
+                const mode = {};
+                if (data.path) mode.path = data.path;
+                if (data.cCube) mode.cCube = data.cCube;
+                if (data.kCube) mode.kCube = data.kCube;
+                engine.setMode(mode);
+                console.log(`[MODE] ${JSON.stringify(mode)}`);
+            }
+            else if (data.type === 'reset') {
+                engine.reset();
+                console.log('[RESET] Engine reset');
             }
         } catch (e) {
             console.error("Parse error:", e);

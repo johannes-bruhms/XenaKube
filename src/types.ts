@@ -84,4 +84,10 @@ export interface XenaKubeState {
   gyro: Quaternion;
   /** Transformation count */
   step: number;
+  /** Active vertex index (0-7): the single vertex currently sounding */
+  activeVertex: number;
+  /** Active diagram name (null if none) */
+  activeDiagram: string | null;
+  /** Diagram position info */
+  diagramPosition: { index: number; total: number } | null;
 }

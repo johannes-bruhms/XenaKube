@@ -28,6 +28,7 @@ export class XenaKubeEngine {
 
   // === Kinematic diagram traversal (optional) ===
   private kDiagram: DiagramTraversal | null = null;
+  private kDiagramName: string | null = null;
   private cDiagram: DiagramTraversal | null = null;
 
   // === Sieve state ===
@@ -44,6 +45,7 @@ export class XenaKubeEngine {
   private step = 0;
   private gyro: Quaternion = [0, 0, 0, 1];
   private substitutionCount = 0;
+  private activeVertex = 0;
 
   // === Listeners ===
   private listeners: StateListener[] = [];
@@ -68,6 +70,8 @@ export class XenaKubeEngine {
   /** Set kinematic diagram for K_i cube */
   setKDiagram(diagram: KinematicDiagram): void {
     this.kDiagram = new DiagramTraversal(diagram);
+    this.kDiagramName = diagram.name;
+    this.mode.kCube = 'diagram';
   }
 
   /** Set kinematic diagram for C_i cube */
@@ -103,6 +107,7 @@ export class XenaKubeEngine {
 
     this.step++;
     this.substitutionCount++;
+    this.activeVertex = this.step % 8;
 
     // Advance sieve every 3 substitutions (per Xenakis VII)
     if (this.substitutionCount >= 3) {
@@ -150,6 +155,9 @@ export class XenaKubeEngine {
       sieve: this.sieve.getPitches(),
       gyro: this.gyro,
       step: this.step,
+      activeVertex: this.activeVertex,
+      activeDiagram: this.kDiagramName,
+      diagramPosition: this.kDiagram ? this.kDiagram.getPosition() : null,
     };
   }
 
@@ -160,9 +168,17 @@ export class XenaKubeEngine {
     this.sieve.reset();
     this.step = 0;
     this.substitutionCount = 0;
+    this.activeVertex = 0;
     this.gyro = [0, 0, 0, 1];
     this.kDiagram?.reset();
     this.cDiagram?.reset();
+  }
+
+  /** Clear K_i diagram (back to direct mode) */
+  clearKDiagram(): void {
+    this.kDiagram = null;
+    this.kDiagramName = null;
+    this.mode.kCube = 'direct';
   }
 
   /** Get available kinematic diagrams */

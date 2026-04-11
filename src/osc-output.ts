@@ -59,5 +59,16 @@ export function stateToOsc(state: XenaKubeState): OscMessage[] {
   // Vertex permutation
   msgs.push({ address: '/xk/perm', args: [...state.kPermutation] });
 
+  // Active vertex (0-7): the single vertex currently sounding
+  msgs.push({ address: '/xk/active', args: [state.activeVertex] });
+
+  // Active vertex params + complex type in a single message for convenience
+  const av = state.kVertices[state.activeVertex];
+  const ac = state.cAssignments[state.activeVertex];
+  msgs.push({
+    address: '/xk/voice',
+    args: [state.activeVertex, ac, av.density, av.intensity, av.duration],
+  });
+
   return msgs;
 }
