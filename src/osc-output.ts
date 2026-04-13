@@ -78,5 +78,9 @@ export function stateToOsc(state: XenaKubeState): OscMessage[] {
   });
   msgs.push({ address: '/xk/snap/dev', args: [state.gyroDeviation] });
 
+  // Turn rate and regime
+  msgs.push({ address: '/xk/rate', args: [state.turnRate] });
+  msgs.push({ address: '/xk/regime', args: [state.regime] });
+
   return msgs;
 }

@@ -16,6 +16,8 @@ This file must stay accurate as the project evolves. **Update it in the same com
 **XenaKube** — real-time instrument: GAN i4 smart Rubik's cube → sound synthesis + visuals. Cube turns are musical events; Rubik's algorithms are "spells" that trigger mode changes. Built on S4 group math (24 cube rotation symmetries) inspired by Xenakis' *Nomos Alpha*.
 
 Primary source: `docs/xenakis_nomos_alpha_primary_source.md` (*Formalized Music* pp. 214–237).
+Research notes, references, and design rationale: `docs/research_notes.md`.
+Implementation roadmap: `docs/todo.md`.
 
 ## Architecture
 
@@ -35,7 +37,7 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
                               (state machine) SuperCollider  TD   Browser Dashboard
 ```
 
-**relay.js** — BLE-to-OSC bridge. Serves dashboard on `:3000` (from `public/dashboard.html`). Receives cube events via WS, upsamples gyro from BLE rate (~10Hz) to 60Hz via quaternion Kalman filter (velocity-aware prediction + measurement correction; smoothing slider 0-1 maps to Kalman gains). Instantiates engine (`onTurn()`/`onGyro()`), sends `/xk/*` OSC to SuperCollider (port 57120), forwards raw `/gan/*` to TD (port 8000). 60Hz loop sends gyro-only OSC (`/xk/gyro`, `/gan/gyro`); full state burst (25 messages) only fires at BLE rate on gyro updates and on turns. Broadcasts augmented engine state (includes scrambleFactor, voiceMode, performanceMode, spellBuffer, spellPartials) as JSON over WS. Sends `spell` events on algorithm detection, `spell_book` on client connect. Handles control messages: `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`. Auto-shutdown 5s after last client disconnects. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
+**relay.js** — BLE-to-OSC bridge. Serves dashboard on `:3000` (from `public/dashboard.html`). Receives cube events via WS, upsamples gyro from BLE rate (~10Hz) to 60Hz via quaternion Kalman filter (velocity-aware prediction + measurement correction; smoothing slider 0-1 maps to Kalman gains, default 0.2). 60Hz loop uses `process.hrtime.bigint()` spin timer (not `setInterval`, which drifts to ~40Hz on Windows). Instantiates engine (`onTurn()`/`onGyro()`), sends `/xk/*` OSC to SuperCollider (port 57120), forwards raw `/gan/*` to TD (port 8000). 60Hz loop sends gyro-only OSC (`/xk/gyro`, `/gan/gyro`); full state burst (25 messages) only fires at BLE rate on gyro updates and on turns. Broadcasts augmented engine state (includes scrambleFactor, voiceMode, performanceMode, spellBuffer, spellPartials) as JSON over WS. Sends `spell` events on algorithm detection, `spell_book` on client connect. Handles control messages: `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`. Auto-shutdown 5s after last client disconnects. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
 
 ### src/ — TypeScript Engine
 
@@ -50,6 +52,7 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 | `voice-engine.ts` | Sequential (1 voice) vs polyphonic (8 voices) output decision |
 | `expression.ts` | Gyro quaternion → continuous control values (tilt, spin, deviation, scramble) |
 | `mode-manager.ts` | Performance state machine: voice mode, palette, variant, freeze |
+| `turn-rate.ts` | Turn-rate tracker: circular buffer → EWMA rate → regime classification (contemplative/conversational/burst) with hysteresis |
 | `kinematic.ts` | Graph paths through S4: pre-composed diagrams + free traversal |
 | `sieve.ts` | L(m,n) logical function, prime residual classes mod 18, metabola mutations |
 | `quaternion.ts` | Gyro → nearest S4 snap, deviation factor |
@@ -57,18 +60,26 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 | `types.ts` | Shared type definitions |
 | `index.ts` | Public API: re-exports all modules |
 
+### docs/ — Documentation
+
+| File | Role |
+|------|------|
+| `xenakis_nomos_alpha_primary_source.md` | Full text extraction from *Formalized Music* pp. 214–237 |
+| `research_notes.md` | References, design rationale, Xenakis→XenaKube mapping, S4 properties, sieve theory, further reading |
+| `todo.md` | Implementation roadmap: three performance speed regimes (contemplative/conversational/burst), phased plan |
+
 ### public/ — Browser Dashboard
 
 | File | Role |
 |------|------|
-| `dashboard.html` | Single-page connect + live performance dashboard. 3D cube (Three.js + OrbitControls), spell detection panel (move buffer + partial match progress + toast notifications), performance mode badges (seq/poly, palette, frozen), expression gauges (tilt, spin, deviation, scramble), voice sequence bar, vertex/complex cards, sieve strip, move log. Gyro smoothing slider in header (Kalman filter gains, 0=responsive/1=smooth). Connects via WS, receives state/spell/voice broadcasts from relay. |
+| `dashboard.html` | Single-page connect + live performance dashboard. 3D cube (Three.js) with per-vertex parameter labels (K#, complex type, D/G/U), ghost cube (cyan wireframe showing S4 snap target with complex labels, opacity varies with deviation), snap overlay (element + deviation % + lock bar), rotation gizmo (separate isometric mini-canvas, bottom-right, 3-axis rings for live/ghost offset). Spell detection panel (move buffer + partial match progress + toast notifications), performance mode badges (seq/poly, palette, frozen), expression gauges (tilt, spin, deviation, scramble), voice sequence bar, vertex/complex cards, sieve strip, move log. Gyro smoothing slider in header (Kalman filter, default 0.2, 0=responsive/1=smooth). Connects via WS, receives state/spell/voice broadcasts from relay. |
 
 
 ## Commands
 
 ```bash
 npx tsx relay.js      # run full relay (BLE → engine → OSC)
-npm test              # vitest (55 tests)
+npm test              # vitest (67 tests)
 npm run test:watch    # vitest watch
 npm run dev           # engine standalone (tsx)
 npm run build         # tsc → dist/
@@ -213,6 +224,8 @@ All `/xk/*` messages go to SC on port 57120. All `/gan/*` messages go to TD on p
 | `/xk/snap/element` | int (0-23) | S4 element gyro snaps to |
 | `/xk/snap/quat` | float×4 | quaternion of snap target |
 | `/xk/snap/dev` | float (0-1) | gyro deviation; 0=locked, 1=boundary |
+| `/xk/rate` | float | turn rate (turns/sec) |
+| `/xk/regime` | string | 'contemplative', 'conversational', or 'burst' |
 | `/gan/turn` | string | move (e.g. "R", "U'", "F2") — port 8000 to TD |
 | `/gan/gyro` | float×4 | quaternion — port 8000 to TD |
 
@@ -222,6 +235,8 @@ All `/xk/*` messages go to SC on port 57120. All `/gan/*` messages go to TD on p
 - **Polyphonic SC output**: voice-engine supports poly mode but `osc-output.ts` and SC only handle sequential.
 - **Expression OSC**: expression processor computes values but no `/xk/expr/*` messages are emitted yet.
 - **Palette switching**: mode manager tracks palette name but no multi-palette SC code exists.
+- **Speed regime adaptation**: turn-rate tracker (`src/turn-rate.ts`) detects regime; engine/SC/dashboard don't yet *adapt behavior* per regime. See `docs/todo.md` Phases 2–4.
+- **Scramble-factor-driven synthesis**: scramble factor (0=solved, 1=max) as macro synthesis arc. Solve = decrescendo from chaos to clarity. Not yet wired to SC.
 - **TouchDesigner**: TD receives raw `/gan/*` on port 8000. No `.toe` project exists.
 
 ## Visuals Status

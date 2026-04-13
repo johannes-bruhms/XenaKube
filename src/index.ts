@@ -20,6 +20,7 @@ export { scrambleDistance, scrambleFactor, getAllDistances, MAX_DISTANCE } from 
 export { VoiceEngine, type VoiceMode, type VoiceEvent, type VoiceOutput } from './voice-engine.js';
 export { ExpressionProcessor, type ExpressionState } from './expression.js';
 export { ModeManager, type PerformanceMode, type ModeChangeListener } from './mode-manager.js';
+export { TurnRateTracker, type Regime } from './turn-rate.js';
 export {
   ComplexType,
   type GroupElement, type Permutation8, type CubeMove, type CubeFace, type MoveString,

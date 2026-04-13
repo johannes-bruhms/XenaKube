@@ -21,6 +21,7 @@ import { scrambleFactor } from './scramble.js';
 import { VoiceEngine, type VoiceOutput } from './voice-engine.js';
 import { ExpressionProcessor, type ExpressionState } from './expression.js';
 import { ModeManager, type PerformanceMode } from './mode-manager.js';
+import { TurnRateTracker, type Regime } from './turn-rate.js';
 
 export type StateListener = (state: XenaKubeState) => void;
 export type SpellListener = (match: SpellMatch) => void;
@@ -59,6 +60,7 @@ export class XenaKubeEngine {
   readonly voiceEngine = new VoiceEngine();
   readonly expression = new ExpressionProcessor();
   readonly modeManager = new ModeManager();
+  readonly turnRateTracker = new TurnRateTracker();
 
   // === Listeners ===
   private listeners: StateListener[] = [];
@@ -114,6 +116,9 @@ export class XenaKubeEngine {
   onTurn(move: MoveString): XenaKubeState | null {
     const el = parseMoveToElement(move);
     if (el === null) return null;
+
+    // Track turn timing for regime detection
+    this.turnRateTracker.push(Date.now());
 
     // Check for spells (layered — multiple can fire on the same move)
     // Apply shortest-first so longest (hardest to execute) wins on conflicts
@@ -225,6 +230,8 @@ export class XenaKubeEngine {
       snapElement,
       snapQuat,
       gyroDeviation,
+      turnRate: this.turnRateTracker.getRate(),
+      regime: this.turnRateTracker.getRegime(),
     };
   }
 
@@ -242,6 +249,7 @@ export class XenaKubeEngine {
     this.spellDetector.reset();
     this.expression.reset();
     this.modeManager.reset();
+    this.turnRateTracker.reset();
     this.voiceEngine.setMode('sequential');
   }
 
