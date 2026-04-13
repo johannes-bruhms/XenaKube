@@ -55,14 +55,14 @@ The core design goal: the instrument should sound and behave differently dependi
 
 **Where**: `sc/xenakube.scd`, `src/voice-engine.ts`.
 
-- [ ] **Voice overlap handling**
+- [x] **Voice overlap handling**
   - Currently each `/xk/voice` kills the previous Routine. At slow rate this is fine.
   - Add a minimum voice duration: if a new turn arrives before the current voice has played for at least 0.5s, let it finish its attack phase before crossfading to the next. Prevents clipping at the contemplative/conversational boundary.
 
-- [ ] **Sieve mutation audibility**
+- [x] **Sieve mutation audibility**
   - At slow rate, sieve metabola (every 3 turns) should be highlighted. Consider a brief SC cue: a soft chime, pitch-bend, or filter sweep when `/xk/sieve` changes. Gives the performer feedback that the pitch field shifted.
 
-- [ ] **Scramble factor → SC**
+- [x] **Scramble factor → SC**
   - Add `/xk/scramble` float (0–1) to `osc-output.ts`
   - SC receives it, maps to a global macro: e.g. reverb wet mix (solved=dry, scrambled=drenched) or master HPF cutoff (solved=full range, scrambled=thinned). Start with one simple mapping, tune by ear.
 

@@ -26,6 +26,12 @@ s.waitForBoot {
 	~activeVoice = nil;
 	~activeRoutine = nil;
 	~activeType = 0;
+	~voiceStartTime = 0;         // timestamp of last voice start (for overlap handling)
+	~pendingVoice = nil;         // deferred voice params when overlap < 0.5s
+	~pendingVoiceTask = nil;     // scheduled task for deferred switch
+	~minVoiceDur = 0.5;          // minimum voice duration before hard switch (seconds)
+	~scrambleFactor = 0;         // 0 = solved, 1 = max scrambled
+	~prevSieveMidi = nil;        // previous sieve for change detection
 
 	~intensityMap = Dictionary[
 		"p" -> 0.12, "mp" -> 0.22, "mf" -> 0.35,
@@ -140,6 +146,20 @@ s.waitForBoot {
 		sig = In.ar(in, 2);
 		wet = FreeVerb2.ar(sig[0], sig[1], mix, room, damp);
 		Out.ar(out, wet);
+	}).add;
+
+	// --- Sieve mutation cue: soft chime when pitch field shifts ---
+	SynthDef(\xk_sieveCue, { |out=0, freq=2000, amp=0.15, revSend=0.4|
+		var sig, env;
+		env = EnvGen.kr(Env.perc(0.005, 0.6, 1, -6), doneAction: 2);
+		// Shimmery bell: two detuned sines + a high partial
+		sig = SinOsc.ar(freq) * 0.5;
+		sig = sig + (SinOsc.ar(freq * 1.507) * 0.3);  // non-harmonic partial (bell-like)
+		sig = sig + (SinOsc.ar(freq * 2.003) * 0.15);
+		sig = sig * env * amp;
+		sig = Pan2.ar(sig, 0);  // centered
+		Out.ar(out, sig);
+		Out.ar(\revBus.kr(0), sig * revSend);
 	}).add;
 
 	// --- Master limiter ---
@@ -403,7 +423,7 @@ s.waitForBoot {
 	};
 
 	// --- Dispatch: start a single voice with given complex type + params ---
-	~startVoice = { |complexType, density, gain, duration|
+	~startVoiceNow = { |complexType, density, gain, duration|
 		("  voice: C" ++ complexType ++ " d:" ++ density ++ " g:" ++ gain.round(0.01) ++ " dur:" ++ duration).postln;
 		switch(complexType,
 			1, { ~startC1.(gain, duration, density) },
@@ -416,6 +436,34 @@ s.waitForBoot {
 			8, { ~startC8.(gain, duration, density) }
 		);
 		~activeType = complexType;
+		~voiceStartTime = SystemClock.seconds;
+	};
+
+	// Voice overlap handler: if current voice hasn't played for minVoiceDur,
+	// defer the switch so the attack phase completes before crossfading.
+	~startVoice = { |complexType, density, gain, duration|
+		var elapsed = SystemClock.seconds - ~voiceStartTime;
+
+		// Cancel any previously pending deferred switch
+		~pendingVoiceTask !? { |t| t.stop; ~pendingVoiceTask = nil };
+
+		if (elapsed >= ~minVoiceDur) {
+			// Enough time passed — switch immediately
+			~startVoiceNow.(complexType, density, gain, duration);
+		} {
+			// Too soon — defer until minVoiceDur elapses
+			var delay = ~minVoiceDur - elapsed;
+			~pendingVoice = [complexType, density, gain, duration];
+			~pendingVoiceTask = SystemClock.sched(delay, {
+				var p = ~pendingVoice;
+				if (p.notNil) {
+					~startVoiceNow.(p[0], p[1], p[2], p[3]);
+					~pendingVoice = nil;
+					~pendingVoiceTask = nil;
+				};
+				nil;  // don't reschedule
+			});
+		};
 	};
 
 	// ---------------------------------------------------------------
@@ -463,10 +511,26 @@ s.waitForBoot {
 		);
 	}, "/xk/tetra");
 
-	// --- Sieve pitches ---
+	// --- Sieve pitches (with mutation cue) ---
 	OSCdef(\xk_sieve, { |msg|
-		~sieveMidi = msg[1..].collect { |st| st.asInteger + ~sieveMidiOffset };
-		if (~sieveMidi.size == 0) { ~sieveMidi = [36] };
+		var newSieve = msg[1..].collect { |st| st.asInteger + ~sieveMidiOffset };
+		if (newSieve.size == 0) { newSieve = [36] };
+
+		// Detect sieve change — fire cue if pitches actually shifted
+		if (~prevSieveMidi.notNil and: { newSieve != ~prevSieveMidi }) {
+			// Cue frequency: derive from the new sieve's centroid (bright shimmer above pitch field)
+			var centroid = newSieve.mean;
+			var cueFreq = (centroid + 24).midicps;  // 2 octaves above centroid
+			Synth(\xk_sieveCue, [
+				\freq, cueFreq,
+				\amp, 0.12,
+				\revBus, ~reverbBus
+			]);
+			("  sieve changed → cue at " ++ cueFreq.round(0.1) ++ " Hz").postln;
+		};
+
+		~prevSieveMidi = newSieve.copy;
+		~sieveMidi = newSieve;
 	}, "/xk/sieve");
 
 	// --- Gyro quaternion ---
@@ -507,6 +571,17 @@ s.waitForBoot {
 		OSCdef(("xk_complex_" ++ i).asSymbol, { |msg| }, ("/xk/complex/" ++ i).asString);
 	};
 
+	// --- Scramble factor → synthesis macro ---
+	// 0 = solved (dry, full range) → 1 = scrambled (drenched, thinned)
+	OSCdef(\xk_scramble, { |msg|
+		var scr = msg[1].asFloat.clip(0, 1);
+		~scrambleFactor = scr;
+
+		// Reverb wet mix: solved = dry (0.1), scrambled = drenched (0.65)
+		var reverbMix = scr.linlin(0, 1, 0.1, 0.65);
+		~reverbSynth.set(\mix, reverbMix);
+	}, "/xk/scramble");
+
 	// --- Step counter ---
 	OSCdef(\xk_step, { |msg|
 		~step = msg[1].asInteger;
@@ -522,6 +597,9 @@ s.waitForBoot {
 
 	CmdPeriod.doOnce {
 		"XenaKube: cleaning up...".postln;
+		~pendingVoiceTask !? { |t| t.stop };
+		~pendingVoice = nil;
+		~pendingVoiceTask = nil;
 		~freeActive.();
 		~reverbBus.free;
 		OSCdef.freeAll;

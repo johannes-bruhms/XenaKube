@@ -96,6 +96,8 @@ export interface XenaKubeState {
   snapQuat: Quaternion;
   /** Angular distance from gyro to nearest snap, normalized 0..1 (0 = locked, 1 = at flip boundary) */
   gyroDeviation: number;
+  /** Scramble factor: 0 = solved, 1 = maximally scrambled (BFS distance in S4) */
+  scrambleFactor: number;
   /** Current turn rate in turns/sec */
   turnRate: number;
   /** Current performance speed regime */

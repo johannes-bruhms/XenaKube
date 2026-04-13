@@ -78,6 +78,9 @@ export function stateToOsc(state: XenaKubeState): OscMessage[] {
   });
   msgs.push({ address: '/xk/snap/dev', args: [state.gyroDeviation] });
 
+  // Scramble factor (0 = solved, 1 = max scrambled)
+  msgs.push({ address: '/xk/scramble', args: [state.scrambleFactor] });
+
   // Turn rate and regime
   msgs.push({ address: '/xk/rate', args: [state.turnRate] });
   msgs.push({ address: '/xk/regime', args: [state.regime] });

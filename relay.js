@@ -201,10 +201,9 @@ engine.onState((state) => {
     oscSC.send(msg.address, ...msg.args);
   }
 
-  // Augment state with v2 data
+  // Augment state with v2 data (scrambleFactor is now in XenaKubeState)
   const v2State = {
     ...state,
-    scrambleFactor: engine.getScrambleFactor(),
     voiceMode: engine.voiceEngine.mode,
     performanceMode: engine.modeManager.getMode(),
     spellBuffer: engine.spellDetector.getBuffer(),

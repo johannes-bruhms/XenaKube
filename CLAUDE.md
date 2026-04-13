@@ -37,7 +37,7 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
                               (state machine) SuperCollider  TD   Browser Dashboard
 ```
 
-**relay.js** — BLE-to-OSC bridge. Serves dashboard on `:3000` (from `public/dashboard.html`). Receives cube events via WS, upsamples gyro from BLE rate (~10Hz) to 60Hz via quaternion Kalman filter (velocity-aware prediction + measurement correction; smoothing slider 0-1 maps to Kalman gains, default 0.2). 60Hz loop uses `process.hrtime.bigint()` spin timer (not `setInterval`, which drifts to ~40Hz on Windows). Instantiates engine (`onTurn()`/`onGyro()`), sends `/xk/*` OSC to SuperCollider (port 57120), forwards raw `/gan/*` to TD (port 8000). 60Hz loop sends gyro-only OSC (`/xk/gyro`, `/gan/gyro`); full state burst (25 messages) only fires at BLE rate on gyro updates and on turns. Broadcasts augmented engine state (includes scrambleFactor, voiceMode, performanceMode, spellBuffer, spellPartials) as JSON over WS. Sends `spell` events on algorithm detection, `spell_book` on client connect. Handles control messages: `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`. Auto-shutdown 5s after last client disconnects. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
+**relay.js** — BLE-to-OSC bridge. Serves dashboard on `:3000` (from `public/dashboard.html`). Receives cube events via WS, upsamples gyro from BLE rate (~10Hz) to 60Hz via quaternion Kalman filter (velocity-aware prediction + measurement correction; smoothing slider 0-1 maps to Kalman gains, default 0.2). 60Hz loop uses `process.hrtime.bigint()` spin timer (not `setInterval`, which drifts to ~40Hz on Windows). Instantiates engine (`onTurn()`/`onGyro()`), sends `/xk/*` OSC to SuperCollider (port 57120), forwards raw `/gan/*` to TD (port 8000). 60Hz loop sends gyro-only OSC (`/xk/gyro`, `/gan/gyro`); full state burst (26 messages) only fires at BLE rate on gyro updates and on turns. Broadcasts augmented engine state (includes scrambleFactor, voiceMode, performanceMode, spellBuffer, spellPartials) as JSON over WS. Sends `spell` events on algorithm detection, `spell_book` on client connect. Handles control messages: `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`. Auto-shutdown 5s after last client disconnects. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
 
 ### src/ — TypeScript Engine
 
@@ -65,7 +65,7 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 | File | Role |
 |------|------|
 | `xenakis_nomos_alpha_primary_source.md` | Full text extraction from *Formalized Music* pp. 214–237 |
-| `research_notes.md` | References, design rationale, Xenakis→XenaKube mapping, S4 properties, sieve theory, further reading |
+| `research_notes.md` | References, design rationale, Xenakis→XenaKube mapping, S4 properties, sieve theory, SWAM Cello mapping design, further reading |
 | `todo.md` | Implementation roadmap: three performance speed regimes (contemplative/conversational/burst), phased plan |
 
 ### public/ — Browser Dashboard
@@ -170,7 +170,7 @@ Boot: open in SC IDE, `Cmd+B` (boot server), select all `Cmd+A`, evaluate `Cmd+E
 
 ### Signal Chain
 
-Sequential single-voice model. One active vertex at a time — `/xk/voice` triggers voice changes. Active voice → stereo pan (by vertex position) → reverb send bus → `FreeVerb2` → `Limiter` (0.85) on master bus.
+Sequential single-voice model. One active vertex at a time — `/xk/voice` triggers voice changes. Active voice → stereo pan (by vertex position) → reverb send bus → `FreeVerb2` → `Limiter` (0.85) on master bus. Voice overlap handling: minimum 0.5s duration before switching — defers new voice until attack phase completes, preventing clipping at fast turn rates. Sieve mutation cue: bell-like chime (2 octaves above sieve centroid) on metabola. Scramble factor → reverb wet mix (solved=0.1 dry, scrambled=0.65 drenched).
 
 **Note**: SC currently implements sequential mode only. Polyphonic mode output, expression parameter receivers, and palette switching are not yet implemented.
 
@@ -178,7 +178,7 @@ Sequential single-voice model. One active vertex at a time — `/xk/voice` trigg
 
 | File | Role |
 |------|------|
-| `xenakube.scd` | Synthesis engine: 6 SynthDefs, reverb, limiter, OSCdef receivers, single-voice sequential manager |
+| `xenakube.scd` | Synthesis engine: 7 SynthDefs, reverb, limiter, OSCdef receivers, single-voice sequential manager with overlap handling |
 
 ### SynthDefs
 
@@ -190,6 +190,7 @@ Sequential single-voice model. One active vertex at a time — `/xk/voice` trigg
 | `\xk_colLegno` | C4 (interrupts) | HP noise + `Ringz` click (woody strike) |
 | `\xk_gliss` | C5, C6, C7 | `LFSaw` + FM + `PinkNoise` bow, lagged freq (sliding string) |
 | `\xk_ponticello` | C8 | Two detuned `Pulse` + HPF + metallic BPF ring + tremolo (sul ponticello) |
+| `\xk_sieveCue` | global | Detuned sine bell (2 oct above sieve centroid), triggers on metabola |
 | `\xk_reverb` | global | `FreeVerb2`, runs at tail |
 | `\xk_master` | global | `Limiter` at 0.85, runs at tail |
 
@@ -200,6 +201,9 @@ Sequential single-voice model. One active vertex at a time — `/xk/voice` trigg
 - **Density → event rate**: controls Routine wait intervals
 - **Gyro deviation → C8 detuning** (beating speed) + **C5 brightness**
 - **Tetrahedral orbit → reverb**: even = warm (room 0.55, damp 0.4), odd = dry (room 0.3, damp 0.7)
+- **Scramble factor → reverb wet**: 0 (solved) = 0.1 (dry), 1 (scrambled) = 0.65 (drenched)
+- **Sieve change → cue**: bell chime at 2 octaves above sieve centroid on metabola
+- **Voice overlap**: min 0.5s voice duration; fast turns defer switch until attack completes
 - **Voice panning**: 8 fixed positions spread L→R across stereo field
 
 ## OSC Reference
@@ -224,6 +228,7 @@ All `/xk/*` messages go to SC on port 57120. All `/gan/*` messages go to TD on p
 | `/xk/snap/element` | int (0-23) | S4 element gyro snaps to |
 | `/xk/snap/quat` | float×4 | quaternion of snap target |
 | `/xk/snap/dev` | float (0-1) | gyro deviation; 0=locked, 1=boundary |
+| `/xk/scramble` | float (0-1) | scramble factor; 0=solved, 1=max scrambled |
 | `/xk/rate` | float | turn rate (turns/sec) |
 | `/xk/regime` | string | 'contemplative', 'conversational', or 'burst' |
 | `/gan/turn` | string | move (e.g. "R", "U'", "F2") — port 8000 to TD |
@@ -235,8 +240,9 @@ All `/xk/*` messages go to SC on port 57120. All `/gan/*` messages go to TD on p
 - **Polyphonic SC output**: voice-engine supports poly mode but `osc-output.ts` and SC only handle sequential.
 - **Expression OSC**: expression processor computes values but no `/xk/expr/*` messages are emitted yet.
 - **Palette switching**: mode manager tracks palette name but no multi-palette SC code exists.
-- **Speed regime adaptation**: turn-rate tracker (`src/turn-rate.ts`) detects regime; engine/SC/dashboard don't yet *adapt behavior* per regime. See `docs/todo.md` Phases 2–4.
-- **Scramble-factor-driven synthesis**: scramble factor (0=solved, 1=max) as macro synthesis arc. Solve = decrescendo from chaos to clarity. Not yet wired to SC.
+- **Speed regime adaptation**: turn-rate tracker detects regime; contemplative mode polished (Phase 2 done), but conversational/burst behavior not yet implemented. See `docs/todo.md` Phases 3–4.
+- **Scramble arc (burst mode)**: scramble factor wired to SC reverb mix (Phase 2). Full burst-mode arc (scramble as master decrescendo parameter) not yet implemented (Phase 4).
+- **SWAM Cello Max patch**: mapping design documented in `docs/research_notes.md`. No Max patch built yet. Complex types → SWAM technique modes, gyro expression → bow parameters, scramble → timbral arc.
 - **TouchDesigner**: TD receives raw `/gan/*` on port 8000. No `.toe` project exists.
 
 ## Visuals Status

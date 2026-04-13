@@ -230,6 +230,7 @@ export class XenaKubeEngine {
       snapElement,
       snapQuat,
       gyroDeviation,
+      scrambleFactor: scrambleFactor(this.kGroup),
       turnRate: this.turnRateTracker.getRate(),
       regime: this.turnRateTracker.getRegime(),
     };

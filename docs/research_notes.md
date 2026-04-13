@@ -247,3 +247,56 @@ No complete bar-by-bar analysis exists. Closest resources:
 - **ResearchGate annotated excerpt** — bars 1–30 with sonic complexes marked and numbered.
 - **Vriend (Interface, 1981)** — earliest serious analytical commentary.
 - **IDEALS / U. Illinois** — performer's guide to Nomos Alpha and Kottos.
+
+---
+
+## SWAM Cello Mapping Design
+
+Xenakis' C1–C8 complex types are cello techniques. SWAM Cello 3 (Audio Modeling) is a physical-modeling VST that exposes the same parameters as continuous MIDI CC — a natural fit for XenaKube's OSC output via a Max/MSP bridge patch.
+
+### Complex Type → SWAM Technique
+
+| Complex | Xenakis technique | SWAM mapping |
+|---------|------------------|--------------|
+| C1 | Ataxic pizzicato | Play Mode: Pizz, random bow/pizz position per note |
+| C2 | Bowed ascending/descending | Play Mode: Bow, Bow Change on each note |
+| C3 | Bowed sustained | Play Mode: Bow, legato, no bow change |
+| C4 | Harmonics + col legno | Harmonics: ON, Harmonics 4 Control from density |
+| C5 | Ataxic glissando | Bow, Pitch Bend active, wide random gliss |
+| C6 | Ordered glissando | Bow, Pitch Bend active, stepwise gliss through sieve |
+| C7 | Sustained sliding | Bow, Pitch Bend active, slow narrow drift |
+| C8 | Sul ponticello | Bow/Pizz Position ~0.9 (near bridge), Tremolo: ON |
+
+### Per-Turn Parameters
+
+| XenaKube | SWAM target | Mapping |
+|----------|------------|---------|
+| intensity (p–fff) | Expression | 0.12–0.8 (same scale as SC engine) |
+| density | Attack Ramp Speed | High density = fast attack |
+| duration | Gate time | Note-off after duration elapses |
+| sieve | MIDI note pool | Active vertex cycling picks pitch |
+
+### Continuous Gyro Expression (requires Phase 3 /xk/expr/*)
+
+| Expression param | SWAM target | Rationale |
+|-----------------|------------|-----------|
+| tilt (0–1) | Expression | Physical gesture = dynamics |
+| spin (0–1) | Vibrato Depth | Rotation speed = vibrato intensity |
+| deviation (0–1) | Bow Pressure | Off-axis from S4 snap = gritty pressed tone |
+| scramble (0–1) | Bow/Pizz Position toward bridge | Scrambled = edgy ponticello timbre |
+
+### Structural Modifiers
+
+| XenaKube | SWAM target | Mapping |
+|----------|------------|---------|
+| tetra orbit even | Bowing Sensitivity 0.5 | Warmer, less reactive |
+| tetra orbit odd | Bowing Sensitivity 0.8 | Edgier, more reactive |
+| path V1 | Transpose: 0 | Normal cello range |
+| path V2 | Transpose: -12 | Octave lower (matches V2 long durations) |
+| regime: contemplative | Single notes | One voice at a time |
+| regime: conversational | Bow Polyphony: Mono String Crossing | Overlapping voices |
+| regime: burst | Tremolo: ON | Tremolo speed from turn rate |
+
+### Solve Arc
+
+Scramble factor as macro parameter: scramble 1.0 (start) = pressed bowing near bridge, heavy vibrato, tense. Scramble 0.0 (solved) = clean bow position, steady, pure tone. The solve IS the musical resolution — a decrescendo from noise to clarity.
