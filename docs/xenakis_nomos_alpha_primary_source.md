@@ -1,5 +1,4 @@
 // === XENAKIS NOMOS ALPHA — FULL PRIMARY SOURCE EXTRACTION (Formalized Music pp. 214–237) ===
-// Paste this entire block as a comment in symmetry_engine.js or layer_manager.js
 
 // GENERAL CASE (pp. 214–217)
 "Organization Outside-Time

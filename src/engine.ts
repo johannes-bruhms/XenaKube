@@ -15,9 +15,16 @@ import { getTransformedVertices, getBaseVertices } from './vertices.js';
 import { ComplexCube } from './complexes.js';
 import { DiagramTraversal, getBuiltinDiagrams, type KinematicDiagram } from './kinematic.js';
 import { SieveState } from './sieve.js';
-import { snapToNearest, deviationFactor } from './quaternion.js';
+import { snapToNearest, distanceToNearest, getQuaternion } from './quaternion.js';
+import { SpellDetector, type SpellMatch } from './spells.js';
+import { scrambleFactor } from './scramble.js';
+import { VoiceEngine, type VoiceOutput } from './voice-engine.js';
+import { ExpressionProcessor, type ExpressionState } from './expression.js';
+import { ModeManager, type PerformanceMode } from './mode-manager.js';
 
 export type StateListener = (state: XenaKubeState) => void;
+export type SpellListener = (match: SpellMatch) => void;
+export type VoiceListener = (output: VoiceOutput) => void;
 
 export class XenaKubeEngine {
   // === K_i cube state ===
@@ -47,8 +54,16 @@ export class XenaKubeEngine {
   private substitutionCount = 0;
   private activeVertex = 0;
 
+  // === New v2 modules ===
+  readonly spellDetector = new SpellDetector();
+  readonly voiceEngine = new VoiceEngine();
+  readonly expression = new ExpressionProcessor();
+  readonly modeManager = new ModeManager();
+
   // === Listeners ===
   private listeners: StateListener[] = [];
+  private spellListeners: SpellListener[] = [];
+  private voiceListeners: VoiceListener[] = [];
 
   constructor(mode?: Partial<EngineMode>) {
     if (mode) this.setMode(mode);
@@ -59,6 +74,22 @@ export class XenaKubeEngine {
     this.listeners.push(listener);
     return () => {
       this.listeners = this.listeners.filter(l => l !== listener);
+    };
+  }
+
+  /** Subscribe to spell detections */
+  onSpell(listener: SpellListener): () => void {
+    this.spellListeners.push(listener);
+    return () => {
+      this.spellListeners = this.spellListeners.filter(l => l !== listener);
+    };
+  }
+
+  /** Subscribe to voice output events */
+  onVoice(listener: VoiceListener): () => void {
+    this.voiceListeners.push(listener);
+    return () => {
+      this.voiceListeners = this.voiceListeners.filter(l => l !== listener);
     };
   }
 
@@ -84,39 +115,58 @@ export class XenaKubeEngine {
     const el = parseMoveToElement(move);
     if (el === null) return null;
 
+    // Check for spells (layered — multiple can fire on the same move)
+    // Apply shortest-first so longest (hardest to execute) wins on conflicts
+    const spellMatches = this.spellDetector.pushAll(move);
+    for (let i = spellMatches.length - 1; i >= 0; i--) {
+      const match = spellMatches[i];
+      this.modeManager.applySpell(match);
+      this.voiceEngine.setMode(this.modeManager.mode.voiceMode);
+      for (const listener of this.spellListeners) listener(match);
+    }
+
+    // If frozen, emit state but don't advance
+    if (this.modeManager.mode.frozen) {
+      const state = this.getState();
+      this.emitState(state);
+      return state;
+    }
+
     // Advance K_i cube
     if (this.mode.kCube === 'direct') {
       this.kGroup = multiply(this.kGroup, el);
     } else if (this.kDiagram) {
-      // Diagram mode: cube turn advances position in the diagram
       this.kGroup = this.kDiagram.advance();
     }
 
     // Advance C_i cube
     if (this.mode.cCube === 'algorithmic') {
       if (this.cDiagram) {
-        // Follow C_i diagram
         const cEl = this.cDiagram.advance();
         this.complexCube.transform(cEl);
       } else {
-        // Default: C_i cube gets the same transformation as K_i
         this.complexCube.transform(el);
       }
     }
-    // If cCube === 'gyro', it's updated in onGyro()
 
     this.step++;
     this.substitutionCount++;
     this.activeVertex = this.step % 8;
 
-    // Advance sieve every 3 substitutions (per Xenakis VII)
+    // Advance sieve every 3 substitutions
     if (this.substitutionCount >= 3) {
       this.substitutionCount = 0;
       this.sieve.advance();
     }
 
+    // Voice output
+    const vertices = getTransformedVertices(this.mode.path, this.kGroup);
+    const complexes = this.complexCube.getAssignments();
+    const voiceOutput = this.voiceEngine.emit(vertices, this.activeVertex, complexes);
+    for (const listener of this.voiceListeners) listener(voiceOutput);
+
     const state = this.getState();
-    this.emit(state);
+    this.emitState(state);
     return state;
   }
 
@@ -125,23 +175,37 @@ export class XenaKubeEngine {
     this.gyro = [x, y, z, w];
 
     if (this.mode.cCube === 'gyro') {
-      // Snap gyro to nearest S4 element for C_i cube
       const snapped = snapToNearest(this.gyro);
-      // Only transform if it's a new element
       if (snapped !== this.complexCube.groupElement) {
-        // Compute the transformation that takes us from current to snapped
         this.complexCube.groupElement = snapped;
       }
     }
 
     const state = this.getState();
-    this.emit(state);
+    this.emitState(state);
     return state;
+  }
+
+  /** Get current expression state (gyro-derived continuous params) */
+  getExpression(): ExpressionState {
+    const { angle } = distanceToNearest(this.gyro);
+    const deviation = Math.min(1, angle / (Math.PI / 4));
+    const scramble = scrambleFactor(this.kGroup);
+    return this.expression.process(this.gyro, deviation, scramble);
+  }
+
+  /** Get current scramble factor (0 = solved, 1 = max scrambled) */
+  getScrambleFactor(): number {
+    return scrambleFactor(this.kGroup);
   }
 
   /** Get current full state */
   getState(): XenaKubeState {
     const perm = getPermutation(this.kGroup);
+
+    const { element: snapElement, angle: snapAngle } = distanceToNearest(this.gyro);
+    const snapQuat = getQuaternion(snapElement);
+    const gyroDeviation = Math.min(1, snapAngle / (Math.PI / 4));
 
     return {
       kGroup: this.kGroup,
@@ -158,6 +222,9 @@ export class XenaKubeEngine {
       activeVertex: this.activeVertex,
       activeDiagram: this.kDiagramName,
       diagramPosition: this.kDiagram ? this.kDiagram.getPosition() : null,
+      snapElement,
+      snapQuat,
+      gyroDeviation,
     };
   }
 
@@ -172,6 +239,10 @@ export class XenaKubeEngine {
     this.gyro = [0, 0, 0, 1];
     this.kDiagram?.reset();
     this.cDiagram?.reset();
+    this.spellDetector.reset();
+    this.expression.reset();
+    this.modeManager.reset();
+    this.voiceEngine.setMode('sequential');
   }
 
   /** Clear K_i diagram (back to direct mode) */
@@ -186,7 +257,7 @@ export class XenaKubeEngine {
     return getBuiltinDiagrams();
   }
 
-  private emit(state: XenaKubeState): void {
+  private emitState(state: XenaKubeState): void {
     for (const listener of this.listeners) {
       listener(state);
     }

@@ -90,4 +90,10 @@ export interface XenaKubeState {
   activeDiagram: string | null;
   /** Diagram position info */
   diagramPosition: { index: number; total: number } | null;
+  /** Nearest S4 element to current gyro orientation (always computed, used for visualization) */
+  snapElement: GroupElement;
+  /** Quaternion of the nearest S4 element — ghost cube target for gyro snap visuals */
+  snapQuat: Quaternion;
+  /** Angular distance from gyro to nearest snap, normalized 0..1 (0 = locked, 1 = at flip boundary) */
+  gyroDeviation: number;
 }

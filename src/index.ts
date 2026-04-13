@@ -1,5 +1,5 @@
 // XenaKube Engine — public API
-export { XenaKubeEngine, type StateListener } from './engine.js';
+export { XenaKubeEngine, type StateListener, type SpellListener, type VoiceListener } from './engine.js';
 export { stateToOsc, type OscMessage } from './osc-output.js';
 export {
   ELEMENTS, CAYLEY, INVERSES, IDENTITY,
@@ -15,6 +15,11 @@ export {
   type Sieve, type SieveFunction,
 } from './sieve.js';
 export { snapToNearest, getQuaternion, distanceToNearest, deviationFactor, quatNormalize } from './quaternion.js';
+export { SpellDetector, SPELL_BOOK, CANONICAL_SPELLS, expandSpellBook, type Spell, type SpellEffect, type SpellMatch } from './spells.js';
+export { scrambleDistance, scrambleFactor, getAllDistances, MAX_DISTANCE } from './scramble.js';
+export { VoiceEngine, type VoiceMode, type VoiceEvent, type VoiceOutput } from './voice-engine.js';
+export { ExpressionProcessor, type ExpressionState } from './expression.js';
+export { ModeManager, type PerformanceMode, type ModeChangeListener } from './mode-manager.js';
 export {
   ComplexType,
   type GroupElement, type Permutation8, type CubeMove, type CubeFace, type MoveString,

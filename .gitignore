@@ -2,4 +2,3 @@ node_modules/
 dist/
 .claude/
 *.env
-maxmsp-mcp/

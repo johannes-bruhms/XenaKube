@@ -1,8 +1,6 @@
 # XenaKube
 
-A real-time musical instrument that transforms a GAN i4 smart Rubik's cube into a live performance tool, using the compositional method from Iannis Xenakis' *Nomos Alpha* (1965).
-
-Each physical cube rotation maps to one of the 24 rotation symmetries of the S4 group, driving two independent mathematical cubes that control sound synthesis parameters and timbral assignments in real time.
+A real-time musical instrument that transforms a GAN i4 smart Rubik's cube into a live performance tool. Cube turns produce sound; Rubik's algorithms are "spells" that trigger mode changes. Built on S4 group math (24 rotation symmetries) inspired by Xenakis' *Nomos Alpha*.
 
 ## How It Works
 
@@ -10,23 +8,50 @@ Each physical cube rotation maps to one of the 24 rotation symmetries of the S4 
 GAN i4 Cube (BLE) --> Chrome Web Bluetooth --> relay.js (Node)
                                                    |
                                              XenaKubeEngine (TS)
-                                              |        |       |
-                                          OSC:57120  OSC:8000  WS
-                                          SuperCollider  TD   Browser
+                                         ┌────────┼──────────┐
+                                         │        │          │
+                                   SpellDetector  VoiceEngine  Expression
+                                         │        │          │
+                                         ▼        ▼          ▼
+                                   ModeManager  OSC:57120  WS (broadcast)
+                                               SuperCollider  Browser
 ```
 
-A performer physically turns a Bluetooth-enabled Rubik's cube. The cube's moves and gyroscope data flow through a browser-based BLE bridge into a Node.js relay, which feeds a TypeScript composition engine. The engine computes the full musical state -- vertex parameters (density, intensity, duration), sound complex assignments (C1-C8), pitch sieves, and kinematic diagram positions -- then sends it all as OSC to SuperCollider for synthesis.
+A performer physically turns a Bluetooth-enabled Rubik's cube. Each turn is a musical event: the cube's S4 group state permutes which sound parameters apply to which voice. Rubik's algorithms (like the "sexy move" R U R' U') are detected from the move stream and trigger performance mode changes — palette switching, voice mode toggles, freezes.
 
 ### Two Cubes, One Performance
 
 Following Xenakis' method, two S4 group cubes operate simultaneously:
 
-- **K_i cube** -- maps the 8 vertices to parameter triples (Density x Intensity x Duration). Each S4 transformation permutes which parameters apply to which voice.
-- **C_i cube** -- maps the 8 vertices to sound complex types (C1-C8: grain clouds, glissandi, interference tones, etc.). Transformations reassign which synthesis method each voice uses.
+- **K_i cube** -- maps 8 vertices to parameter triples (Density × Intensity × Duration). Each turn permutes which parameters apply to which voice.
+- **C_i cube** -- maps 8 vertices to sound complex types (C1-C8). Transformations reassign which synthesis method each voice uses.
 
-### Pitch Sieves
+### Spell System
 
-Pitches are generated using Xenakis' logical function L(m,n), built from prime residual classes modulo 18. The sieve mutates every 3 cube transformations via *metabola* -- multiplying the moduli by residual class elements.
+Known Rubik's algorithms detected from the move stream trigger mode changes:
+
+| Spell | Algorithm | Moves |
+|-------|-----------|-------|
+| sexy-move | R U R' U' | 4 |
+| sledgehammer | R' D' R D | 4 |
+| oll-cross | F R U R' U' F' | 6 |
+| combo | R U R' U' R' F R F' | 8 |
+| t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 14 |
+
+Spells layer — short algorithms fire immediately even if they're the prefix of a longer one in progress.
+
+### Voice Modes
+
+- **Sequential** -- one voice at a time, cycling through positions
+- **Polyphonic** -- all 8 voices sounding simultaneously, each turn morphs the ensemble
+
+### Expression
+
+Continuous gyro-derived control values (all normalized 0-1):
+- **Tilt** -- cube pitch angle
+- **Spin** -- angular velocity
+- **Deviation** -- distance from nearest S4 snap point
+- **Scramble** -- BFS distance from solved state in S4
 
 ## Requirements
 
@@ -34,7 +59,6 @@ Pitches are generated using Xenakis' logical function L(m,n), built from prime r
 - [SuperCollider](https://supercollider.github.io/)
 - A GAN i4 smart cube (Bluetooth)
 - Chrome (for Web Bluetooth API)
-- macOS (BLE connection uses `customMacAddressProvider`)
 
 ## Setup
 
@@ -46,11 +70,7 @@ npm install
 
 **1. Start SuperCollider**
 
-Open `sc/xenakube.scd` in the SuperCollider IDE and evaluate the entire buffer (Cmd+Shift+Enter). You should see:
-
-```
-XenaKube SC Engine ready on port 57120
-```
+Open `sc/xenakube.scd` in the SuperCollider IDE and evaluate the entire buffer (Cmd+Shift+Enter).
 
 **2. Start the relay**
 
@@ -64,42 +84,15 @@ Open Chrome to `http://localhost:3000`, enter your cube's MAC address, and click
 
 Turn the cube. Sound happens.
 
-## Synthesis
-
-SuperCollider runs 8 voices, one per vertex. Each voice is assigned a complex type that determines its synthesis behavior:
-
-| Complex | Sound |
-|---------|-------|
-| C1 | Stochastic grain cloud -- random pitch from sieve, random timing |
-| C2 | Grain cloud with ascending/descending pitch envelope |
-| C3 | Grain cloud, roughly constant pitch |
-| C4 | Sustained interference tone + triggered pizzicato |
-| C5 | Random glissandi between sieve pitches |
-| C6 | Glissandi with directional envelope |
-| C7 | Sustained sliding tones |
-| C8 | Two oscillators at near-unison (beating) |
-
-## Performance Modes
-
-The engine supports several modes for how the two cubes are driven:
-
-- **K_i direct** -- each physical turn = one S4 transformation (the performer *is* the kinematic diagram)
-- **K_i diagram** -- pre-composed path through S4; cube turns advance position
-- **C_i algorithmic** -- second cube follows its own S4 diagram, advancing with each K_i transformation
-- **C_i gyro** -- gyroscope quaternion snapped to nearest S4 element drives the second cube
-- **V1 path** -- short durations (2-5s), loud dynamics (mf-fff)
-- **V2 path** -- long durations (10-30s), soft dynamics (p-f)
-
 ## Project Structure
 
 ```
-src/              TypeScript composition engine (S4 group, sieves, kinematic diagrams)
+src/              TypeScript engine (S4 group, spells, voice, expression, scramble)
 sc/               SuperCollider synthesis (xenakube.scd)
+public/           Browser dashboard (live visualizer + cube connect)
 relay.js          BLE-to-OSC bridge with XenaKubeEngine
-relay-tested.js   Known-good standalone BLE relay (reference)
-test/             Vitest test suite
+test/             Vitest test suite (42 tests)
 docs/             Xenakis primary source extraction
-max/              Legacy Max/MSP synthesis (superseded by SC)
 ```
 
 ## Tests

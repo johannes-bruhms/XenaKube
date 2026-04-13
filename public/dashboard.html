@@ -103,7 +103,7 @@
   .grid {
     display: grid;
     grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto auto auto auto auto auto;
+    grid-template-rows: auto;
     gap: 1px;
     background: var(--border);
     max-width: 1400px;
@@ -125,7 +125,46 @@
 
   /* Cube 3D panel */
   .cube-panel { grid-column: 1 / 2; grid-row: 1 / 2; min-height: 320px; position: relative; }
-  #cube-canvas { width: 100%; height: 280px; display: block; }
+  #cube-canvas { width: 100%; height: 280px; display: block; touch-action: none; }
+
+  .cube-rotate-ctrl {
+    position: absolute;
+    top: 10px;
+    right: 10px;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    z-index: 2;
+    background: rgba(18, 18, 26, 0.75);
+    padding: 4px 6px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    user-select: none;
+  }
+  .cube-rotate-ctrl .cr-label {
+    font-size: 9px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-right: 2px;
+  }
+  .cube-rotate-ctrl button {
+    padding: 3px 8px;
+    font-size: 10px;
+    font-family: monospace;
+    font-weight: 600;
+    background: var(--bg);
+    color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .cube-rotate-ctrl button:hover { color: var(--text); }
+  .cube-rotate-ctrl button.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
 
   /* State panel */
   .state-panel { grid-column: 2 / 3; grid-row: 1 / 2; }
@@ -314,8 +353,7 @@
   .ct-7 { border-color: #ff44cc; color: #ff44cc; }
   .ct-8 { border-color: #cccccc; color: #cccccc; }
 
-  /* Sieve panel */
-  .sieve-panel { grid-column: 1 / -1; }
+  /* Sieve */
   .sieve-strip {
     display: flex;
     gap: 1px;
@@ -388,44 +426,6 @@
     100% { background: transparent; }
   }
 
-  /* Gyro display */
-  .gyro-grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 8px;
-  }
-  .gyro-axis {
-    background: var(--bg);
-    border-radius: 4px;
-    padding: 8px;
-    text-align: center;
-  }
-  .gyro-axis-label { font-size: 11px; color: var(--dim); }
-  .gyro-axis-val { font-size: 18px; font-weight: 600; color: var(--accent2); }
-  .gyro-bar-wrap {
-    height: 4px;
-    background: var(--border);
-    border-radius: 2px;
-    margin-top: 4px;
-    overflow: hidden;
-    position: relative;
-  }
-  .gyro-bar-center {
-    position: absolute;
-    left: 50%;
-    top: 0;
-    width: 1px;
-    height: 100%;
-    background: var(--dim);
-  }
-  .gyro-bar {
-    position: absolute;
-    top: 0;
-    height: 100%;
-    background: var(--accent2);
-    border-radius: 2px;
-    transition: left 0.1s, width 0.1s;
-  }
 
   /* Permutation display */
   .perm-display {
@@ -451,6 +451,211 @@
     border-color: var(--accent);
     background: var(--active-glow);
     color: #fff;
+  }
+
+  /* === V2 Panels === */
+
+  /* Spell panel */
+  .spell-panel { grid-column: 1 / -1; }
+  .spell-row {
+    display: flex;
+    gap: 12px;
+    align-items: center;
+  }
+  .spell-notification {
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--gold);
+    min-width: 180px;
+    min-height: 28px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .spell-notification.active {
+    animation: spell-flash 1.5s ease-out forwards;
+  }
+  @keyframes spell-flash {
+    0% { color: #fff; text-shadow: 0 0 12px var(--gold), 0 0 24px var(--gold); }
+    100% { color: var(--gold); text-shadow: none; }
+  }
+  .spell-buffer {
+    display: flex;
+    gap: 3px;
+    flex-wrap: wrap;
+    flex: 1;
+  }
+  .spell-buffer-move {
+    padding: 2px 6px;
+    font-size: 11px;
+    font-weight: 600;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    color: var(--dim);
+    transition: all 0.15s;
+  }
+  .spell-buffer-move.matched {
+    border-color: var(--gold);
+    color: var(--gold);
+    background: rgba(255, 204, 0, 0.08);
+  }
+  .spell-partials {
+    font-size: 10px;
+    color: var(--dim);
+    min-width: 120px;
+    text-align: right;
+  }
+  .spell-partials .partial-name {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .spell-partials .partial-bar {
+    display: inline-block;
+    height: 3px;
+    background: var(--gold);
+    border-radius: 2px;
+    margin-left: 4px;
+    vertical-align: middle;
+    transition: width 0.15s;
+  }
+
+  /* Mode bar */
+  .mode-panel { grid-column: 1 / -1; }
+  .mode-row {
+    display: flex;
+    gap: 16px;
+    align-items: center;
+    flex-wrap: wrap;
+  }
+  .mode-badge {
+    padding: 4px 12px;
+    font-size: 12px;
+    font-weight: 700;
+    border-radius: 4px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+  }
+  .mode-badge.voice-seq {
+    background: rgba(0, 255, 136, 0.12);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .mode-badge.voice-poly {
+    background: rgba(0, 204, 255, 0.12);
+    border: 1px solid var(--accent2);
+    color: var(--accent2);
+  }
+  .mode-badge.frozen {
+    background: rgba(255, 102, 68, 0.12);
+    border: 1px solid var(--warm);
+    color: var(--warm);
+  }
+  .mode-badge.palette {
+    background: rgba(255, 204, 0, 0.08);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+  }
+  .scramble-wrap {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-left: auto;
+  }
+  .scramble-label {
+    font-size: 10px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .scramble-bar-outer {
+    width: 100px;
+    height: 8px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+  .scramble-bar-inner {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 4px;
+    transition: width 0.3s, background 0.3s;
+  }
+  .scramble-val {
+    font-size: 11px;
+    font-weight: 600;
+    color: var(--text);
+    min-width: 30px;
+  }
+
+  /* Expression panel */
+  .expression-panel { grid-column: 1 / -1; }
+  .expr-grid {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 8px;
+  }
+  .expr-item {
+    background: var(--bg);
+    border-radius: 4px;
+    padding: 10px;
+    text-align: center;
+  }
+  .expr-label {
+    font-size: 9px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 4px;
+  }
+  .expr-value {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--accent2);
+    font-family: monospace;
+  }
+  .expr-bar-wrap {
+    height: 4px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 6px;
+    overflow: hidden;
+  }
+  .expr-bar {
+    height: 100%;
+    width: 0%;
+    background: var(--accent2);
+    border-radius: 2px;
+    transition: width 0.1s;
+  }
+
+  /* Spell history toast */
+  .spell-history {
+    position: fixed;
+    top: 60px;
+    right: 16px;
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    pointer-events: none;
+  }
+  .spell-toast {
+    padding: 6px 14px;
+    font-size: 12px;
+    font-weight: 700;
+    color: var(--bg);
+    background: var(--gold);
+    border-radius: 4px;
+    animation: toast-in 2s ease-out forwards;
+    white-space: nowrap;
+  }
+  @keyframes toast-in {
+    0% { opacity: 1; transform: translateX(0); }
+    70% { opacity: 1; }
+    100% { opacity: 0; transform: translateX(20px); }
   }
 
   /* No data overlay */
@@ -481,20 +686,24 @@
 </head>
 <body>
 
+<div class="spell-history" id="spell-history"></div>
+
 <header>
   <h1>XENAKUBE</h1>
   <div class="header-connect">
     <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
     <button id="connectBtn">Connect Cube</button>
     <button id="zeroBtn">Zero Gyro</button>
+    <label style="font-size:10px;color:var(--dim);margin-left:8px">smooth</label>
+    <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.10"
+      style="width:80px;vertical-align:middle;accent-color:var(--accent2)">
+    <span id="gyroSmoothVal" style="font-size:10px;color:var(--accent2);min-width:28px">0.10</span>
     <span id="cube-status"></span>
   </div>
   <div class="header-status">
     <span><span class="ws-dot" id="ws-dot"></span><span id="ws-status">disconnected</span></span>
     <span>step <span class="val" id="h-step">0</span></span>
-    <span>path <span class="val" id="h-path">--</span></span>
-    <span>cycle <span class="val" id="h-cycle">--</span></span>
-    <span>orbit <span class="val" id="h-orbit">--</span></span>
+    <span>S4 <span class="val" id="h-path">--</span></span>
   </div>
 </header>
 
@@ -503,98 +712,127 @@
   <!-- 3D Cube -->
   <div class="panel cube-panel">
     <div class="panel-title">Cube</div>
+    <div class="cube-rotate-ctrl" id="rotate-ctrl">
+      <span class="cr-label">rotate</span>
+      <button class="cr-btn active" data-target="camera">cam</button>
+      <button class="cr-btn" data-target="live">live</button>
+      <button class="cr-btn" data-target="ghost">ghost</button>
+      <button class="cr-reset" title="reset selected view">&#x21ba;</button>
+    </div>
     <canvas id="cube-canvas"></canvas>
   </div>
 
-  <!-- State Panel -->
+  <!-- Performance State (v2 primary) -->
   <div class="panel state-panel">
-    <div class="panel-title">Engine State</div>
+    <div class="panel-title">Performance</div>
 
-    <div class="sub-heading">K_i Cube (Parameters)</div>
+    <div class="mode-row" style="margin-bottom:12px">
+      <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
+      <span class="mode-badge palette" id="mode-palette">default</span>
+      <span class="mode-badge frozen" id="mode-frozen" style="display:none">FROZEN</span>
+    </div>
+
+    <div class="state-row">
+      <span class="state-label">active voice</span>
+      <span class="state-val accent" id="s-active-vertex">K1</span>
+    </div>
     <div class="state-row">
       <span class="state-label">S4 element</span>
       <span class="state-val accent" id="s-k-group">0</span>
     </div>
     <div class="state-row">
-      <span class="state-label">path</span>
-      <span class="state-val" id="s-path">V1</span>
+      <span class="state-label">complex phase</span>
+      <span class="state-val gold" id="s-cycle">alpha</span>
     </div>
     <div class="state-row">
-      <span class="state-label">tetra orbit</span>
+      <span class="state-label">orbit</span>
       <span class="state-val" id="s-tetra">even</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">scramble</span>
+      <div class="scramble-wrap" style="margin-left:0">
+        <div class="scramble-bar-outer">
+          <div class="scramble-bar-inner" id="scramble-bar"></div>
+        </div>
+        <span class="scramble-val" id="scramble-val">0.0</span>
+      </div>
     </div>
     <div class="state-row">
       <span class="state-label">permutation</span>
       <div class="perm-display" id="s-perm"></div>
     </div>
+  </div>
 
-    <div class="sub-heading">C_i Cube (Complexes)</div>
-    <div class="state-row">
-      <span class="state-label">S4 element</span>
-      <span class="state-val accent2" id="s-c-group">0</span>
-    </div>
-    <div class="state-row">
-      <span class="state-label">cyclic phase</span>
-      <span class="state-val gold" id="s-cycle">alpha</span>
-    </div>
-
-    <div class="sub-heading">Active Voice</div>
-    <div class="state-row">
-      <span class="state-label">vertex</span>
-      <span class="state-val accent" id="s-active-vertex">K1</span>
-    </div>
-    <div class="state-row">
-      <span class="state-label">sieve pitches</span>
-      <span class="state-val" id="s-sieve-count">0</span>
+  <!-- Spell Detection -->
+  <div class="panel spell-panel">
+    <div class="panel-title">Spells</div>
+    <div class="spell-row">
+      <div class="spell-notification" id="spell-notification"></div>
+      <div class="spell-buffer" id="spell-buffer"></div>
+      <div class="spell-partials" id="spell-partials"></div>
     </div>
   </div>
 
-  <!-- Sequence Controls -->
+  <!-- Expression -->
+  <div class="panel expression-panel">
+    <div class="panel-title">Expression</div>
+    <div class="expr-grid">
+      <div class="expr-item">
+        <div class="expr-label">Tilt</div>
+        <div class="expr-value" id="expr-tilt">0.50</div>
+        <div class="expr-bar-wrap"><div class="expr-bar" id="expr-tilt-bar"></div></div>
+      </div>
+      <div class="expr-item">
+        <div class="expr-label">Spin</div>
+        <div class="expr-value" id="expr-spin">0.00</div>
+        <div class="expr-bar-wrap"><div class="expr-bar" id="expr-spin-bar"></div></div>
+      </div>
+      <div class="expr-item">
+        <div class="expr-label">Deviation</div>
+        <div class="expr-value" id="expr-dev">0.00</div>
+        <div class="expr-bar-wrap"><div class="expr-bar" id="expr-dev-bar"></div></div>
+      </div>
+      <div class="expr-item">
+        <div class="expr-label">Scramble</div>
+        <div class="expr-value" id="expr-scramble">0.00</div>
+        <div class="expr-bar-wrap"><div class="expr-bar" id="expr-scramble-bar"></div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Vertex Sequence Bar -->
   <div class="panel sequence-panel">
-    <div class="panel-title">Sequence Control</div>
+    <div class="panel-title">Voice Sequence</div>
     <div class="seq-controls">
-      <label>Diagram</label>
-      <select id="diagram-select">
+      <select id="diagram-select" style="font-size:11px">
         <option value="">direct (free)</option>
       </select>
-      <label>Path</label>
-      <select id="path-select">
-        <option value="V1">V1 (strong D/G)</option>
-        <option value="V2">V2 (strong D/U)</option>
+      <select id="path-select" style="font-size:11px">
+        <option value="V1">V1</option>
+        <option value="V2">V2</option>
       </select>
-      <label>C_i Mode</label>
-      <select id="cmode-select">
+      <select id="cmode-select" style="font-size:11px">
         <option value="algorithmic">algorithmic</option>
         <option value="gyro">gyro snap</option>
       </select>
       <button class="ctrl-btn" id="resetBtn">Reset</button>
-      <div class="seq-status">
-        <span>diagram pos: <span class="val" id="seq-pos">--</span></span>
-      </div>
     </div>
     <div class="seq-vertex-bar" id="seq-vertex-bar"></div>
   </div>
 
   <!-- Vertices -->
   <div class="panel vertices-panel">
-    <div class="panel-title">Vertices K1-K8 (D x G x U)</div>
+    <div class="panel-title">Vertices K1-K8</div>
     <div class="vertex-grid" id="vertex-grid"></div>
   </div>
 
   <!-- Complexes -->
   <div class="panel complexes-panel">
-    <div class="panel-title">Sound Complexes C1-C8</div>
+    <div class="panel-title">Complexes C1-C8</div>
     <div class="complex-grid" id="complex-grid"></div>
   </div>
 
-  <!-- Sieve -->
-  <div class="panel sieve-panel">
-    <div class="panel-title">Sieve (semitone offsets from C2)</div>
-    <div class="sieve-strip" id="sieve-strip"></div>
-    <div class="sieve-labels" id="sieve-labels"></div>
-  </div>
-
-  <!-- Move Log -->
+  <!-- Move Log + Sieve -->
   <div class="panel log-panel">
     <div class="panel-title">Move Log</div>
     <div class="move-log" id="move-log">
@@ -602,31 +840,10 @@
     </div>
   </div>
 
-  <!-- Gyro -->
   <div class="panel gyro-panel">
-    <div class="panel-title">Gyro Quaternion</div>
-    <div class="gyro-grid" id="gyro-grid">
-      <div class="gyro-axis">
-        <div class="gyro-axis-label">X</div>
-        <div class="gyro-axis-val" id="gyro-x">0.000</div>
-        <div class="gyro-bar-wrap"><div class="gyro-bar-center"></div><div class="gyro-bar" id="gyro-bar-x"></div></div>
-      </div>
-      <div class="gyro-axis">
-        <div class="gyro-axis-label">Y</div>
-        <div class="gyro-axis-val" id="gyro-y">0.000</div>
-        <div class="gyro-bar-wrap"><div class="gyro-bar-center"></div><div class="gyro-bar" id="gyro-bar-y"></div></div>
-      </div>
-      <div class="gyro-axis">
-        <div class="gyro-axis-label">Z</div>
-        <div class="gyro-axis-val" id="gyro-z">0.000</div>
-        <div class="gyro-bar-wrap"><div class="gyro-bar-center"></div><div class="gyro-bar" id="gyro-bar-z"></div></div>
-      </div>
-      <div class="gyro-axis">
-        <div class="gyro-axis-label">W</div>
-        <div class="gyro-axis-val" id="gyro-w">1.000</div>
-        <div class="gyro-bar-wrap"><div class="gyro-bar-center"></div><div class="gyro-bar" id="gyro-bar-w"></div></div>
-      </div>
-    </div>
+    <div class="panel-title">Sieve</div>
+    <div class="sieve-strip" id="sieve-strip"></div>
+    <div class="sieve-labels" id="sieve-labels"></div>
   </div>
 
 </div>
@@ -787,6 +1004,26 @@ cubeGroup.add(edgeLines, tetraALines, tetraBLines, activeRing);
 vertexMeshes.forEach(m => cubeGroup.add(m));
 vertexLabels.forEach(l => cubeGroup.add(l.sprite));
 
+// Ghost cube — shows the S4 element the gyro is currently snapping to.
+// Faint cyan wireframe + 8 small markers, oriented at state.snapQuat.
+// When the live cube and ghost overlap → gyro is locked on a snap target.
+// When they diverge → drifting toward the next snap (deviation factor).
+const ghostGroup = new THREE.Group();
+ghostGroup.visible = false;
+scene.add(ghostGroup);
+
+const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.35 });
+const ghostEdges = new THREE.LineSegments(edgeGeo.clone(), ghostEdgeMat);
+ghostGroup.add(ghostEdges);
+
+const ghostVertGeo = new THREE.SphereGeometry(0.05, 6, 6);
+const ghostVertMat = new THREE.MeshBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.55 });
+for (let i = 0; i < 8; i++) {
+  const m = new THREE.Mesh(ghostVertGeo, ghostVertMat);
+  m.position.copy(CUBE_VERTS[i]);
+  ghostGroup.add(m);
+}
+
 // OrbitControls for mouse-drag camera rotation
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
@@ -795,9 +1032,62 @@ controls.enablePan = false;
 controls.minDistance = 3;
 controls.maxDistance = 12;
 
+// Per-cube view offsets (premultiplied onto the live/ghost rotation).
+// Let the performer reorient one cube visually without moving the other.
+const liveViewOffset = new THREE.Quaternion(0, 0, 0, 1);
+const ghostViewOffset = new THREE.Quaternion(0, 0, 0, 1);
+let rotateTarget = 'camera'; // 'camera' | 'live' | 'ghost'
+
+const rotateCtrl = document.getElementById('rotate-ctrl');
+rotateCtrl.querySelectorAll('.cr-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    rotateTarget = btn.dataset.target;
+    rotateCtrl.querySelectorAll('.cr-btn').forEach(b => b.classList.toggle('active', b === btn));
+    controls.enabled = (rotateTarget === 'camera');
+  });
+});
+rotateCtrl.querySelector('.cr-reset').addEventListener('click', () => {
+  if (rotateTarget === 'live') liveViewOffset.identity();
+  else if (rotateTarget === 'ghost') ghostViewOffset.identity();
+  else controls.reset();
+});
+
+// Custom pointer-drag rotation for live/ghost targets.
+// Yaw around world Y, pitch around world X — premultiplied so drag feels world-relative.
+let dragging = false;
+let dragLastX = 0, dragLastY = 0;
+canvas.addEventListener('pointerdown', (e) => {
+  if (rotateTarget === 'camera') return;
+  dragging = true;
+  dragLastX = e.clientX;
+  dragLastY = e.clientY;
+  canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', (e) => {
+  if (!dragging) return;
+  const dx = e.clientX - dragLastX;
+  const dy = e.clientY - dragLastY;
+  dragLastX = e.clientX;
+  dragLastY = e.clientY;
+  const offset = (rotateTarget === 'live') ? liveViewOffset : ghostViewOffset;
+  const speed = 0.01;
+  const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * speed);
+  const pitch = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * speed);
+  offset.premultiply(yaw).premultiply(pitch);
+});
+const endDrag = (e) => {
+  if (!dragging) return;
+  dragging = false;
+  if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
+};
+canvas.addEventListener('pointerup', endDrag);
+canvas.addEventListener('pointercancel', endDrag);
+
 let idleAngle = 0;
 let currentGyro = new THREE.Quaternion(0, 0, 0, 1);
+let currentSnap = new THREE.Quaternion(0, 0, 0, 1);
 let hasGyro = false;
+let hasSnap = false;
 let currentActiveVertex = 0;
 
 // Gyro zero calibration
@@ -817,6 +1107,7 @@ resizeCube();
 window.addEventListener('resize', resizeCube);
 
 const calibratedGyro = new THREE.Quaternion();
+const calibratedSnap = new THREE.Quaternion();
 
 // Pulse animation for active ring
 let ringPulse = 0;
@@ -826,10 +1117,19 @@ function animateCube() {
   controls.update();
   if (hasGyro) {
     calibratedGyro.copy(gyroZeroInv).multiply(currentGyro);
-    cubeGroup.quaternion.copy(calibratedGyro);
   } else {
     idleAngle += 0.003;
-    cubeGroup.rotation.set(0.3, idleAngle, 0.15);
+    calibratedGyro.setFromEuler(new THREE.Euler(0.3, idleAngle, 0.15));
+  }
+  cubeGroup.quaternion.copy(liveViewOffset).multiply(calibratedGyro);
+
+  // Ghost cube — same calibration as live cube so they share a frame
+  if (hasSnap) {
+    ghostGroup.visible = true;
+    calibratedSnap.copy(gyroZeroInv).multiply(currentSnap);
+    ghostGroup.quaternion.copy(ghostViewOffset).multiply(calibratedSnap);
+  } else {
+    ghostGroup.visible = false;
   }
 
   // Pulse active ring
@@ -952,26 +1252,13 @@ function updateState(state, move) {
   currentActiveVertex = activeIdx;
 
   document.getElementById('h-step').textContent = state.step;
-  document.getElementById('h-path').textContent = state.path;
-  document.getElementById('h-cycle').textContent = state.cyclicPhase;
-  document.getElementById('h-orbit').textContent = state.tetraIndex === 0 ? 'even' : 'odd';
+  document.getElementById('h-path').textContent = `${state.path} #${state.kGroup}`;
 
   document.getElementById('s-k-group').textContent = state.kGroup;
-  document.getElementById('s-c-group').textContent = state.cGroup;
-  document.getElementById('s-path').textContent = state.path;
-  document.getElementById('s-tetra').textContent = state.tetraIndex === 0 ? 'even (warm)' : 'odd (dry)';
+  document.getElementById('s-tetra').textContent = state.tetraIndex === 0 ? 'even' : 'odd';
   document.getElementById('s-tetra').className = 'state-val ' + (state.tetraIndex === 0 ? 'accent' : 'warm');
   document.getElementById('s-cycle').textContent = state.cyclicPhase;
-  document.getElementById('s-sieve-count').textContent = state.sieve.length;
   document.getElementById('s-active-vertex').textContent = `K${activeIdx + 1}`;
-
-  // Diagram position
-  if (state.diagramPosition) {
-    document.getElementById('seq-pos').textContent =
-      `${state.diagramPosition.index + 1} / ${state.diagramPosition.total}`;
-  } else {
-    document.getElementById('seq-pos').textContent = 'free';
-  }
 
   if (state.kPermutation) {
     for (let i = 0; i < 8; i++) {
@@ -984,7 +1271,6 @@ function updateState(state, move) {
   tetraALines.material.opacity = state.tetraIndex === 0 ? 0.6 : 0.15;
   tetraBLines.material.opacity = state.tetraIndex === 1 ? 0.6 : 0.15;
 
-  // Update vertex cards — highlight active, dim others
   if (state.kVertices) {
     for (let i = 0; i < 8; i++) {
       const v = state.kVertices[i];
@@ -994,13 +1280,10 @@ function updateState(state, move) {
       card.querySelector('[data-v="u"]').textContent = v.duration;
       const pct = (INTENSITY_LEVELS[v.intensity] || 0.5) * 100;
       card.querySelector('[data-v="bar"]').style.width = pct + '%';
-
-      // Active/inactive styling
       card.className = 'vertex-card' + (i === activeIdx ? ' active' : ' inactive');
     }
   }
 
-  // Update complex cards — highlight active vertex's complex
   if (state.cAssignments) {
     for (let i = 0; i < 8; i++) {
       const ct = state.cAssignments[i];
@@ -1011,7 +1294,6 @@ function updateState(state, move) {
       card.querySelector('.complex-name').textContent = COMPLEX_SHORT[ct] || '';
     }
 
-    // Update sequence bar pips
     for (let i = 0; i < 8; i++) {
       const ct = state.cAssignments[i];
       seqPips[i].className = 'seq-vertex-pip' + (i === activeIdx ? ' active' : '');
@@ -1019,7 +1301,6 @@ function updateState(state, move) {
     }
   }
 
-  // Update 3D active vertex
   updateActiveVertexIn3D(activeIdx);
 
   const activeSet = new Set(state.sieve);
@@ -1033,17 +1314,14 @@ function updateState(state, move) {
 
   if (state.gyro) {
     const [x, y, z, w] = state.gyro;
-    document.getElementById('gyro-x').textContent = x.toFixed(3);
-    document.getElementById('gyro-y').textContent = y.toFixed(3);
-    document.getElementById('gyro-z').textContent = z.toFixed(3);
-    document.getElementById('gyro-w').textContent = w.toFixed(3);
-    updateGyroBar('gyro-bar-x', x);
-    updateGyroBar('gyro-bar-y', y);
-    updateGyroBar('gyro-bar-z', z);
-    updateGyroBar('gyro-bar-w', w);
-
     currentGyro.set(-x, z, y, w);
     hasGyro = true;
+  }
+
+  if (state.snapQuat) {
+    const [sx, sy, sz, sw] = state.snapQuat;
+    currentSnap.set(-sx, sz, sy, sw);
+    hasSnap = true;
   }
 
   if (move) {
@@ -1065,17 +1343,150 @@ function updateState(state, move) {
   }
 }
 
-function updateGyroBar(id, value) {
-  const bar = document.getElementById(id);
-  const clamped = Math.max(-1, Math.min(1, value));
-  if (clamped >= 0) {
-    bar.style.left = '50%';
-    bar.style.width = (clamped * 50) + '%';
-  } else {
-    const w = Math.abs(clamped) * 50;
-    bar.style.left = (50 - w) + '%';
-    bar.style.width = w + '%';
+
+// ============================================================
+// V2: Spell, Mode, Expression, Scramble
+// ============================================================
+
+let spellBook = [];
+let spellNotificationTimeout = null;
+
+function updateV2State(state) {
+  // Scramble
+  if (typeof state.scrambleFactor === 'number') {
+    const sf = state.scrambleFactor;
+    const bar = document.getElementById('scramble-bar');
+    const val = document.getElementById('scramble-val');
+    bar.style.width = (sf * 100) + '%';
+    // Green (solved) → red (scrambled)
+    const hue = 140 - sf * 140;
+    bar.style.background = `hsl(${hue}, 70%, 50%)`;
+    val.textContent = sf.toFixed(2);
+
+    // Expression scramble
+    document.getElementById('expr-scramble').textContent = sf.toFixed(2);
+    document.getElementById('expr-scramble-bar').style.width = (sf * 100) + '%';
   }
+
+  // Voice mode
+  if (state.voiceMode) {
+    const badge = document.getElementById('mode-voice');
+    if (state.voiceMode === 'polyphonic') {
+      badge.textContent = 'POLYPHONIC';
+      badge.className = 'mode-badge voice-poly';
+    } else {
+      badge.textContent = 'SEQUENTIAL';
+      badge.className = 'mode-badge voice-seq';
+    }
+  }
+
+  // Performance mode
+  if (state.performanceMode) {
+    const pm = state.performanceMode;
+    document.getElementById('mode-palette').textContent = pm.palette;
+    const frozenBadge = document.getElementById('mode-frozen');
+    frozenBadge.style.display = pm.frozen ? 'inline' : 'none';
+  }
+
+  // Spell buffer visualization
+  if (state.spellBuffer) {
+    const bufEl = document.getElementById('spell-buffer');
+    // Find which moves in the buffer are part of a partial match
+    const matchedIndices = new Set();
+    if (state.spellPartials && state.spellPartials.length > 0) {
+      // Highlight the trailing N moves that match the best partial
+      const best = state.spellPartials.reduce((a, b) =>
+        (b.matched / b.total) > (a.matched / a.total) ? b : a
+      );
+      const start = state.spellBuffer.length - best.matched;
+      for (let i = start; i < state.spellBuffer.length; i++) {
+        matchedIndices.add(i);
+      }
+    }
+
+    bufEl.innerHTML = '';
+    for (let i = 0; i < state.spellBuffer.length; i++) {
+      const el = document.createElement('span');
+      el.className = 'spell-buffer-move' + (matchedIndices.has(i) ? ' matched' : '');
+      el.textContent = state.spellBuffer[i];
+      bufEl.appendChild(el);
+    }
+  }
+
+  // Partial matches display
+  if (state.spellPartials) {
+    const partialsEl = document.getElementById('spell-partials');
+    if (state.spellPartials.length > 0) {
+      const best = state.spellPartials
+        .sort((a, b) => (b.matched / b.total) - (a.matched / a.total))
+        .slice(0, 2);
+      partialsEl.innerHTML = best.map(p => {
+        const pct = Math.round((p.matched / p.total) * 100);
+        const barW = Math.round((p.matched / p.total) * 40);
+        return `<span class="partial-name">${p.name}</span> ${p.matched}/${p.total} <span class="partial-bar" style="width:${barW}px"></span>`;
+      }).join('<br>');
+    } else {
+      partialsEl.innerHTML = '';
+    }
+  }
+
+  // Expression: deviation is already in gyroDeviation
+  if (typeof state.gyroDeviation === 'number') {
+    document.getElementById('expr-dev').textContent = state.gyroDeviation.toFixed(2);
+    document.getElementById('expr-dev-bar').style.width = (state.gyroDeviation * 100) + '%';
+  }
+}
+
+function handleSpellEvent(data) {
+  // Toast notification
+  const history = document.getElementById('spell-history');
+  const toast = document.createElement('div');
+  toast.className = 'spell-toast';
+  toast.textContent = data.name.toUpperCase();
+  history.appendChild(toast);
+  setTimeout(() => toast.remove(), 2100);
+
+  // In-panel notification
+  const notifEl = document.getElementById('spell-notification');
+  notifEl.textContent = data.name.toUpperCase();
+  notifEl.className = 'spell-notification active';
+  if (spellNotificationTimeout) clearTimeout(spellNotificationTimeout);
+  spellNotificationTimeout = setTimeout(() => {
+    notifEl.className = 'spell-notification';
+  }, 1500);
+}
+
+// Tilt and spin are derived from gyro quaternion client-side
+// (faster than waiting for relay to compute + broadcast at 60Hz)
+let prevGyroQuat = [0, 0, 0, 1];
+let prevGyroTime = 0;
+
+function computeLocalExpression(gyro) {
+  if (!gyro) return;
+  const [x, y, z, w] = gyro;
+  const now = performance.now();
+
+  // Tilt (pitch angle from quaternion)
+  const sinP = 2 * (w * x - y * z);
+  const pitch = Math.asin(Math.max(-1, Math.min(1, sinP)));
+  const tilt = (pitch + Math.PI / 2) / Math.PI;
+
+  document.getElementById('expr-tilt').textContent = tilt.toFixed(2);
+  document.getElementById('expr-tilt-bar').style.width = (tilt * 100) + '%';
+
+  // Spin (angular velocity)
+  const dt = (now - prevGyroTime) / 1000;
+  if (dt > 0 && dt < 1 && prevGyroTime > 0) {
+    const dot = Math.abs(prevGyroQuat[0]*x + prevGyroQuat[1]*y + prevGyroQuat[2]*z + prevGyroQuat[3]*w);
+    const angle = 2 * Math.acos(Math.min(1, dot));
+    const angularVel = angle / dt;
+    const spin = Math.min(1, angularVel / 6);
+    document.getElementById('expr-spin').textContent = spin.toFixed(2);
+    document.getElementById('expr-spin-bar').style.width = (spin * 100) + '%';
+  }
+
+  prevGyroQuat = [x, y, z, w];
+  prevGyroTime = now;
 }
 
 // ============================================================
@@ -1117,12 +1528,16 @@ function wsConnect() {
       const msg = JSON.parse(evt.data);
       if (msg.type === 'state') {
         updateState(msg.data, msg.move);
+        updateV2State(msg.data);
+        computeLocalExpression(msg.data.gyro);
       } else if (msg.type === 'gyro_state') {
         pendingGyroState = msg.data;
         if (!gyroThrottleFrame) {
           gyroThrottleFrame = requestAnimationFrame(() => {
             if (pendingGyroState) {
               updateState(pendingGyroState, null);
+              updateV2State(pendingGyroState);
+              computeLocalExpression(pendingGyroState.gyro);
               pendingGyroState = null;
             }
             gyroThrottleFrame = null;
@@ -1130,6 +1545,10 @@ function wsConnect() {
         }
       } else if (msg.type === 'diagrams') {
         populateDiagramSelect(msg.data);
+      } else if (msg.type === 'spell') {
+        handleSpellEvent(msg.data);
+      } else if (msg.type === 'spell_book') {
+        spellBook = msg.data;
       }
     } catch (e) {
       console.error('Parse error:', e);
@@ -1178,6 +1597,14 @@ cmodeSelect.addEventListener('change', () => {
 
 resetBtn.addEventListener('click', () => {
   wsSend({ type: 'reset' });
+});
+
+const gyroSmoothSlider = document.getElementById('gyroSmoothing');
+const gyroSmoothVal = document.getElementById('gyroSmoothVal');
+gyroSmoothSlider.addEventListener('input', () => {
+  const val = parseFloat(gyroSmoothSlider.value);
+  gyroSmoothVal.textContent = val.toFixed(2);
+  wsSend({ type: 'set_gyro_smoothing', value: val });
 });
 
 // ============================================================

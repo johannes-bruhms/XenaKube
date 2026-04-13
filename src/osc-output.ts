@@ -70,5 +70,13 @@ export function stateToOsc(state: XenaKubeState): OscMessage[] {
     args: [state.activeVertex, ac, av.density, av.intensity, av.duration],
   });
 
+  // Gyro snap (target S4 element + its quaternion + deviation 0..1)
+  msgs.push({ address: '/xk/snap/element', args: [state.snapElement] });
+  msgs.push({
+    address: '/xk/snap/quat',
+    args: [state.snapQuat[0], state.snapQuat[1], state.snapQuat[2], state.snapQuat[3]],
+  });
+  msgs.push({ address: '/xk/snap/dev', args: [state.gyroDeviation] });
+
   return msgs;
 }
