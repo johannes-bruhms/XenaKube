@@ -556,6 +556,28 @@
     border: 1px solid var(--gold);
     color: var(--gold);
   }
+  .mode-badge.regime-contemplative {
+    background: rgba(0, 255, 136, 0.10);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .mode-badge.regime-conversational {
+    background: rgba(255, 204, 0, 0.10);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+  }
+  .mode-badge.regime-burst {
+    background: rgba(255, 102, 68, 0.15);
+    border: 1px solid var(--warm);
+    color: var(--warm);
+  }
+  .turn-rate-val {
+    font-size: 11px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    min-width: 56px;
+    text-align: right;
+  }
   .scramble-wrap {
     display: flex;
     align-items: center;
@@ -695,9 +717,9 @@
     <button id="connectBtn">Connect Cube</button>
     <button id="zeroBtn">Zero Gyro</button>
     <label style="font-size:10px;color:var(--dim);margin-left:8px">smooth</label>
-    <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.10"
+    <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.20"
       style="width:80px;vertical-align:middle;accent-color:var(--accent2)">
-    <span id="gyroSmoothVal" style="font-size:10px;color:var(--accent2);min-width:28px">0.10</span>
+    <span id="gyroSmoothVal" style="font-size:10px;color:var(--accent2);min-width:28px">0.20</span>
     <span id="cube-status"></span>
   </div>
   <div class="header-status">
@@ -719,6 +741,11 @@
       <button class="cr-btn" data-target="ghost">ghost</button>
       <button class="cr-reset" title="reset selected view">&#x21ba;</button>
     </div>
+    <div id="snap-overlay" style="position:absolute;bottom:8px;left:8px;right:8px;display:flex;justify-content:space-between;align-items:flex-end;pointer-events:none;z-index:2;font-size:11px;font-family:monospace">
+      <span id="snap-label" style="color:var(--accent2);opacity:0.8">snap: --</span>
+      <span id="snap-dev-label" style="color:var(--dim)">dev: --</span>
+    </div>
+    <div id="snap-bar" style="position:absolute;bottom:0;left:0;height:3px;background:var(--accent2);opacity:0.6;z-index:2;transition:width 0.1s;width:0%"></div>
     <canvas id="cube-canvas"></canvas>
   </div>
 
@@ -730,6 +757,8 @@
       <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
       <span class="mode-badge palette" id="mode-palette">default</span>
       <span class="mode-badge frozen" id="mode-frozen" style="display:none">FROZEN</span>
+      <span class="mode-badge regime-contemplative" id="mode-regime">CONTEMPLATIVE</span>
+      <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
     </div>
 
     <div class="state-row">
@@ -968,17 +997,17 @@ activeRing.visible = false;
 
 function makeLabel(text, color) {
   const c = document.createElement('canvas');
-  c.width = 64; c.height = 32;
+  c.width = 128; c.height = 80;
   const ctx = c.getContext('2d');
   ctx.font = 'bold 20px monospace';
   ctx.fillStyle = color;
   ctx.textAlign = 'center';
-  ctx.textBaseline = 'middle';
-  ctx.fillText(text, 32, 16);
+  ctx.textBaseline = 'top';
+  ctx.fillText(text, 64, 2);
   const tex = new THREE.CanvasTexture(c);
   const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
   const sprite = new THREE.Sprite(mat);
-  sprite.scale.set(0.6, 0.3, 1);
+  sprite.scale.set(1.0, 0.625, 1);
   return { sprite, canvas: c, ctx, tex };
 }
 
@@ -992,7 +1021,7 @@ for (let i = 0; i < 8; i++) {
   vertexMeshes.push(mesh);
 
   const label = makeLabel(`K${i + 1}`, isTetraA ? '#00ff88' : '#ff6644');
-  label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.35);
+  label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.55);
   scene.add(label.sprite);
   vertexLabels.push(label);
 }
@@ -1018,13 +1047,22 @@ ghostGroup.add(ghostEdges);
 
 const ghostVertGeo = new THREE.SphereGeometry(0.05, 6, 6);
 const ghostVertMat = new THREE.MeshBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.55 });
+const ghostVertMeshes = [];
+const ghostLabels = [];
 for (let i = 0; i < 8; i++) {
-  const m = new THREE.Mesh(ghostVertGeo, ghostVertMat);
+  const m = new THREE.Mesh(ghostVertGeo.clone(), ghostVertMat.clone());
   m.position.copy(CUBE_VERTS[i]);
   ghostGroup.add(m);
+  ghostVertMeshes.push(m);
+
+  const label = makeLabel(`C?`, '#00ccff');
+  label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.45);
+  label.sprite.scale.set(0.7, 0.44, 1);
+  ghostGroup.add(label.sprite);
+  ghostLabels.push(label);
 }
 
-// OrbitControls for mouse-drag camera rotation
+// OrbitControls for camera mode
 const controls = new OrbitControls(camera, canvas);
 controls.enableDamping = true;
 controls.dampingFactor = 0.1;
@@ -1033,17 +1071,178 @@ controls.minDistance = 3;
 controls.maxDistance = 12;
 
 // Per-cube view offsets (premultiplied onto the live/ghost rotation).
-// Let the performer reorient one cube visually without moving the other.
 const liveViewOffset = new THREE.Quaternion(0, 0, 0, 1);
 const ghostViewOffset = new THREE.Quaternion(0, 0, 0, 1);
 let rotateTarget = 'camera'; // 'camera' | 'live' | 'ghost'
 
+// ---- Rotation Gizmo (separate mini-canvas, bottom-right corner) ----
+const gizmoCanvas = document.createElement('canvas');
+gizmoCanvas.width = 120; gizmoCanvas.height = 120;
+gizmoCanvas.style.cssText = 'position:absolute;bottom:8px;right:8px;width:100px;height:100px;z-index:3;touch-action:none;border-radius:50%;cursor:grab;';
+canvas.parentElement.appendChild(gizmoCanvas);
+
+const gizmoRenderer = new THREE.WebGLRenderer({ canvas: gizmoCanvas, antialias: true, alpha: true });
+gizmoRenderer.setPixelRatio(window.devicePixelRatio);
+const gizmoScene = new THREE.Scene();
+const gizmoCamera = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
+gizmoCamera.position.set(3, 2.5, 3);
+gizmoCamera.lookAt(0, 0, 0);
+
+const GIZMO_COLORS = { x: 0xff4444, y: 0x44ff44, z: 0x4488ff };
+const GIZMO_HIGHLIGHT = { x: 0xff8888, y: 0x88ff88, z: 0x88bbff };
+const gizmoAxes = {
+  x: new THREE.Vector3(1, 0, 0),
+  y: new THREE.Vector3(0, 1, 0),
+  z: new THREE.Vector3(0, 0, 1),
+};
+const gizmoRotations = {
+  x: new THREE.Euler(0, Math.PI / 2, 0),
+  y: new THREE.Euler(Math.PI / 2, 0, 0),
+  z: new THREE.Euler(0, 0, 0),
+};
+
+const gizmoRings = {};
+const gizmoHitRings = {};
+
+for (const axis of ['x', 'y', 'z']) {
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(1.2, 0.04, 12, 64),
+    new THREE.MeshBasicMaterial({ color: GIZMO_COLORS[axis], transparent: true, opacity: 0.85, depthTest: false })
+  );
+  ring.rotation.copy(gizmoRotations[axis]);
+  ring.renderOrder = 999;
+  ring.userData.axis = axis;
+  gizmoScene.add(ring);
+  gizmoRings[axis] = ring;
+
+  const hitRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.2, 0.18, 8, 48),
+    new THREE.MeshBasicMaterial({ visible: false })
+  );
+  hitRing.rotation.copy(gizmoRotations[axis]);
+  hitRing.userData.axis = axis;
+  gizmoScene.add(hitRing);
+  gizmoHitRings[axis] = hitRing;
+}
+
+// Axis nubs (small spheres at axis tips with labels)
+for (const [axis, color] of Object.entries(GIZMO_COLORS)) {
+  const pos = gizmoAxes[axis].clone().multiplyScalar(1.45);
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 8, 8),
+    new THREE.MeshBasicMaterial({ color, depthTest: false })
+  );
+  dot.position.copy(pos);
+  dot.renderOrder = 1000;
+  gizmoScene.add(dot);
+
+  // Axis letter sprite
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 32;
+  const ctx = c.getContext('2d');
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(axis.toUpperCase(), 16, 16);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  sprite.position.copy(pos).addScaledVector(gizmoAxes[axis], 0.25);
+  sprite.scale.set(0.35, 0.35, 1);
+  sprite.renderOrder = 1001;
+  gizmoScene.add(sprite);
+}
+
+const gizmoRaycaster = new THREE.Raycaster();
+const gizmoPointer = new THREE.Vector2();
+let gizmoDragging = false;
+let gizmoActiveAxis = null;
+let gizmoDragAngleStart = 0;
+
+function getGizmoAngle(clientX, clientY) {
+  const rect = gizmoCanvas.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  return Math.atan2(clientY - cy, clientX - cx);
+}
+
+function hitTestGizmo(clientX, clientY) {
+  const rect = gizmoCanvas.getBoundingClientRect();
+  gizmoPointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  gizmoPointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  gizmoRaycaster.setFromCamera(gizmoPointer, gizmoCamera);
+  const hits = gizmoRaycaster.intersectObjects(Object.values(gizmoHitRings));
+  return hits.length > 0 ? hits[0].object.userData.axis : null;
+}
+
+gizmoCanvas.addEventListener('pointerdown', (e) => {
+  if (rotateTarget === 'camera') return;
+  const axis = hitTestGizmo(e.clientX, e.clientY);
+  if (!axis) return;
+  e.stopPropagation();
+  gizmoDragging = true;
+  gizmoActiveAxis = axis;
+  gizmoDragAngleStart = getGizmoAngle(e.clientX, e.clientY);
+  gizmoCanvas.setPointerCapture(e.pointerId);
+  for (const a of ['x', 'y', 'z']) {
+    gizmoRings[a].material.color.setHex(a === axis ? GIZMO_HIGHLIGHT[a] : GIZMO_COLORS[a]);
+    gizmoRings[a].material.opacity = a === axis ? 1.0 : 0.2;
+  }
+});
+
+window.addEventListener('pointermove', (e) => {
+  if (!gizmoDragging) {
+    if (rotateTarget !== 'camera') {
+      const rect = gizmoCanvas.getBoundingClientRect();
+      const inside = e.clientX >= rect.left && e.clientX <= rect.right &&
+                     e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (inside) {
+        const axis = hitTestGizmo(e.clientX, e.clientY);
+        gizmoCanvas.style.cursor = axis ? 'grab' : 'default';
+        for (const a of ['x', 'y', 'z']) {
+          gizmoRings[a].material.opacity = (a === axis) ? 1.0 : 0.85;
+        }
+      }
+    }
+    return;
+  }
+  const angle = getGizmoAngle(e.clientX, e.clientY);
+  let delta = angle - gizmoDragAngleStart;
+  // Wrap delta to avoid jumps crossing ±PI
+  if (delta > Math.PI) delta -= 2 * Math.PI;
+  if (delta < -Math.PI) delta += 2 * Math.PI;
+
+  // Flip if gizmo camera looks at the negative side of the axis
+  const camDir = gizmoCamera.position.clone().normalize();
+  if (camDir.dot(gizmoAxes[gizmoActiveAxis]) < 0) delta = -delta;
+
+  gizmoDragAngleStart = angle;
+  const offset = (rotateTarget === 'live') ? liveViewOffset : ghostViewOffset;
+  offset.premultiply(new THREE.Quaternion().setFromAxisAngle(gizmoAxes[gizmoActiveAxis], -delta));
+});
+
+const endGizmoDrag = (e) => {
+  if (!gizmoDragging) return;
+  gizmoDragging = false;
+  gizmoActiveAxis = null;
+  gizmoCanvas.style.cursor = 'grab';
+  if (gizmoCanvas.hasPointerCapture(e.pointerId)) gizmoCanvas.releasePointerCapture(e.pointerId);
+  for (const a of ['x', 'y', 'z']) {
+    gizmoRings[a].material.color.setHex(GIZMO_COLORS[a]);
+    gizmoRings[a].material.opacity = 0.85;
+  }
+};
+window.addEventListener('pointerup', endGizmoDrag);
+window.addEventListener('pointercancel', endGizmoDrag);
+
+// ---- Mode toggle ----
 const rotateCtrl = document.getElementById('rotate-ctrl');
 rotateCtrl.querySelectorAll('.cr-btn').forEach(btn => {
   btn.addEventListener('click', () => {
     rotateTarget = btn.dataset.target;
     rotateCtrl.querySelectorAll('.cr-btn').forEach(b => b.classList.toggle('active', b === btn));
     controls.enabled = (rotateTarget === 'camera');
+    gizmoCanvas.style.opacity = (rotateTarget === 'camera') ? '0.3' : '1';
+    gizmoCanvas.style.pointerEvents = (rotateTarget === 'camera') ? 'none' : 'auto';
   });
 });
 rotateCtrl.querySelector('.cr-reset').addEventListener('click', () => {
@@ -1051,37 +1250,9 @@ rotateCtrl.querySelector('.cr-reset').addEventListener('click', () => {
   else if (rotateTarget === 'ghost') ghostViewOffset.identity();
   else controls.reset();
 });
-
-// Custom pointer-drag rotation for live/ghost targets.
-// Yaw around world Y, pitch around world X — premultiplied so drag feels world-relative.
-let dragging = false;
-let dragLastX = 0, dragLastY = 0;
-canvas.addEventListener('pointerdown', (e) => {
-  if (rotateTarget === 'camera') return;
-  dragging = true;
-  dragLastX = e.clientX;
-  dragLastY = e.clientY;
-  canvas.setPointerCapture(e.pointerId);
-});
-canvas.addEventListener('pointermove', (e) => {
-  if (!dragging) return;
-  const dx = e.clientX - dragLastX;
-  const dy = e.clientY - dragLastY;
-  dragLastX = e.clientX;
-  dragLastY = e.clientY;
-  const offset = (rotateTarget === 'live') ? liveViewOffset : ghostViewOffset;
-  const speed = 0.01;
-  const yaw = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), dx * speed);
-  const pitch = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), dy * speed);
-  offset.premultiply(yaw).premultiply(pitch);
-});
-const endDrag = (e) => {
-  if (!dragging) return;
-  dragging = false;
-  if (canvas.hasPointerCapture(e.pointerId)) canvas.releasePointerCapture(e.pointerId);
-};
-canvas.addEventListener('pointerup', endDrag);
-canvas.addEventListener('pointercancel', endDrag);
+// Initial state: camera mode, gizmo dimmed
+gizmoCanvas.style.opacity = '0.3';
+gizmoCanvas.style.pointerEvents = 'none';
 
 let idleAngle = 0;
 let currentGyro = new THREE.Quaternion(0, 0, 0, 1);
@@ -1139,6 +1310,7 @@ function animateCube() {
   }
 
   renderer.render(scene, camera);
+  gizmoRenderer.render(gizmoScene, gizmoCamera);
 }
 animateCube();
 
@@ -1154,19 +1326,91 @@ function updateActiveVertexIn3D(idx) {
   activeRing.lookAt(camera.position);
 }
 
-function updateVertexLabels(perm) {
+const COMPLEX_ABBR = {
+  1: 'pizz', 2: 'bow', 3: 'sust', 4: 'harm',
+  5: 'glsW', 6: 'glsM', 7: 'glsS', 8: 'pont'
+};
+
+function updateVertexLabels(perm, vertices, complexTypes, activeIdx) {
   for (let i = 0; i < 8; i++) {
     const kIndex = perm ? perm[i] : i;
     const isTetraA = TETRA_A.includes(i);
-    const color = isTetraA ? '#00ff88' : '#ff6644';
+    const isActive = i === activeIdx;
+    const color = isActive ? '#ffffff' : (isTetraA ? '#00ff88' : '#ff6644');
+    const dimColor = isActive ? '#cccccc' : (isTetraA ? '#00cc66' : '#cc5533');
     const label = vertexLabels[i];
-    label.ctx.clearRect(0, 0, 64, 32);
-    label.ctx.font = 'bold 20px monospace';
-    label.ctx.fillStyle = color;
-    label.ctx.textAlign = 'center';
-    label.ctx.textBaseline = 'middle';
-    label.ctx.fillText(`K${kIndex + 1}`, 32, 16);
+    const ctx = label.ctx;
+    const W = 128, H = 80;
+    ctx.clearRect(0, 0, W, H);
+
+    // Background pill for active vertex
+    if (isActive) {
+      ctx.fillStyle = 'rgba(0,255,136,0.18)';
+      ctx.beginPath();
+      ctx.roundRect(4, 0, W - 8, H, 8);
+      ctx.fill();
+    }
+
+    // Line 1: K# + complex type
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    const ct = complexTypes ? complexTypes[i] : null;
+    const ctStr = ct ? ` ${COMPLEX_ABBR[ct] || 'C' + ct}` : '';
+    ctx.fillText(`K${kIndex + 1}${ctStr}`, W / 2, 2);
+
+    // Line 2: intensity + density
+    if (vertices) {
+      const v = vertices[i];
+      ctx.font = '14px monospace';
+      ctx.fillStyle = dimColor;
+      ctx.fillText(`${v.intensity} d${v.density.toFixed(1)}`, W / 2, 24);
+
+      // Line 3: duration
+      ctx.fillText(`${v.duration}s`, W / 2, 42);
+    }
+
     label.tex.needsUpdate = true;
+  }
+}
+
+function updateGhostLabels(complexTypes) {
+  for (let i = 0; i < 8; i++) {
+    const label = ghostLabels[i];
+    const ctx = label.ctx;
+    const W = 128, H = 80;
+    ctx.clearRect(0, 0, W, H);
+    const ct = complexTypes ? complexTypes[i] : null;
+    ctx.font = 'bold 16px monospace';
+    ctx.fillStyle = '#00ccff';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(ct ? `C${ct}` : '?', W / 2, 2);
+    if (ct) {
+      ctx.font = '12px monospace';
+      ctx.fillStyle = '#0099bb';
+      ctx.fillText(COMPLEX_ABBR[ct] || '', W / 2, 22);
+    }
+    label.tex.needsUpdate = true;
+  }
+}
+
+function updateSnapOverlay(snapElement, deviation) {
+  const snapLabel = document.getElementById('snap-label');
+  const devLabel = document.getElementById('snap-dev-label');
+  const snapBar = document.getElementById('snap-bar');
+  if (snapElement != null) {
+    snapLabel.textContent = `snap: S4 #${snapElement}`;
+    const devPct = (deviation * 100).toFixed(0);
+    devLabel.textContent = `dev: ${devPct}%`;
+    const lockPct = ((1 - deviation) * 100).toFixed(0);
+    snapBar.style.width = lockPct + '%';
+    // Ghost opacity: more opaque when locked, faint when drifting
+    const ghostOpacity = 0.15 + 0.55 * (1 - deviation);
+    ghostEdgeMat.opacity = ghostOpacity;
+    ghostVertMeshes.forEach(m => { m.material.opacity = ghostOpacity + 0.1; });
+    ghostLabels.forEach(l => { l.sprite.material.opacity = ghostOpacity + 0.2; });
   }
 }
 
@@ -1265,7 +1509,6 @@ function updateState(state, move) {
       permSlots[i].textContent = state.kPermutation[i] + 1;
       permSlots[i].className = 'perm-slot' + (i === activeIdx ? ' active' : '');
     }
-    updateVertexLabels(state.kPermutation);
   }
 
   tetraALines.material.opacity = state.tetraIndex === 0 ? 0.6 : 0.15;
@@ -1301,6 +1544,13 @@ function updateState(state, move) {
     }
   }
 
+  // Update 3D cube labels with full vertex params
+  updateVertexLabels(
+    state.kPermutation,
+    state.kVertices || null,
+    state.cAssignments || null,
+    activeIdx
+  );
   updateActiveVertexIn3D(activeIdx);
 
   const activeSet = new Set(state.sieve);
@@ -1322,6 +1572,8 @@ function updateState(state, move) {
     const [sx, sy, sz, sw] = state.snapQuat;
     currentSnap.set(-sx, sz, sy, sw);
     hasSnap = true;
+    updateGhostLabels(state.cAssignments);
+    updateSnapOverlay(state.snapElement, state.gyroDeviation ?? 0);
   }
 
   if (move) {
@@ -1386,6 +1638,16 @@ function updateV2State(state) {
     document.getElementById('mode-palette').textContent = pm.palette;
     const frozenBadge = document.getElementById('mode-frozen');
     frozenBadge.style.display = pm.frozen ? 'inline' : 'none';
+  }
+
+  // Regime + turn rate
+  if (state.regime) {
+    const badge = document.getElementById('mode-regime');
+    badge.textContent = state.regime.toUpperCase();
+    badge.className = 'mode-badge regime-' + state.regime;
+  }
+  if (typeof state.turnRate === 'number') {
+    document.getElementById('turn-rate-val').textContent = state.turnRate.toFixed(1) + ' t/s';
   }
 
   // Spell buffer visualization

@@ -92,7 +92,7 @@ const kf = {
   initialized: false,
 };
 
-let gyroSmoothing = 0.10;  // 0 = responsive (near-zero lag), 1 = heavy smoothing
+let gyroSmoothing = 0.20;  // 0 = responsive (near-zero lag), 1 = heavy smoothing
 let gyroOutputCount = 0;
 let lastOutputTime = Date.now();
 const GYRO_OUTPUT_HZ = 60;
@@ -160,20 +160,39 @@ function kfUpdate(q_meas) {
   kf.prevMeas = { q: q_meas, t: now };
 }
 
-// 60Hz output: predict + send gyro-only OSC (full engine state emits at BLE rate)
-const gyroLoop = setInterval(() => {
-  if (!kf.initialized) return;
+// 60Hz output: high-resolution timer loop (setInterval drifts to ~40Hz on Windows)
+const GYRO_INTERVAL_NS = BigInt(Math.round(1e9 / GYRO_OUTPUT_HZ));
+let gyroNextTick = process.hrtime.bigint();
+let gyroLoopRunning = true;
 
-  const now = Date.now();
-  const dt = Math.min((now - lastOutputTime) / 1000, 0.05); // clamp to avoid time jumps
-  lastOutputTime = now;
+function gyroLoop() {
+  if (!gyroLoopRunning) return;
 
-  kfPredict(dt);
+  const now = process.hrtime.bigint();
+  if (now >= gyroNextTick) {
+    gyroNextTick += GYRO_INTERVAL_NS;
+    // If we fell behind, don't try to catch up — just reset
+    if (now - gyroNextTick > GYRO_INTERVAL_NS * 3n) {
+      gyroNextTick = now + GYRO_INTERVAL_NS;
+    }
 
-  oscSC.send('/xk/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
-  oscTD.send('/gan/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
-  gyroOutputCount++;
-}, 1000 / GYRO_OUTPUT_HZ);
+    if (kf.initialized) {
+      const nowMs = Date.now();
+      const dt = Math.min((nowMs - lastOutputTime) / 1000, 0.05);
+      lastOutputTime = nowMs;
+
+      kfPredict(dt);
+
+      oscSC.send('/xk/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
+      oscTD.send('/gan/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
+      gyroOutputCount++;
+    }
+  }
+
+  // Sleep ~1ms then check again (setTimeout(0) is ~1ms on Node)
+  setTimeout(gyroLoop, 1);
+}
+gyroLoop();
 
 // Forward engine state over OSC on every state change + broadcast to dashboard
 engine.onState((state) => {
@@ -285,6 +304,7 @@ function scheduleShutdown() {
     shutdownTimer = setTimeout(() => {
       if (wss.clients.size === 0) {
         console.log("No clients reconnected. Shutting down.");
+        gyroLoopRunning = false;
         oscSC.close();
         oscTD.close();
         wss.close();
