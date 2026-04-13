@@ -6,7 +6,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { XenaKubeEngine, stateToOsc, getBuiltinDiagrams } = require('./src/index.ts');
+const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, getBuiltinDiagrams } = require('./src/index.ts');
 
 /*
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
@@ -36,6 +36,7 @@ const engine = new XenaKubeEngine();
 // === OSC Clients ===
 const oscSC  = new Client('127.0.0.1', 57120);  // SuperCollider — receives /xk/* engine state
 const oscTD  = new Client('127.0.0.1', 8000);   // TouchDesigner — receives raw /gan/* + /xk/gyro
+const oscMax = new Client('127.0.0.1', 57121);  // Max/MSP — receives /xk/* for SWAM Cello bridge
 
 // Track last move for dashboard broadcast
 let lastMove = null;
@@ -185,6 +186,16 @@ function gyroLoop() {
 
       oscSC.send('/xk/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
       oscTD.send('/gan/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
+      oscMax.send('/xk/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
+
+      // Expression at 60Hz from Kalman-filtered quat
+      const expr = engine.getExpressionFor([kf.q.x, kf.q.y, kf.q.z, kf.q.w], nowMs);
+      const exprMsgs = expressionToOsc(expr);
+      for (const msg of exprMsgs) {
+        oscSC.send(msg.address, ...msg.args);
+        oscMax.send(msg.address, ...msg.args);
+      }
+
       gyroOutputCount++;
     }
   }
@@ -199,6 +210,7 @@ engine.onState((state) => {
   const msgs = stateToOsc(state);
   for (const msg of msgs) {
     oscSC.send(msg.address, ...msg.args);
+    oscMax.send(msg.address, ...msg.args);
   }
 
   // Augment state with v2 data (scrambleFactor is now in XenaKubeState)
@@ -220,6 +232,11 @@ engine.onState((state) => {
 
 // Broadcast spell events
 engine.onSpell((match) => {
+  // OSC spell message to SC + Max
+  const spellMsg = spellToOsc(match);
+  oscSC.send(spellMsg.address, ...spellMsg.args);
+  oscMax.send(spellMsg.address, ...spellMsg.args);
+
   const payload = JSON.stringify({
     type: 'spell',
     data: {
@@ -287,7 +304,7 @@ server.listen(3000, () => {
 });
 
 // 2. OSC status
-console.log("2. OSC → SuperCollider on port 57120, TouchDesigner on port 8000");
+console.log("2. OSC → SuperCollider:57120, TouchDesigner:8000, Max/MSP:57121");
 
 // 3. WebSocket Server
 const wss = new WebSocket.Server({ server });
@@ -306,6 +323,7 @@ function scheduleShutdown() {
         gyroLoopRunning = false;
         oscSC.close();
         oscTD.close();
+        oscMax.close();
         wss.close();
         server.close();
         process.exit(0);

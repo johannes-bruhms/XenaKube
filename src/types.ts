@@ -102,4 +102,11 @@ export interface XenaKubeState {
   turnRate: number;
   /** Current performance speed regime */
   regime: 'contemplative' | 'conversational' | 'burst';
+  /** Gyro-derived continuous expression parameters (all 0–1) */
+  expression: {
+    tilt: number;
+    spin: number;
+    deviation: number;
+    scramble: number;
+  };
 }

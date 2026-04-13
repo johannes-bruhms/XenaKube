@@ -21,7 +21,7 @@ Implementation roadmap: `docs/todo.md`.
 
 ## Architecture
 
-All composition math in TypeScript (`src/`). SuperCollider = sound only. TouchDesigner/browser = visuals only.
+All composition math in TypeScript (`src/`). SuperCollider = sound only (built-in SynthDefs). Max/MSP + SWAM Cello 3 = alternate synthesis via MIDI (physical-modeling cello VST). TouchDesigner/browser = visuals only.
 
 ```
 GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
@@ -33,11 +33,11 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
                               (algo detection) (seq/poly)  (gyro→control)
                                     │     │              │
                                     ▼     ▼              ▼
-                              ModeManager  OSC:57120    OSC:8000  WS (broadcast)
-                              (state machine) SuperCollider  TD   Browser Dashboard
+                              ModeManager  OSC:57120    OSC:57121   OSC:8000  WS
+                              (state machine) SuperCollider  Max/SWAM  TD    Dashboard
 ```
 
-**relay.js** — BLE-to-OSC bridge. Serves dashboard on `:3000` (from `public/dashboard.html`). Receives cube events via WS, upsamples gyro from BLE rate (~10Hz) to 60Hz via quaternion Kalman filter (velocity-aware prediction + measurement correction; smoothing slider 0-1 maps to Kalman gains, default 0.2). 60Hz loop uses `process.hrtime.bigint()` spin timer (not `setInterval`, which drifts to ~40Hz on Windows). Instantiates engine (`onTurn()`/`onGyro()`), sends `/xk/*` OSC to SuperCollider (port 57120), forwards raw `/gan/*` to TD (port 8000). 60Hz loop sends gyro-only OSC (`/xk/gyro`, `/gan/gyro`); full state burst (26 messages) only fires at BLE rate on gyro updates and on turns. Broadcasts augmented engine state (includes scrambleFactor, voiceMode, performanceMode, spellBuffer, spellPartials) as JSON over WS. Sends `spell` events on algorithm detection, `spell_book` on client connect. Handles control messages: `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`. Auto-shutdown 5s after last client disconnects. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
+**relay.js** — BLE-to-OSC bridge. Serves dashboard on `:3000` (from `public/dashboard.html`). Receives cube events via WS, upsamples gyro from BLE rate (~10Hz) to 60Hz via quaternion Kalman filter (velocity-aware prediction + measurement correction; smoothing slider 0-1 maps to Kalman gains, default 0.2). 60Hz loop uses `process.hrtime.bigint()` spin timer (not `setInterval`, which drifts to ~40Hz on Windows). Instantiates engine (`onTurn()`/`onGyro()`), sends `/xk/*` OSC to SuperCollider (port 57120) and Max/MSP (port 57121), forwards raw `/gan/*` to TD (port 8000). 60Hz loop sends gyro OSC (`/xk/gyro`, `/gan/gyro`) + expression OSC (`/xk/expr/tilt`, `/xk/expr/spin`, `/xk/expr/dev`, `/xk/expr/scramble`) to SC and Max; full state burst (~30 messages) only fires at BLE rate on gyro updates and on turns. Sends `/xk/spell <name>` to SC and Max on algorithm detection. Broadcasts augmented engine state (includes scrambleFactor, voiceMode, performanceMode, spellBuffer, spellPartials) as JSON over WS. Sends `spell` events on algorithm detection, `spell_book` on client connect. Handles control messages: `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`. Auto-shutdown 5s after last client disconnects. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
 
 ### src/ — TypeScript Engine
 
@@ -50,13 +50,13 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 | `spells.ts` | Spell book (12 canonical algorithms × 24 rotations = 264 variants) + rolling buffer pattern matcher. Orientation-independent: detects spells on any face pair via whole-cube-rotation expansion |
 | `scramble.ts` | BFS distance from identity in S4 Cayley graph, normalized 0-1 |
 | `voice-engine.ts` | Sequential (1 voice) vs polyphonic (8 voices) output decision |
-| `expression.ts` | Gyro quaternion → continuous control values (tilt, spin, deviation, scramble) |
-| `mode-manager.ts` | Performance state machine: voice mode, palette, variant, freeze |
+| `expression.ts` | Gyro quaternion → continuous control values (tilt, spin, deviation, scramble). Engine exposes `getExpressionFor(quat)` for relay 60Hz loop |
+| `mode-manager.ts` | Performance state machine: voice mode, palette, variant, freeze. Spell effects wired: sexy-move→toggle seq/poly, sledgehammer→freeze, sune→V2, anti-sune→V1, oll-cross→drone, combo→burst, t-perm→reset |
 | `turn-rate.ts` | Turn-rate tracker: circular buffer → EWMA rate → regime classification (contemplative/conversational/burst) with hysteresis |
 | `kinematic.ts` | Graph paths through S4: pre-composed diagrams + free traversal |
 | `sieve.ts` | L(m,n) logical function, prime residual classes mod 18, metabola mutations |
 | `quaternion.ts` | Gyro → nearest S4 snap, deviation factor |
-| `osc-output.ts` | Engine state → OSC message batches |
+| `osc-output.ts` | Engine state → OSC message batches. `expressionToOsc()` for 60Hz expression, `spellToOsc()` for spell events |
 | `types.ts` | Shared type definitions |
 | `index.ts` | Public API: re-exports all modules |
 
@@ -206,9 +206,41 @@ Sequential single-voice model. One active vertex at a time — `/xk/voice` trigg
 - **Voice overlap**: min 0.5s voice duration; fast turns defer switch until attack completes
 - **Voice panning**: 8 fixed positions spread L→R across stereo field
 
+## Max/MSP — SWAM Cello Bridge
+
+Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) driven via MIDI from a Max/MSP bridge. Receives same `/xk/*` OSC as SC on port 57121. Runs alongside or instead of SC.
+
+### Patch (4 objects)
+
+```
+[udpreceive 57121] → [v8 xk_swam.js @autowatch 1] → [vst~ "SWAM Cello 3" 2] → [dac~ 1 2]
+                                                  |1→ [print xk_swam]
+```
+
+### max/ Directory
+
+| File | Role |
+|------|------|
+| `xk_swam.js` | v8 object: OSC → midievent. Complex type → keyswitches + CC presets, 60Hz expression → continuous CC, spell reactions, CC cache |
+
+### OSC → SWAM MIDI Mapping
+
+- **Complex type → technique**: C1=Pizz keyswitch, C2/C3=Arco (legato vs bow-change), C4=Harmonics ON, C5-C7=Portamento ON (varying glide speed), C8=near-bridge + Tremolo
+- **Intensity → Expression CC 11**: p=15, mp=28, mf=45, f=64, ff=83, fff=102
+- **Density → Attack Ramp CC 73**: high density = fast attack
+- **Sieve → MIDI note pool**: offsets + 36 (C2), selection strategy per complex type
+- **Tilt → Expression CC 11** (60Hz continuous, overrides per-turn intensity)
+- **Spin → Vibrato Depth CC 1 + Rate CC 76**
+- **Deviation → Bow Pressure CC 17**
+- **Scramble → Bow Position CC 16**: solved=fingerboard(warm), scrambled=bridge(edgy)
+- **Tetra orbit → Bowing Sensitivity CC 21**: even=64, odd=102
+- **Path V1/V2 → Transpose**: 0 / -12
+- **Regime → Tremolo CC 92**: contemplative=off, burst=on (speed from turn rate)
+- **Spells**: sexy-move=bow sweep, sledgehammer=sustain pedal toggle, oll-cross=harmonic ping, combo=staccato burst
+
 ## OSC Reference
 
-All `/xk/*` messages go to SC on port 57120. All `/gan/*` messages go to TD on port 8000. Full state burst sent on every cube turn and at BLE gyro rate (~10Hz). `/xk/gyro` and `/gan/gyro` sent at 60Hz from Kalman filter predict loop (upsampled from ~10Hz BLE). Full `XenaKubeState` JSON broadcast to all WS clients on every state change.
+All `/xk/*` messages go to SC (port 57120) and Max/MSP (port 57121). All `/gan/*` messages go to TD on port 8000. Full state burst (~30 messages) sent on every cube turn and at BLE gyro rate (~10Hz). `/xk/gyro`, `/gan/gyro`, and `/xk/expr/*` sent at 60Hz from Kalman filter predict loop. `/xk/spell` sent on algorithm detection. Full `XenaKubeState` JSON broadcast to all WS clients on every state change.
 
 | Address | Args | Meaning |
 |---------|------|---------|
@@ -231,18 +263,22 @@ All `/xk/*` messages go to SC on port 57120. All `/gan/*` messages go to TD on p
 | `/xk/scramble` | float (0-1) | scramble factor; 0=solved, 1=max scrambled |
 | `/xk/rate` | float | turn rate (turns/sec) |
 | `/xk/regime` | string | 'contemplative', 'conversational', or 'burst' |
+| `/xk/expr/tilt` | float (0-1) | gyro tilt; 0=face down, 1=face up. 60Hz |
+| `/xk/expr/spin` | float (0-1) | angular velocity; 0=still, 1=fast. 60Hz |
+| `/xk/expr/dev` | float (0-1) | S4 snap deviation; 0=locked, 1=boundary. 60Hz |
+| `/xk/expr/scramble` | float (0-1) | scramble factor (continuous). 60Hz |
+| `/xk/spell` | string | spell name on detection (e.g. "sexy-move") |
 | `/gan/turn` | string | move (e.g. "R", "U'", "F2") — port 8000 to TD |
 | `/gan/gyro` | float×4 | quaternion — port 8000 to TD |
 
 ## Not Yet Implemented
 
-- **Spell effects**: algorithms are detected but effect-to-action mapping is empty. Wire in `mode-manager.ts`.
-- **Polyphonic SC output**: voice-engine supports poly mode but `osc-output.ts` and SC only handle sequential.
-- **Expression OSC**: expression processor computes values but no `/xk/expr/*` messages are emitted yet.
+- **Polyphonic SC output**: voice-engine supports poly mode but SC only handles sequential. Max/SWAM bridge handles poly via note stacking.
+- **SC expression receivers**: `/xk/expr/*` messages are emitted at 60Hz but SC doesn't yet map them to synthesis params (only C5 brightness and C8 detuning via raw gyro).
+- **SC spell reactions**: `/xk/spell` is sent but SC has no OSCdef for it yet.
 - **Palette switching**: mode manager tracks palette name but no multi-palette SC code exists.
-- **Speed regime adaptation**: turn-rate tracker detects regime; contemplative mode polished (Phase 2 done), but conversational/burst behavior not yet implemented. See `docs/todo.md` Phases 3–4.
-- **Scramble arc (burst mode)**: scramble factor wired to SC reverb mix (Phase 2). Full burst-mode arc (scramble as master decrescendo parameter) not yet implemented (Phase 4).
-- **SWAM Cello Max patch**: mapping design documented in `docs/research_notes.md`. No Max patch built yet. Complex types → SWAM technique modes, gyro expression → bow parameters, scramble → timbral arc.
+- **Speed regime adaptation**: turn-rate tracker detects regime; contemplative mode polished (Phase 2 done), but conversational/burst SC behavior not yet implemented. See `docs/todo.md` Phases 3–4.
+- **Scramble arc (burst mode)**: scramble factor wired to SC reverb mix (Phase 2) and Max bow position. Full burst-mode arc (scramble as master decrescendo parameter) not yet implemented (Phase 4).
 - **TouchDesigner**: TD receives raw `/gan/*` on port 8000. No `.toe` project exists.
 
 ## Visuals Status

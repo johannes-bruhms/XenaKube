@@ -54,6 +54,7 @@ export class XenaKubeEngine {
   private gyro: Quaternion = [0, 0, 0, 1];
   private substitutionCount = 0;
   private activeVertex = 0;
+  private expressionState: import('./expression.js').ExpressionState = { tilt: 0.5, spin: 0, deviation: 0, scramble: 0 };
 
   // === New v2 modules ===
   readonly spellDetector = new SpellDetector();
@@ -186,6 +187,12 @@ export class XenaKubeEngine {
       }
     }
 
+    // Update expression from gyro
+    const { angle } = distanceToNearest(this.gyro);
+    const deviation = Math.min(1, angle / (Math.PI / 4));
+    const scramble = scrambleFactor(this.kGroup);
+    this.expressionState = this.expression.process(this.gyro, deviation, scramble);
+
     const state = this.getState();
     this.emitState(state);
     return state;
@@ -193,10 +200,15 @@ export class XenaKubeEngine {
 
   /** Get current expression state (gyro-derived continuous params) */
   getExpression(): ExpressionState {
-    const { angle } = distanceToNearest(this.gyro);
+    return this.expressionState;
+  }
+
+  /** Compute expression from an arbitrary quaternion (for relay's 60Hz Kalman-filtered quat) */
+  getExpressionFor(quat: Quaternion, now?: number): ExpressionState {
+    const { angle } = distanceToNearest(quat);
     const deviation = Math.min(1, angle / (Math.PI / 4));
     const scramble = scrambleFactor(this.kGroup);
-    return this.expression.process(this.gyro, deviation, scramble);
+    return this.expression.process(quat, deviation, scramble, now);
   }
 
   /** Get current scramble factor (0 = solved, 1 = max scrambled) */
@@ -233,6 +245,7 @@ export class XenaKubeEngine {
       scrambleFactor: scrambleFactor(this.kGroup),
       turnRate: this.turnRateTracker.getRate(),
       regime: this.turnRateTracker.getRegime(),
+      expression: this.expressionState,
     };
   }
 

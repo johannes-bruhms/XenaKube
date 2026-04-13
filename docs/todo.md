@@ -79,19 +79,23 @@ The core design goal: the instrument should sound and behave differently dependi
   - Voice engine emits the new voice event as usual, but SC doesn't kill the previous synth — instead, previous voices get a release envelope (2–4s fade). Multiple voices coexist.
   - Cap at 6–8 simultaneous synths to prevent CPU overload. Steal oldest voice when cap hit.
 
-- [ ] **Expression OSC emission**
-  - Wire expression processor output to OSC: `/xk/expr/tilt`, `/xk/expr/spin`, `/xk/expr/dev`, `/xk/expr/scramble` (all float 0–1)
-  - Add to `osc-output.ts` — only emit on gyro updates, not on every turn
-  - SC maps these to synthesis parameters: tilt → filter cutoff, spin → vibrato rate, deviation → detune amount
+- [x] **Expression OSC emission**
+  - `/xk/expr/tilt`, `/xk/expr/spin`, `/xk/expr/dev`, `/xk/expr/scramble` (all float 0–1)
+  - Added to `osc-output.ts`: `expressionToOsc()` for 60Hz relay loop + included in full state burst via `stateToOsc()`
+  - Engine exposes `getExpressionFor(quat)` for relay's Kalman-filtered quaternion at 60Hz
+  - Relay emits expression to SC (57120) and Max (57121) at 60Hz
+  - SC mapping of expression params not yet done (only raw gyro → C5/C8)
 
-- [ ] **Spell-triggered synthesis events**
-  - Wire `mode-manager.ts` spell effects (currently empty `applySpell()`):
+- [x] **Spell-triggered synthesis events**
+  - Wired `mode-manager.ts` `applySpell()`:
     - `sexy-move` → toggle seq/poly
     - `sledgehammer` → toggle freeze
-    - `sune` / `anti-sune` → shift palette (V1 ↔ V2)
-    - `oll-cross` → trigger a sustained drone at current sieve root
-    - `combo` → burst of all 8 voices simultaneously (one-shot poly event)
-  - SC needs `/xk/spell` message (string name) to trigger a one-shot effect (cymbal swell, filter sweep, octave drop — something audible that marks the spell moment)
+    - `sune` → palette V2, `anti-sune` → palette V1
+    - `oll-cross` → variant `'drone'`
+    - `combo` → variant `'burst'`
+    - `t-perm` → reset variant + palette to default
+  - `/xk/spell <name>` OSC sent to SC + Max via `spellToOsc()`
+  - SC OSCdef for `/xk/spell` not yet added (Max/SWAM bridge handles spell reactions)
 
 - [ ] **Dashboard: spell history trail**
   - Show spell detections as persistent markers on a timeline, not just toasts

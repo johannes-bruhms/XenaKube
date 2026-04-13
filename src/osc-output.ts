@@ -1,6 +1,8 @@
 // === OSC Output: Formats and sends state to SuperCollider and TouchDesigner ===
 
 import type { XenaKubeState } from './types.js';
+import type { ExpressionState } from './expression.js';
+import type { SpellMatch } from './spells.js';
 
 /** OSC message: address + args */
 export interface OscMessage {
@@ -85,5 +87,26 @@ export function stateToOsc(state: XenaKubeState): OscMessage[] {
   msgs.push({ address: '/xk/rate', args: [state.turnRate] });
   msgs.push({ address: '/xk/regime', args: [state.regime] });
 
+  // Expression (also in full burst so BLE-rate updates include it)
+  msgs.push({ address: '/xk/expr/tilt', args: [state.expression.tilt] });
+  msgs.push({ address: '/xk/expr/spin', args: [state.expression.spin] });
+  msgs.push({ address: '/xk/expr/dev', args: [state.expression.deviation] });
+  msgs.push({ address: '/xk/expr/scramble', args: [state.expression.scramble] });
+
   return msgs;
+}
+
+/** Expression-only OSC messages for 60Hz relay loop */
+export function expressionToOsc(expr: ExpressionState): OscMessage[] {
+  return [
+    { address: '/xk/expr/tilt', args: [expr.tilt] },
+    { address: '/xk/expr/spin', args: [expr.spin] },
+    { address: '/xk/expr/dev', args: [expr.deviation] },
+    { address: '/xk/expr/scramble', args: [expr.scramble] },
+  ];
+}
+
+/** Spell detection → single OSC message */
+export function spellToOsc(match: SpellMatch): OscMessage {
+  return { address: '/xk/spell', args: [match.spell.name] };
 }

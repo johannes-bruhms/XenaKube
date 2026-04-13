@@ -13,8 +13,8 @@ GAN i4 Cube (BLE) --> Chrome Web Bluetooth --> relay.js (Node)
                                    SpellDetector  VoiceEngine  Expression
                                          │        │          │
                                          ▼        ▼          ▼
-                                   ModeManager  OSC:57120  WS (broadcast)
-                                               SuperCollider  Browser
+                                   ModeManager  OSC:57120  OSC:57121  WS
+                                               SuperCollider  Max/SWAM  Browser
 ```
 
 A performer physically turns a Bluetooth-enabled Rubik's cube. Each turn is a musical event: the cube's S4 group state permutes which sound parameters apply to which voice. Rubik's algorithms (like the "sexy move" R U R' U') are detected from the move stream and trigger performance mode changes — palette switching, voice mode toggles, freezes.
@@ -56,7 +56,7 @@ Continuous gyro-derived control values (all normalized 0-1):
 ## Requirements
 
 - [Node.js](https://nodejs.org/) (v18+)
-- [SuperCollider](https://supercollider.github.io/)
+- [SuperCollider](https://supercollider.github.io/) and/or [Max/MSP 9](https://cycling74.com/) + [SWAM Cello 3](https://www.audiomodeling.com/)
 - A GAN i4 smart cube (Bluetooth)
 - Chrome (for Web Bluetooth API)
 
@@ -89,10 +89,11 @@ Turn the cube. Sound happens.
 ```
 src/              TypeScript engine (S4 group, spells, voice, expression, scramble)
 sc/               SuperCollider synthesis (xenakube.scd)
+max/              Max/MSP SWAM Cello bridge (xk_swam.js for v8 object)
 public/           Browser dashboard (live visualizer + cube connect)
 relay.js          BLE-to-OSC bridge with XenaKubeEngine
-test/             Vitest test suite (42 tests)
-docs/             Xenakis primary source extraction
+test/             Vitest test suite (67 tests)
+docs/             Xenakis primary source, research notes, roadmap
 ```
 
 ## Tests

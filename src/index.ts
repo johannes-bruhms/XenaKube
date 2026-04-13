@@ -1,6 +1,6 @@
 // XenaKube Engine — public API
 export { XenaKubeEngine, type StateListener, type SpellListener, type VoiceListener } from './engine.js';
-export { stateToOsc, type OscMessage } from './osc-output.js';
+export { stateToOsc, expressionToOsc, spellToOsc, type OscMessage } from './osc-output.js';
 export {
   ELEMENTS, CAYLEY, INVERSES, IDENTITY,
   multiply, inverse, getPermutation, tetraOrbit,

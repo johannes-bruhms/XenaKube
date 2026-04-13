@@ -37,19 +37,40 @@ export class ModeManager {
   /** Apply a detected spell. Returns true if mode changed. */
   applySpell(match: SpellMatch): boolean {
     this.spellHistory.push(match);
+    const prev = { ...this.mode };
 
-    // For now, no automatic effect-to-mode wiring.
-    // This is the hook point — wire effects here when ready.
-    // Example (currently inactive):
-    //
-    // switch (match.spell.effect) {
-    //   case 'sexy-move': this.mode.voiceMode = toggle; break;
-    //   case 'sledgehammer': this.mode.frozen = !this.mode.frozen; break;
-    //   case 'oll-cross': this.mode.palette = nextPalette(); break;
-    // }
+    switch (match.spell.effect) {
+      case 'sexy-move':
+        this.mode.voiceMode = this.mode.voiceMode === 'sequential' ? 'polyphonic' : 'sequential';
+        break;
+      case 'sledgehammer':
+        this.mode.frozen = !this.mode.frozen;
+        break;
+      case 'sune':
+        this.mode.palette = 'V2';
+        break;
+      case 'anti-sune':
+        this.mode.palette = 'V1';
+        break;
+      case 'oll-cross':
+        this.mode.variant = 'drone';
+        break;
+      case 'combo':
+        this.mode.variant = 'burst';
+        break;
+      case 't-perm':
+        this.mode.variant = 'default';
+        this.mode.palette = 'default';
+        break;
+    }
+
+    const changed = prev.voiceMode !== this.mode.voiceMode
+      || prev.frozen !== this.mode.frozen
+      || prev.palette !== this.mode.palette
+      || prev.variant !== this.mode.variant;
 
     this.emit(match);
-    return true;
+    return changed;
   }
 
   /** Manually set voice mode */
