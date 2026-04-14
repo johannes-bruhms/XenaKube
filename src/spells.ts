@@ -127,11 +127,19 @@ export function expandSpellBook(canonical: Spell[]): Spell[] {
 // Canonical algorithms — one representative orientation each.
 // The detector expands these into all 24 rotation variants automatically.
 
+// Minimal CFOP fundamentals — 7 spells covering the essential vocabulary
+// needed to solve any state using 2-look OLL + 2-look PLL.
+//
+//   F2L triggers:   sexy-move, sledgehammer
+//   2-look OLL:     oll-cross (edges), sune + anti-sune (corners)
+//   2-look PLL:     t-perm (corners+edges), u-perm (3-edge cycle)
+//
+// Inverse-sexy (U R U' R') is a rotation variant of sexy-move and is
+// detected as such. Hedgeslammer (F R' F' R) is the inverse of sledgehammer
+// and is not separately included — rotation variants of sledgehammer cover
+// the common face-pair equivalents.
 export const CANONICAL_SPELLS: Spell[] = [
-  // --- 4-move spells (quick casts) ---
-  // Note: inverse-sexy (U R U' R') was removed — it's rotation-equivalent
-  // to sexy-move (same commutator [A,B] with faces swapped; indistinguishable
-  // under the 24 whole-cube rotations).
+  // --- F2L building blocks (4 moves) ---
   {
     name: 'sexy-move',
     algorithm: ['R', 'U', "R'", "U'"],
@@ -139,16 +147,11 @@ export const CANONICAL_SPELLS: Spell[] = [
   },
   {
     name: 'sledgehammer',
-    algorithm: ["R'", "D'", 'R', 'D'],
+    algorithm: ["R'", 'F', 'R', "F'"],
     effect: 'sledgehammer',
   },
-  {
-    name: 'hedge',
-    algorithm: ['D', "R'", "D'", 'R'],
-    effect: 'hedge',
-  },
 
-  // --- 6-move spells ---
+  // --- 2-look OLL (edges, then corners) ---
   {
     name: 'oll-cross',
     algorithm: ['F', 'R', 'U', "R'", "U'", "F'"],
@@ -156,48 +159,25 @@ export const CANONICAL_SPELLS: Spell[] = [
   },
   {
     name: 'sune',
-    algorithm: ['R', 'U', "R'", 'U', 'R', "U'"],
-    // note: full sune is R U R' U R U2 R' but first 6 moves are distinct enough
+    algorithm: ['R', 'U', "R'", 'U', 'R', 'U2', "R'"],
     effect: 'sune',
-  },
-
-  // --- 8-move spells ---
-  {
-    name: 'combo',
-    algorithm: ['R', 'U', "R'", "U'", "R'", 'F', 'R', "F'"],
-    effect: 'combo',
   },
   {
     name: 'anti-sune',
-    algorithm: ["R'", "U'", 'R', "U'", "R'", 'U2', 'R'],
+    algorithm: ['R', 'U2', "R'", "U'", 'R', "U'", "R'"],
     effect: 'anti-sune',
   },
 
-  // --- Long spells (incantations) ---
+  // --- 2-look PLL ---
+  {
+    name: 'u-perm',
+    algorithm: ['R', "U'", 'R', 'U', 'R', 'U', 'R', "U'", "R'", "U'", 'R2'],
+    effect: 'u-perm',
+  },
   {
     name: 't-perm',
     algorithm: ['R', 'U', "R'", "U'", "R'", 'F', 'R2', "U'", "R'", "U'", 'R', 'U', "R'", "F'"],
     effect: 't-perm',
-  },
-  {
-    name: 'j-perm',
-    algorithm: ["R'", 'U', "L'", 'U2', 'R', "U'", "R'", 'U2', 'R', 'L'],
-    effect: 'j-perm',
-  },
-  {
-    name: 'u-perm-cw',
-    algorithm: ['R2', 'U', 'R', 'U', "R'", "U'", "R'", "U'", "R'", 'U', "R'"],
-    effect: 'u-perm-cw',
-  },
-  {
-    name: 'u-perm-ccw',
-    algorithm: ['R', "U'", 'R', 'U', 'R', 'U', 'R', "U'", "R'", "U'", 'R2'],
-    effect: 'u-perm-ccw',
-  },
-  {
-    name: 'h-perm',
-    algorithm: ['R2', 'U2', "R'", 'U2', 'R2', 'U2', 'R2', 'U2', "R'", 'U2', 'R2'],
-    effect: 'h-perm',
   },
 ];
 

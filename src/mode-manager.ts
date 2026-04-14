@@ -55,7 +55,7 @@ export class ModeManager {
       case 'oll-cross':
         this.mode.variant = 'drone';
         break;
-      case 'combo':
+      case 'u-perm':
         this.mode.variant = 'burst';
         break;
       case 't-perm':

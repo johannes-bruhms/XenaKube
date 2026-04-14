@@ -97,6 +97,27 @@ The core design goal: the instrument should sound and behave differently dependi
   - `/xk/spell <name>` OSC sent to SC + Max via `spellToOsc()`
   - SC OSCdef for `/xk/spell` not yet added (Max/SWAM bridge handles spell reactions)
 
+- [x] **Spell book revised to CFOP fundamentals** (2026-04-13)
+  - Boiled from 12 → 7 spells: sexy-move, sledgehammer, oll-cross, sune, anti-sune, u-perm, t-perm
+  - Fixed incorrect algorithms: sledgehammer (`R' D' R D` → `R' F R F'`), sune (6 moves → canonical 7 `R U R' U R U2 R'`), anti-sune (non-standard → canonical inverse-Sune `R U2 R' U' R U' R'`)
+  - Removed hedge, combo, j-perm, u-perm-cw variants, h-perm as non-fundamental
+  - 168 total rotation patterns (was 288); all 67 tests pass
+  - Effect re-home: staccato-burst (was `combo`) now fires on `u-perm`
+
+- [x] **Max/SWAM pitches clamped to cello range** (2026-04-13)
+  - SWAM Cello 3 plays C2–F6 (MIDI 36–89); prior clamp was 24–96 so extreme notes were silent
+  - Added `CELLO_MIN`/`CELLO_MAX` constants + `foldToRange()` helper that octave-wraps out-of-range pitches (preserves pitch class from sieve) instead of hard-clamping
+  - Covers V2 transpose -12 edge case where C2 sieve pitches dropped to C1
+
+- [x] **Max/SWAM phrase generation + legato portamento** (2026-04-13)
+  - Rewrote `max/xk_swam.js` as v2: each `/xk/voice` dispatches a phrase generator per complex type, not a single note
+  - Fixed glissandi: `legatoNote()` sends noteOn(new) before noteOff(old) with 20ms overlap so SWAM engages portamento
+  - Fixed pizzicato: keyswitches hold 30ms (was instant) so SWAM registers the articulation
+  - Auto-release timer with 5-step expression fade; no more infinite sustain when performer stops turning
+  - Velocity humanization (±15% + accents), microtonal jitter (10% ±1 semitone), 0-30ms timing offsets
+  - Spell reactions: sexy-move bow sweep, oll-cross harmonic ping, combo staccato burst, sune/anti-sune palette shifts, t-perm full reset
+  - See `CHANGELOG.md` 2026-04-13 for full detail
+
 - [ ] **Dashboard: spell history trail**
   - Show spell detections as persistent markers on a timeline, not just toasts
   - At conversational rate, spells are frequent enough to form a visible rhythm

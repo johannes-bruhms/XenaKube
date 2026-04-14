@@ -2,12 +2,13 @@
 
 ## Self-Maintenance
 
-This file must stay accurate as the project evolves. **Update it in the same commit** when you:
-- Add, remove, or rename files in `src/`, `sc/`, or root
-- Change OSC addresses or ports
-- Add/change npm scripts or dependencies
-- Add new performance modes or change architecture
-- Implement visuals or other "not yet implemented" features (remove the stub)
+**Always update project documentation in the same commit as the code change.** These files must stay in sync — if a change touches their subject, edit them:
+
+- **`CLAUDE.md`** (this file) — architecture, file roles, OSC reference, commands, implementation status. Update when you add/rename files, change OSC addresses/ports, change architecture, add npm scripts/dependencies, or implement a "Not Yet Implemented" feature (remove the stub).
+- **`CHANGELOG.md`** — add a dated entry for every user-visible change (new feature, bug fix, behavior change). Use the existing date/Added/Changed/Fixed structure.
+- **`docs/todo.md`** — check off completed phase items; add new todos as they emerge. Don't leave stale `[ ]` items that were actually done.
+- **`docs/research_notes.md`** — update when design rationale changes, a new mapping is introduced, or SWAM/SC behavior diverges from what's documented there.
+- **`README.md`** — update only when user-facing setup, requirements, or top-level project description changes. Don't mirror internal architecture here.
 
 **How to update**: edit only the affected section. Keep the same terse style. Don't expand descriptions. If a section becomes stale, fix or remove it — don't add disclaimers.
 
@@ -106,28 +107,23 @@ Each physical cube turn:
 
 ### Spell System
 
-Rubik's algorithms detected from the move stream trigger mode changes. **Orientation-independent**: each canonical algorithm is expanded into all 24 whole-cube-rotation variants, so the same finger pattern is detected regardless of which faces it's performed on (e.g. sexy-move works as R U R' U', F R F' R', L D L' D', etc.). Spells **layer** — if a short spell is the prefix of a longer one, the short fires first and the long fires on completion. Turns always produce sound; spells are bonus triggers on top.
+Rubik's algorithms detected from the move stream trigger mode changes. The spell book is deliberately minimal: **only the 7 fundamentals needed to solve the cube under CFOP** (Cross, F2L, OLL, PLL) are canonical spells. **Orientation-independent**: each canonical algorithm is expanded into all 24 whole-cube-rotation variants, so the same finger pattern is detected regardless of which faces it's performed on (e.g. sexy-move works as R U R' U', F R F' R', L D L' D', etc.). Spells **layer** — if a short spell is the prefix of a longer one, the short fires first and the long fires on completion. Turns always produce sound; spells are bonus triggers on top.
 
-| Name | Canonical Algorithm | Moves | Unique Variants |
-|------|-------------------|-------|-----------------|
-| sexy-move | R U R' U' | 4 | 24 (absorbs inverse-sexy) |
-| sledgehammer | R' D' R D | 4 | 24 |
-| hedge | D R' D' R | 4 | 24 |
-| oll-cross | F R U R' U' F' | 6 | 24 |
-| sune | R U R' U R U' | 6 | 24 |
-| anti-sune | R' U' R U' R' U2 R | 7 | 24 |
-| combo | R U R' U' R' F R F' | 8 | 24 |
-| j-perm | R' U L' U2 R U' R' U2 R L | 10 | 24 |
-| u-perm-cw | R2 U R U R' U' R' U' R' U R' | 11 | 24 |
-| u-perm-ccw | R U' R U R U R U' R' U' R2 | 11 | 24 |
-| h-perm | R2 U2 R' U2 R2 U2 R2 U2 R' U2 R2 | 11 | 24 |
-| t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 14 | 24 |
+| Name | Canonical Algorithm | Moves | CFOP role | Effect |
+|------|--------------------|-------|-----------|--------|
+| sexy-move | R U R' U' | 4 | F2L trigger | Toggle sequential/polyphonic |
+| sledgehammer | R' F R F' | 4 | F2L trigger | Toggle freeze |
+| oll-cross | F R U R' U' F' | 6 | 2-look OLL: edges | Variant → drone |
+| sune | R U R' U R U2 R' | 7 | 2-look OLL: corners | Palette → V2 |
+| anti-sune | R U2 R' U' R U' R' | 7 | 2-look OLL: inverse corners | Palette → V1 |
+| u-perm | R U' R U R U R U' R' U' R2 | 11 | 2-look PLL: 3-edge cycle | Variant → burst |
+| t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 14 | 2-look PLL: corners + edges | Reset variant + palette |
 
-**Note**: inverse-sexy (U R U' R') was removed — it's rotation-equivalent to sexy-move (same commutator [A,B] with faces swapped; all 24 variants collide). 12 canonical × 24 rotations = 288 total patterns.
+**Note**: inverse-sexy (U R U' R') and hedgeslammer (F R' F' R) are rotation variants of sexy-move and sledgehammer respectively, and fire under those names. 7 canonical × 24 rotations = 168 total patterns.
 
 **Rotation expansion**: generated at load time by applying the 24 face-permutation maps (from generators x, y, z) to each canonical algorithm. Direction (CW/CCW/180°) is preserved by proper rotations — only face names change. Partial matches and spell book UI are deduplicated by spell name.
 
-**Overlap suppression**: with 288 patterns, a repeating move cycle can match overlapping windows (e.g. cycling `F U' F' U` would fire sledgehammer, sexy-move, hedge on every other move). After a spell fires, other spells whose buffer window **partially overlaps** are suppressed. **Full containment** (longer spell encompasses shorter, e.g. combo contains sexy-move prefix) is still allowed — layered detection is preserved. Math: suppress when `L - L_prev < gap < L` where gap = moves since last match.
+**Overlap suppression**: a repeating move cycle can match overlapping windows across rotation variants. After a spell fires, other spells whose buffer window **partially overlaps** are suppressed. **Full containment** (longer spell encompasses shorter, e.g. a T-perm sequence begins with a sexy-move prefix) is still allowed — layered detection is preserved. Math: suppress when `L - L_prev < gap < L` where gap = moves since last match.
 
 **Buffer rules**: 2s timeout between moves resets buffer. Max buffer 20 moves. Different spells sharing an algorithm (from rotation overlap) are rejected at construction.
 
@@ -221,22 +217,56 @@ Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) d
 
 | File | Role |
 |------|------|
-| `xk_swam.js` | v8 object: OSC → midievent. Complex type → keyswitches + CC presets, 60Hz expression → continuous CC, spell reactions, CC cache |
+| `xk_swam.js` | v8 object (v2): OSC → midievent. Phrase generators per complex type, legato note ordering (noteOn-before-noteOff with 20ms overlap for SWAM portamento), auto-release timer with fade, velocity humanization (±15% + accents), 60Hz expression → continuous CC, spell reactions, CC cache |
+
+### Per-Turn Phrase Generation
+
+Each `/xk/voice` triggers a **musical gesture**, not a single note. Phrase generators are dispatched by complex type:
+
+| Type | Phrase |
+|------|--------|
+| C1 Pizz | Cloud of 2-5 plucked notes scattered over ≤600ms, short gates |
+| C2 Bowed | Legato run of 2-3 notes (3 in burst regime), portamento overlap |
+| C3 Sustained | Single long note, expression swell (soft→peak@40%→settle) |
+| C4 Harmonics | Single ethereal note, shifted up if below MIDI 60, light bow pressure |
+| C5 Wild gliss | Two notes ≥5 semitones apart, legato slide between at 200-600ms |
+| C6 Ordered gliss | 2-4 stepwise sieve walk with portamento |
+| C7 Sustained slide | Single note + slow drift (±3 semitones) at half-duration |
+| C8 Ponticello | Tremolo single note near bridge |
+
+Every phrase schedules its own auto-release timer (`scheduleRelease(dur)`) — no more infinite sustain. Release fades expression down over 5 steps × 80ms, then note-off. Turn events cancel any in-progress phrase and release before starting the next.
 
 ### OSC → SWAM MIDI Mapping
 
-- **Complex type → technique**: C1=Pizz keyswitch, C2/C3=Arco (legato vs bow-change), C4=Harmonics ON, C5-C7=Portamento ON (varying glide speed), C8=near-bridge + Tremolo
-- **Intensity → Expression CC 11**: p=15, mp=28, mf=45, f=64, ff=83, fff=102
+- **Complex type → technique**: C1=Pizz keyswitch, C2/C3=Arco (legato vs tasto), C4=Harmonics ON, C5-C7=Portamento ON (varying glide speed), C8=near-bridge + Tremolo
+- **Intensity → Expression CC 11 + base velocity**: p={expr:20,vel:35}, mp={38,50}, mf={55,68}, f={75,85}, ff={95,100}, fff={115,120}
 - **Density → Attack Ramp CC 73**: high density = fast attack
-- **Sieve → MIDI note pool**: offsets + 36 (C2), selection strategy per complex type
-- **Tilt → Expression CC 11** (60Hz continuous, overrides per-turn intensity)
-- **Spin → Vibrato Depth CC 1 + Rate CC 76**
-- **Deviation → Bow Pressure CC 17**
-- **Scramble → Bow Position CC 16**: solved=fingerboard(warm), scrambled=bridge(edgy)
-- **Tetra orbit → Bowing Sensitivity CC 21**: even=64, odd=102
+- **Sieve → MIDI note pool**: offsets + 36 (C2), selection strategy per complex type. Pitches are folded by octave into the cello's playable range (`CELLO_MIN`=36/C2, `CELLO_MAX`=89/F6) — out-of-range notes wrap up/down an octave rather than clamping, preserving pitch class
+- **Tilt → Expression CC 11** (60Hz, exponential `val²` curve, blended with base: `baseExpr*0.3 + tilt²*97`)
+- **Spin → Vibrato Depth CC 1 + Rate CC 76** (threshold 0.15, exponential above)
+- **Deviation → Bow Pressure CC 17 + Bow Speed CC 19** (exponential, wider range 20-127)
+- **Scramble → Bow Position CC 16**: solved=fingerboard(120), scrambled=bridge(5); skipped when complex type owns position (C3, C4, C7, C8)
+- **Tetra orbit → Bowing Sensitivity CC 21**: even=50 (warm), odd=110 (edgy)
 - **Path V1/V2 → Transpose**: 0 / -12
-- **Regime → Tremolo CC 92**: contemplative=off, burst=on (speed from turn rate)
-- **Spells**: sexy-move=bow sweep, sledgehammer=sustain pedal toggle, oll-cross=harmonic ping, combo=staccato burst
+- **Regime → Tremolo CC 92 + Attack Ramp**: contemplative=trem off/slow attack(90), conversational=trem off/medium(50), burst=trem on/fast(10); in burst, tremolo depth scales with turn rate
+- **Spells**:
+  - `sexy-move` = bow sweep (snap to bridge + peak expression, release after 400ms)
+  - `sledgehammer` = toggle freeze (CC64 sustain pedal + ignore voice events; second trigger releases all held notes)
+  - `oll-cross` = harmonic ping (harmonics flash + high note for 800ms)
+  - `sune` = V2 palette (tasto + dim expression)
+  - `anti-sune` = V1 palette (mid position + bright expression)
+  - `u-perm` = staccato burst (3-5 rapid short notes)
+  - `t-perm` = full reset (cancel phrases, all notes off, CCs to defaults)
+
+### Humanization
+
+- **Velocity**: ±15% random jitter + accent (+8) every 3rd turn
+- **Pitch**: 10% chance of ±1 semitone microtonal shift
+- **Timing**: 0-30ms micro-delay between phrase notes
+
+### Keyswitches
+
+`KS = { ARCO:24, PIZZ:25, TREMOLO:26, STACCATO:27 }` — held 30ms (not instant) so SWAM registers the switch. Verify mapping in SWAM > Preferences > MIDI. If your SWAM config differs, edit the `KS` object at the top of `xk_swam.js`.
 
 ## OSC Reference
 

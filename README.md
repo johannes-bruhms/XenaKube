@@ -28,17 +28,23 @@ Following Xenakis' method, two S4 group cubes operate simultaneously:
 
 ### Spell System
 
-Known Rubik's algorithms detected from the move stream trigger mode changes:
+The spell book is the 7 fundamentals of the **CFOP** solving method (Cross, F2L, OLL, PLL). All are orientation-independent (each canonical algorithm × 24 whole-cube rotations), so the same finger pattern is recognized on any face pair.
 
-| Spell | Algorithm | Moves |
-|-------|-----------|-------|
-| sexy-move | R U R' U' | 4 |
-| sledgehammer | R' D' R D | 4 |
-| oll-cross | F R U R' U' F' | 6 |
-| combo | R U R' U' R' F R F' | 8 |
-| t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 14 |
+| Spell | Algorithm | CFOP role | Effect |
+|-------|-----------|-----------|--------|
+| sexy-move | R U R' U' | F2L trigger | Toggle sequential/polyphonic; SWAM bow sweep |
+| sledgehammer | R' F R F' | F2L trigger | Toggle freeze (sustain + ignore turns) |
+| oll-cross | F R U R' U' F' | 2-look OLL edges | Variant → drone; SWAM harmonic ping |
+| sune | R U R' U R U2 R' | 2-look OLL corners | Palette → V2 (dark / sul tasto) |
+| anti-sune | R U2 R' U' R U' R' | 2-look OLL inverse corners | Palette → V1 (bright) |
+| u-perm | R U' R U R U R U' R' U' R2 | 2-look PLL edges | Variant → burst; SWAM staccato burst |
+| t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 2-look PLL corners+edges | Reset palette + variant |
 
 Spells layer — short algorithms fire immediately even if they're the prefix of a longer one in progress.
+
+### Phrase Generation (Max/SWAM)
+
+Each cube turn triggers a **musical phrase**, not a single MIDI note. Phrase shape depends on the active complex type (C1-C8): pizzicato clouds, legato runs, glissando slides, sustained swells, ponticello tremolos. Phrases humanize velocity/pitch/timing and auto-release based on the Xenakis `duration` parameter. See `CLAUDE.md` "Per-Turn Phrase Generation" for detail.
 
 ### Voice Modes
 

@@ -38,8 +38,9 @@ Nomos Alpha was the first composition to use group theory (specifically the rota
 | Feature | Rationale |
 |---------|-----------|
 | Physical Rubik's cube as input device | Xenakis composed a fixed score; we make it a live instrument. The cube's S4 symmetry is the same group Xenakis used. |
-| Spell detection (Rubik's algorithm recognition) | Known algorithms (sexy-move, T-perm, etc.) serve as gestural "words" the performer can deliberately execute. Maps finger-pattern vocabulary onto mode changes. |
+| Spell detection (Rubik's algorithm recognition) | Known algorithms (sexy-move, sledgehammer, sune, T-perm, etc.) serve as gestural "words" the performer can deliberately execute. Maps finger-pattern vocabulary onto mode changes. |
 | Orientation-independent spell matching | A cuber's muscle memory is face-relative. Expanding each algorithm to all 24 rotations means a sexy-move pattern works on any face pair. |
+| CFOP-minimal spell book (7 spells) | The spell book is restricted to the fundamentals needed to solve any state under CFOP (2-look OLL + 2-look PLL): sexy-move and sledgehammer as F2L triggers, oll-cross / sune / anti-sune for OLL, u-perm / t-perm for PLL. Keeps the vocabulary tight so each spell is memorable and distinct under rotation expansion. |
 | Gyro → S4 snap (continuous → discrete) | The cube's physical orientation in 3D maps to the nearest of the 24 S4 rotations via quaternion dot product. This bridges continuous gesture and discrete group math. |
 | Expression parameters (tilt, spin, deviation, scramble) | Continuous gyro-derived values for real-time sound control. Deviation = how far from the nearest S4 snap; scramble = BFS distance from identity. |
 | Scramble factor as meta-parameter | BFS distance from identity in the S4 Cayley graph. Diameter is ≤6 (small group). Normalized 0–1. "How far from solved" as a musical parameter. |
@@ -254,48 +255,59 @@ No complete bar-by-bar analysis exists. Closest resources:
 
 Xenakis' C1–C8 complex types are cello techniques. SWAM Cello 3 (Audio Modeling) is a physical-modeling VST that exposes the same parameters as continuous MIDI CC — a natural fit for XenaKube's OSC output via a Max/MSP bridge patch.
 
-### Complex Type → SWAM Technique
+### Complex Type → SWAM Phrase (v2)
 
-| Complex | Xenakis technique | SWAM mapping |
+Each `/xk/voice` dispatches a **phrase generator** in `max/xk_swam.js` — not a single note. The gestural shape of each complex type is realized as a short sequence of MIDI events with humanized timing/velocity. Portamento types use `legatoNote()` which sends noteOn(new) before noteOff(old) with 20ms overlap so SWAM engages the physical-model glide.
+
+| Complex | Xenakis technique | SWAM phrase |
 |---------|------------------|--------------|
-| C1 | Ataxic pizzicato | Play Mode: Pizz, random bow/pizz position per note |
-| C2 | Bowed ascending/descending | Play Mode: Bow, Bow Change on each note |
-| C3 | Bowed sustained | Play Mode: Bow, legato, no bow change |
-| C4 | Harmonics + col legno | Harmonics: ON, Harmonics 4 Control from density |
-| C5 | Ataxic glissando | Bow, Pitch Bend active, wide random gliss |
-| C6 | Ordered glissando | Bow, Pitch Bend active, stepwise gliss through sieve |
-| C7 | Sustained sliding | Bow, Pitch Bend active, slow narrow drift |
-| C8 | Sul ponticello | Bow/Pizz Position ~0.9 (near bridge), Tremolo: ON |
+| C1 | Ataxic pizzicato | Pizz keyswitch, cloud of 2-5 plucked notes scattered ≤600ms with short (60-200ms) gates |
+| C2 | Bowed ascending/descending | Arco, legato run of 2-3 notes (3 in burst regime) with ~120ms spacing |
+| C3 | Bowed sustained | Arco, sul tasto, single long note with expression swell (soft→peak@40%→settle) |
+| C4 | Harmonics + col legno | Arco, Harmonics ON, single ethereal note (shifted up if <MIDI 60), light bow pressure |
+| C5 | Ataxic glissando | Arco, Portamento ON (50), two notes ≥5 semitones apart with legato slide at 200-600ms |
+| C6 | Ordered glissando | Arco, Portamento ON (80), 2-4 stepwise sieve walk with legato transitions |
+| C7 | Sustained sliding | Arco, Portamento ON (115), sul tasto, single note + slow drift (±3 semitones) at half-duration |
+| C8 | Sul ponticello | Arco, Bow Position 5 (near bridge), Tremolo 110, metallic tremolo note |
 
 ### Per-Turn Parameters
 
 | XenaKube | SWAM target | Mapping |
 |----------|------------|---------|
-| intensity (p–fff) | Expression | 0.12–0.8 (same scale as SC engine) |
-| density | Attack Ramp Speed | High density = fast attack |
-| duration | Gate time | Note-off after duration elapses |
-| sieve | MIDI note pool | Active vertex cycling picks pitch |
+| intensity (p–fff) | Expression CC 11 + base velocity | expr: 20/38/55/75/95/115, vel: 35/50/68/85/100/120 |
+| density | Attack Ramp CC 73 | High density = fast attack; also sets C1 pizz count (density+1, clamped 2-5) |
+| duration | Auto-release timer | Phrase fades over 5×80ms steps then note-off; cancels on next turn |
+| sieve | MIDI note pool | Pitch selection per phrase generator; ±1 semitone microtonal jitter at 10% probability. Pitches are octave-folded into the cello's playable range (MIDI 36–89, C2–F6) rather than hard-clamped, so out-of-range sieve notes wrap up/down an octave and keep their pitch class |
 
-### Continuous Gyro Expression (requires Phase 3 /xk/expr/*)
+### Continuous Gyro Expression (60Hz)
 
-| Expression param | SWAM target | Rationale |
-|-----------------|------------|-----------|
-| tilt (0–1) | Expression | Physical gesture = dynamics |
-| spin (0–1) | Vibrato Depth | Rotation speed = vibrato intensity |
-| deviation (0–1) | Bow Pressure | Off-axis from S4 snap = gritty pressed tone |
-| scramble (0–1) | Bow/Pizz Position toward bridge | Scrambled = edgy ponticello timbre |
+| Expression param | SWAM target | Curve |
+|-----------------|------------|-------|
+| tilt (0–1) | Expression CC 11 | Exponential (`val²`) blended with base intensity: `baseExpr*0.3 + tilt²*97`. Face down → near-silent (5), face up → full (127). Skipped on C1 pizz. |
+| spin (0–1) | Vibrato Depth CC 1 + Rate CC 76 | Dead zone below 0.15, then exponential. No vibrato at rest; dramatic at fast rotation. |
+| deviation (0–1) | Bow Pressure CC 17 + Bow Speed CC 19 | Exponential 20-127 pressure; speed 40-120. Locked to S4 snap = light/slow, at boundary = heavy/erratic. |
+| scramble (0–1) | Bow Position CC 16 | Solved = fingerboard (120), scrambled = bridge (5). Skipped when complex type owns position (C3, C4, C7, C8). |
+
+### Humanization
+
+Natural variation is layered on every phrase note:
+- **Velocity**: ±15% jitter + accent (+8) every 3rd turn
+- **Pitch**: 10% chance of ±1 semitone microtonal shift
+- **Timing**: 0-30ms micro-delay between phrase notes
+
+Without these, rapid repetitions sound mechanical. The ±15% range is small enough to preserve the intensity contour but large enough to avoid the "same sample retriggered" feel.
 
 ### Structural Modifiers
 
 | XenaKube | SWAM target | Mapping |
 |----------|------------|---------|
-| tetra orbit even | Bowing Sensitivity 0.5 | Warmer, less reactive |
-| tetra orbit odd | Bowing Sensitivity 0.8 | Edgier, more reactive |
+| tetra orbit even | Bowing Sensitivity CC 21 = 50 | Warmer, less reactive |
+| tetra orbit odd | Bowing Sensitivity CC 21 = 110 | Edgier, more reactive |
 | path V1 | Transpose: 0 | Normal cello range |
 | path V2 | Transpose: -12 | Octave lower (matches V2 long durations) |
-| regime: contemplative | Single notes | One voice at a time |
-| regime: conversational | Bow Polyphony: Mono String Crossing | Overlapping voices |
-| regime: burst | Tremolo: ON | Tremolo speed from turn rate |
+| regime: contemplative | Tremolo off, Attack Ramp 90 (slow) | Single distinct gestures |
+| regime: conversational | Tremolo off, Attack Ramp 50 (medium) | Phrases flow into each other |
+| regime: burst | Tremolo on (depth from turnRate/4), Attack Ramp 10 (fast) | Accumulating agitation |
 
 ### Solve Arc
 
