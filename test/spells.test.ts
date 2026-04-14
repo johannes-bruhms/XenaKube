@@ -12,14 +12,17 @@ describe('SpellDetector', () => {
     expect(result!.spell.name).toBe('sexy-move');
   });
 
-  it('detects sledgehammer (R\' F R F\')', () => {
+  it('detects sune (R U R\' U R U2 R\')', () => {
     const detector = new SpellDetector();
-    detector.push("R'");
-    detector.push('F');
     detector.push('R');
-    const result = detector.push("F'");
+    detector.push('U');
+    detector.push("R'");
+    detector.push('U');
+    detector.push('R');
+    detector.push('U2');
+    const result = detector.push("R'");
     expect(result).not.toBeNull();
-    expect(result!.spell.name).toBe('sledgehammer');
+    expect(result!.spell.name).toBe('sune');
   });
 
   it('does not trigger on partial match', () => {
@@ -56,8 +59,8 @@ describe('SpellDetector', () => {
 
   it('buffer is not consumed — sequential spells both fire', () => {
     const detector = new SpellDetector();
-    // sexy + sledge back-to-back: R U R' U' R' F R F'
-    const moves: string[] = ['R', 'U', "R'", "U'", "R'", 'F', 'R', "F'"];
+    // sexy + sune back-to-back: R U R' U' R U R' U R U2 R'
+    const moves: string[] = ['R', 'U', "R'", "U'", 'R', 'U', "R'", 'U', 'R', 'U2', "R'"];
     const allResults: string[] = [];
     for (const m of moves) {
       const matches = detector.pushAll(m);
@@ -65,8 +68,8 @@ describe('SpellDetector', () => {
         allResults.push(match.spell.name);
       }
     }
-    expect(allResults).toContain('sexy-move');    // fires at move 4
-    expect(allResults).toContain('sledgehammer'); // fires at move 8
+    expect(allResults).toContain('sexy-move'); // fires at move 4
+    expect(allResults).toContain('sune');      // fires at move 11
   });
 
   it('detects spell after unrelated moves', () => {
@@ -117,12 +120,12 @@ describe('SpellDetector', () => {
   it('spell book has all expected entries', () => {
     const names = SPELL_BOOK.map(s => s.name);
     expect(names).toContain('sexy-move');
-    expect(names).toContain('sledgehammer');
     expect(names).toContain('oll-cross');
     expect(names).toContain('sune');
     expect(names).toContain('anti-sune');
     expect(names).toContain('u-perm');
     expect(names).toContain('t-perm');
+    expect(names).not.toContain('sledgehammer');
   });
 });
 
@@ -181,15 +184,18 @@ describe('Orientation-independent spell detection', () => {
     expect(r!.spell.name).toBe('sexy-move');
   });
 
-  it('detects sledgehammer on different faces (F\' L F L\')', () => {
+  it('detects sune on different faces (F U F\' U F U2 F\')', () => {
     const detector = new SpellDetector();
-    // sledgehammer R' F R F' under y rotation (R→F, F→L): F' L F L'
-    expect(detector.push("F'")).toBeNull();
-    expect(detector.push('L')).toBeNull();
+    // sune R U R' U R U2 R' under y' rotation (R→F, U→U): F U F' U F U2 F'
     expect(detector.push('F')).toBeNull();
-    const r = detector.push("L'");
+    expect(detector.push('U')).toBeNull();
+    expect(detector.push("F'")).toBeNull();
+    expect(detector.push('U')).toBeNull();
+    expect(detector.push('F')).toBeNull();
+    expect(detector.push('U2')).toBeNull();
+    const r = detector.push("F'");
     expect(r).not.toBeNull();
-    expect(r!.spell.name).toBe('sledgehammer');
+    expect(r!.spell.name).toBe('sune');
   });
 
   it('detects oll-cross on rotated faces', () => {
@@ -237,31 +243,18 @@ describe('Orientation-independent spell detection', () => {
     expect(allResults.filter(n => n === 'sexy-move')).toHaveLength(3);
   });
 
-  it('layered detection: both sexy-move and sledgehammer fire when cast back-to-back', () => {
+  it('layered detection: both sexy-move and sune fire when cast back-to-back', () => {
     const detector = new SpellDetector();
     // sexy-move = R U R' U' (first 4 moves)
-    // sledgehammer = R' F R F'  (next 4 moves, overlap with prior suffix)
-    const moves = ['R', 'U', "R'", "U'", "R'", 'F', 'R', "F'"];
+    // sune = R U R' U R U2 R' (next 7 moves, fully disjoint from sexy-move's window)
+    const moves = ['R', 'U', "R'", "U'", 'R', 'U', "R'", 'U', 'R', 'U2', "R'"];
     const allResults: string[] = [];
     for (const m of moves) {
       const matches = detector.pushAll(m);
       for (const match of matches) allResults.push(match.spell.name);
     }
     expect(allResults).toContain('sexy-move');
-    expect(allResults).toContain('sledgehammer');
-  });
-
-  it('non-overlapping same-length spells both fire', () => {
-    const detector = new SpellDetector();
-    // sexy-move R U R' U' then sledgehammer on different faces L' B L B' (y2 rotation)
-    const moves = ['R', 'U', "R'", "U'", "L'", 'B', 'L', "B'"];
-    const allResults: string[] = [];
-    for (const m of moves) {
-      const matches = detector.pushAll(m);
-      for (const match of matches) allResults.push(match.spell.name);
-    }
-    expect(allResults).toContain('sexy-move');
-    expect(allResults).toContain('sledgehammer');
+    expect(allResults).toContain('sune');
   });
 
   it('no algorithm collisions between different spells', () => {

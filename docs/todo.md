@@ -1,5 +1,17 @@
 # XenaKube — Roadmap
 
+## Parallel track: SWAM Cello bridge refactor
+
+Full diagnoses + phased plan in **`docs/revision_roadmap.md`**. Parameter/CC/KS authority: **`docs/swam_cello_reference.md`**.
+
+- **Phases 0–5 — DONE**. Upstream voice firehose fix, panic/watchdog (D16/D17), SWAM KS model with stateful diffing (D1/D2/D12), `COMPLEX` config table (D5/D7), expression envelopes + tilt→bow-position (D4/D8/D15/D18), vibrato on CC 19 with EMA (D3/D6), spell restore via `setupComplex` (D11/D13/D14), Niklas detection (D19 detection only). **Next listening test required before Phases 6+.**
+- **Phase 6 (pending)** — wire unused KS (Sordino on freeze, Sul Tasto/Pont on scramble thresholds, Alt Fingering on tetra, Section Size on path, Pizz Polyphony init).
+- **Phase 7 (pending)** — V2 fold-window strategy choice; CC 75 Attack Control spell-accent spikes.
+- **Phase 8 (pending)** — note-off velocity from turn rate.
+- **Niklas audio effect** — pick between C-cube 3-cycle / canon echo / commutator latch after first listen.
+
+---
+
 ## Three Performance Regimes
 
 The core design goal: the instrument should sound and behave differently depending on how fast the performer turns the cube. See `research_notes.md` "Performance Speed Regimes" for background.
@@ -12,59 +24,15 @@ The core design goal: the instrument should sound and behave differently dependi
 
 ---
 
-### Phase 1: Turn-Rate Tracker
+### Phase 1: Turn-Rate Tracker — DONE
 
-**Goal**: Detect which regime the performer is in. Expose it to the engine, relay, and dashboard.
-
-**Where**: New module `src/turn-rate.ts`, wired into `engine.ts`.
-
-- [x] **TurnRateTracker class** (`src/turn-rate.ts`)
-  - Circular buffer of last 16 turn timestamps
-  - `push(timestamp)` on every turn
-  - `getRate(now): number` — turns/sec, exponentially weighted moving average (α=0.7, recent turns dominate)
-  - `getRegime(now): Regime` — from rate thresholds with hysteresis
-  - Hysteresis: 3 consecutive turns in new regime required for upward transitions; downward transitions are immediate
-  - Decay: if no turn for 3s, regime falls back to contemplative
-  - Thresholds: contemplative→conversational at 0.3 Hz, conversational→burst at 2.0 Hz; drop-back at 0.2 and 1.5 Hz
-
-- [x] **Wire into engine.ts**
-  - `this.turnRateTracker = new TurnRateTracker()` on engine
-  - `onTurn()` calls `this.turnRateTracker.push(Date.now())`
-  - `turnRate: number` and `regime: Regime` added to `XenaKubeState` (in `types.ts`)
-  - Exposed in `getState()` → flows to OSC + WS
-
-- [x] **OSC output** (`src/osc-output.ts`)
-  - `/xk/rate` float (turns/sec)
-  - `/xk/regime` string ('contemplative' | 'conversational' | 'burst')
-
-- [x] **Dashboard indicator** (`public/dashboard.html`)
-  - Regime badge in performance panel: green CONTEMPLATIVE / amber CONVERSATIONAL / red BURST
-  - Turn rate value next to it (e.g. "1.3 t/s")
-
-- [x] **Tests** (`test/turn-rate.test.ts`, 12 tests)
-  - Rate calculation from timestamps
-  - Regime transitions with hysteresis (up requires 3 consecutive, down is immediate)
-  - Decay after silence
-  - Edge cases: identical timestamps, buffer overflow, reset
+`src/turn-rate.ts` + engine wiring + `/xk/rate` + `/xk/regime` OSC + dashboard badge + 12 tests.
 
 ---
 
-### Phase 2: Contemplative Mode (refine what exists)
+### Phase 2: Contemplative Mode — DONE
 
-**Goal**: Current behavior is already close to contemplative. Polish it so each voice event is fully realized.
-
-**Where**: `sc/xenakube.scd`, `src/voice-engine.ts`.
-
-- [x] **Voice overlap handling**
-  - Currently each `/xk/voice` kills the previous Routine. At slow rate this is fine.
-  - Add a minimum voice duration: if a new turn arrives before the current voice has played for at least 0.5s, let it finish its attack phase before crossfading to the next. Prevents clipping at the contemplative/conversational boundary.
-
-- [x] **Sieve mutation audibility**
-  - At slow rate, sieve metabola (every 3 turns) should be highlighted. Consider a brief SC cue: a soft chime, pitch-bend, or filter sweep when `/xk/sieve` changes. Gives the performer feedback that the pitch field shifted.
-
-- [x] **Scramble factor → SC**
-  - Add `/xk/scramble` float (0–1) to `osc-output.ts`
-  - SC receives it, maps to a global macro: e.g. reverb wet mix (solved=dry, scrambled=drenched) or master HPF cutoff (solved=full range, scrambled=thinned). Start with one simple mapping, tune by ear.
+Voice overlap handling (min 0.5s), sieve metabola chime cue, scramble → SC reverb wet mix.
 
 ---
 
@@ -74,49 +42,12 @@ The core design goal: the instrument should sound and behave differently dependi
 
 **Where**: `src/voice-engine.ts`, `sc/xenakube.scd`, `src/osc-output.ts`.
 
-- [ ] **Polyphonic voice stacking**
+Done: expression OSC emission at 60Hz, spell → mode-manager wiring + `/xk/spell` OSC, spell book revised to 6 CFOP fundamentals (144 rotation variants), Max/SWAM pitch folding into cello range, Max/SWAM phrase generation + legato portamento + auto-release. SC OSCdef for `/xk/spell` and SC mapping of `/xk/expr/*` still pending.
+
+- [ ] **Polyphonic voice stacking** (SC)
   - In conversational regime, switch from "one voice replaces the last" to "voices stack with natural decay."
   - Voice engine emits the new voice event as usual, but SC doesn't kill the previous synth — instead, previous voices get a release envelope (2–4s fade). Multiple voices coexist.
   - Cap at 6–8 simultaneous synths to prevent CPU overload. Steal oldest voice when cap hit.
-
-- [x] **Expression OSC emission**
-  - `/xk/expr/tilt`, `/xk/expr/spin`, `/xk/expr/dev`, `/xk/expr/scramble` (all float 0–1)
-  - Added to `osc-output.ts`: `expressionToOsc()` for 60Hz relay loop + included in full state burst via `stateToOsc()`
-  - Engine exposes `getExpressionFor(quat)` for relay's Kalman-filtered quaternion at 60Hz
-  - Relay emits expression to SC (57120) and Max (57121) at 60Hz
-  - SC mapping of expression params not yet done (only raw gyro → C5/C8)
-
-- [x] **Spell-triggered synthesis events**
-  - Wired `mode-manager.ts` `applySpell()`:
-    - `sexy-move` → toggle seq/poly
-    - `sledgehammer` → toggle freeze
-    - `sune` → palette V2, `anti-sune` → palette V1
-    - `oll-cross` → variant `'drone'`
-    - `combo` → variant `'burst'`
-    - `t-perm` → reset variant + palette to default
-  - `/xk/spell <name>` OSC sent to SC + Max via `spellToOsc()`
-  - SC OSCdef for `/xk/spell` not yet added (Max/SWAM bridge handles spell reactions)
-
-- [x] **Spell book revised to CFOP fundamentals** (2026-04-13)
-  - Boiled from 12 → 7 spells: sexy-move, sledgehammer, oll-cross, sune, anti-sune, u-perm, t-perm
-  - Fixed incorrect algorithms: sledgehammer (`R' D' R D` → `R' F R F'`), sune (6 moves → canonical 7 `R U R' U R U2 R'`), anti-sune (non-standard → canonical inverse-Sune `R U2 R' U' R U' R'`)
-  - Removed hedge, combo, j-perm, u-perm-cw variants, h-perm as non-fundamental
-  - 168 total rotation patterns (was 288); all 67 tests pass
-  - Effect re-home: staccato-burst (was `combo`) now fires on `u-perm`
-
-- [x] **Max/SWAM pitches clamped to cello range** (2026-04-13)
-  - SWAM Cello 3 plays C2–F6 (MIDI 36–89); prior clamp was 24–96 so extreme notes were silent
-  - Added `CELLO_MIN`/`CELLO_MAX` constants + `foldToRange()` helper that octave-wraps out-of-range pitches (preserves pitch class from sieve) instead of hard-clamping
-  - Covers V2 transpose -12 edge case where C2 sieve pitches dropped to C1
-
-- [x] **Max/SWAM phrase generation + legato portamento** (2026-04-13)
-  - Rewrote `max/xk_swam.js` as v2: each `/xk/voice` dispatches a phrase generator per complex type, not a single note
-  - Fixed glissandi: `legatoNote()` sends noteOn(new) before noteOff(old) with 20ms overlap so SWAM engages portamento
-  - Fixed pizzicato: keyswitches hold 30ms (was instant) so SWAM registers the articulation
-  - Auto-release timer with 5-step expression fade; no more infinite sustain when performer stops turning
-  - Velocity humanization (±15% + accents), microtonal jitter (10% ±1 semitone), 0-30ms timing offsets
-  - Spell reactions: sexy-move bow sweep, oll-cross harmonic ping, combo staccato burst, sune/anti-sune palette shifts, t-perm full reset
-  - See `CHANGELOG.md` 2026-04-13 for full detail
 
 - [ ] **Dashboard: spell history trail**
   - Show spell detections as persistent markers on a timeline, not just toasts
@@ -197,17 +128,11 @@ The core design goal: the instrument should sound and behave differently dependi
 ## Dependency Graph
 
 ```
-Phase 1 (turn-rate tracker)
+Phase 1 (turn-rate tracker) — DONE
+Phase 2 (contemplative polish) — DONE
+Phase 3 (conversational) — in progress; SC poly stacking + dashboard trail remain
   │
-  ├── Phase 2 (contemplative polish) — can start in parallel
-  │
-  ├── Phase 3 (conversational) — needs Phase 1 for regime detection
-  │     │
-  │     └── Phase 4 (burst) — needs Phase 3 for voice stacking / spell wiring
-  │           │
-  │           └── Phase 5 (integration) — needs all above
-  │
-  └── Phase 2 scramble→SC can start immediately (no regime dependency)
+  └── Phase 4 (burst) — needs Phase 3 SC poly stacking
+        │
+        └── Phase 5 (integration) — needs all above
 ```
-
-Phase 1 is the foundation. Phase 2's scramble OSC output can happen in parallel since it's just adding a message. Phase 3 and 4 are sequential — conversational voice stacking must work before burst aggregate mode is layered on.

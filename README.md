@@ -28,14 +28,13 @@ Following Xenakis' method, two S4 group cubes operate simultaneously:
 
 ### Spell System
 
-The spell book is the 7 fundamentals of the **CFOP** solving method (Cross, F2L, OLL, PLL). All are orientation-independent (each canonical algorithm × 24 whole-cube rotations), so the same finger pattern is recognized on any face pair.
+The spell book is the 6 fundamentals of the **CFOP** solving method (Cross, F2L, OLL, PLL). All are orientation-independent (each canonical algorithm × 24 whole-cube rotations), so the same finger pattern is recognized on any face pair.
 
 | Spell | Algorithm | CFOP role | Effect |
 |-------|-----------|-----------|--------|
 | sexy-move | R U R' U' | F2L trigger | Toggle sequential/polyphonic; SWAM bow sweep |
-| sledgehammer | R' F R F' | F2L trigger | Toggle freeze (sustain + ignore turns) |
 | oll-cross | F R U R' U' F' | 2-look OLL edges | Variant → drone; SWAM harmonic ping |
-| sune | R U R' U R U2 R' | 2-look OLL corners | Palette → V2 (dark / sul tasto) |
+| sune | R U R' U R U2 R' | 2-look OLL corners | Toggle freeze (sustain + ignore turns) |
 | anti-sune | R U2 R' U' R U' R' | 2-look OLL inverse corners | Palette → V1 (bright) |
 | u-perm | R U' R U R U R U' R' U' R2 | 2-look PLL edges | Variant → burst; SWAM staccato burst |
 | t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 2-look PLL corners+edges | Reset palette + variant |

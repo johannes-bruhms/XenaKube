@@ -38,9 +38,9 @@ Nomos Alpha was the first composition to use group theory (specifically the rota
 | Feature | Rationale |
 |---------|-----------|
 | Physical Rubik's cube as input device | Xenakis composed a fixed score; we make it a live instrument. The cube's S4 symmetry is the same group Xenakis used. |
-| Spell detection (Rubik's algorithm recognition) | Known algorithms (sexy-move, sledgehammer, sune, T-perm, etc.) serve as gestural "words" the performer can deliberately execute. Maps finger-pattern vocabulary onto mode changes. |
+| Spell detection (Rubik's algorithm recognition) | Known algorithms (sexy-move, sune, T-perm, etc.) serve as gestural "words" the performer can deliberately execute. Maps finger-pattern vocabulary onto mode changes. |
 | Orientation-independent spell matching | A cuber's muscle memory is face-relative. Expanding each algorithm to all 24 rotations means a sexy-move pattern works on any face pair. |
-| CFOP-minimal spell book (7 spells) | The spell book is restricted to the fundamentals needed to solve any state under CFOP (2-look OLL + 2-look PLL): sexy-move and sledgehammer as F2L triggers, oll-cross / sune / anti-sune for OLL, u-perm / t-perm for PLL. Keeps the vocabulary tight so each spell is memorable and distinct under rotation expansion. |
+| CFOP-minimal spell book (6 spells) | The spell book is restricted to the fundamentals needed to solve any state under CFOP (2-look OLL + 2-look PLL): sexy-move as F2L trigger, oll-cross / sune / anti-sune for OLL, u-perm / t-perm for PLL. Keeps the vocabulary tight so each spell is memorable and distinct under rotation expansion. The 4-move sledgehammer was intentionally dropped — too easy to hit accidentally; the freeze-toggle effect it carried moved to the 7-turn sune, which requires deliberate finger commitment. |
 | Gyro → S4 snap (continuous → discrete) | The cube's physical orientation in 3D maps to the nearest of the 24 S4 rotations via quaternion dot product. This bridges continuous gesture and discrete group math. |
 | Expression parameters (tilt, spin, deviation, scramble) | Continuous gyro-derived values for real-time sound control. Deviation = how far from the nearest S4 snap; scramble = BFS distance from identity. |
 | Scramble factor as meta-parameter | BFS distance from identity in the S4 Cayley graph. Diameter is ≤6 (small group). Normalized 0–1. "How far from solved" as a musical parameter. |
@@ -253,7 +253,9 @@ No complete bar-by-bar analysis exists. Closest resources:
 
 ## SWAM Cello Mapping Design
 
-Xenakis' C1–C8 complex types are cello techniques. SWAM Cello 3 (Audio Modeling) is a physical-modeling VST that exposes the same parameters as continuous MIDI CC — a natural fit for XenaKube's OSC output via a Max/MSP bridge patch.
+Xenakis' C1–C8 complex types are cello techniques. SWAM Cello 3 (Audio Modeling) is a physical-modeling VST that exposes parameters as a mix of **Key Switches** (techniques — Play Mode, Harmonics, Tremolo, etc.) and **MIDI CC** (continuous — Expression, Bow Position, Vibrato). See `docs/swam_cello_reference.md` for the full KS/CC authority.
+
+**The bridge mapping below documents the v2 design (currently shipping); it has structural mismatches with SWAM's actual control model — tracked in `docs/revision_roadmap.md` for a phased refactor.** Known gaps: Play Mode is KS C + velocity (not separate ARCO/PIZZ notes); Harmonics/Tremolo are KS latch toggles on A/A# (not the CCs 22/92 currently used); Expression should be per-complex-envelope (not 60 Hz tilt-driven); Vibrato Rate default is CC 19 (not 76).
 
 ### Complex Type → SWAM Phrase (v2)
 

@@ -127,28 +127,23 @@ export function expandSpellBook(canonical: Spell[]): Spell[] {
 // Canonical algorithms — one representative orientation each.
 // The detector expands these into all 24 rotation variants automatically.
 
-// Minimal CFOP fundamentals — 7 spells covering the essential vocabulary
+// Minimal CFOP fundamentals — 6 spells covering the essential vocabulary
 // needed to solve any state using 2-look OLL + 2-look PLL.
 //
-//   F2L triggers:   sexy-move, sledgehammer
+//   F2L trigger:    sexy-move
 //   2-look OLL:     oll-cross (edges), sune + anti-sune (corners)
 //   2-look PLL:     t-perm (corners+edges), u-perm (3-edge cycle)
 //
 // Inverse-sexy (U R U' R') is a rotation variant of sexy-move and is
-// detected as such. Hedgeslammer (F R' F' R) is the inverse of sledgehammer
-// and is not separately included — rotation variants of sledgehammer cover
-// the common face-pair equivalents.
+// detected as such. The 4-move sledgehammer was removed in favor of the
+// 7-turn sune for the freeze-toggle effect — a more deliberate gesture
+// that's less prone to accidental triggering mid-phrase.
 export const CANONICAL_SPELLS: Spell[] = [
-  // --- F2L building blocks (4 moves) ---
+  // --- F2L building block (4 moves) ---
   {
     name: 'sexy-move',
     algorithm: ['R', 'U', "R'", "U'"],
     effect: 'sexy-move',
-  },
-  {
-    name: 'sledgehammer',
-    algorithm: ["R'", 'F', 'R', "F'"],
-    effect: 'sledgehammer',
   },
 
   // --- 2-look OLL (edges, then corners) ---
@@ -178,6 +173,14 @@ export const CANONICAL_SPELLS: Spell[] = [
     name: 't-perm',
     algorithm: ['R', 'U', "R'", "U'", "R'", 'F', 'R2', "U'", "R'", "U'", 'R', 'U', "R'", "F'"],
     effect: 't-perm',
+  },
+
+  // --- Commutator family (counterweight to CFOP) ---
+  // Niklas: archetypal 3-cycle corner commutator. See revision_roadmap.md D19.
+  {
+    name: 'niklas',
+    algorithm: ['R', "U'", "L'", 'U', "R'", "U'", 'L'],
+    effect: 'niklas',
   },
 ];
 

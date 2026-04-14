@@ -6,7 +6,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, getBuiltinDiagrams } = require('./src/index.ts');
+const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, getBuiltinDiagrams } = require('./src/index.ts');
 
 /*
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
@@ -254,8 +254,15 @@ engine.onSpell((match) => {
   console.log(`[SPELL] ${match.spell.name} (${match.spell.algorithm.join(' ')})`);
 });
 
-// Broadcast voice output
+// Broadcast voice output — and emit /xk/voice over OSC *only here* so it
+// fires on real voice transitions, not on every gyro packet (see D16).
 engine.onVoice((output) => {
+  const voiceMsgs = voiceToOsc(output);
+  for (const msg of voiceMsgs) {
+    oscSC.send(msg.address, ...msg.args);
+    oscMax.send(msg.address, ...msg.args);
+  }
+
   const payload = JSON.stringify({
     type: 'voice',
     data: output,
@@ -266,6 +273,14 @@ engine.onVoice((output) => {
     }
   });
 });
+
+/** Send /xk/panic to SC + Max (used on WS disconnect). Bridges/synth flush state. */
+function sendPanic() {
+  try {
+    oscSC.send('/xk/panic');
+    oscMax.send('/xk/panic');
+  } catch (e) { /* OSC may be closed; safe to ignore */ }
+}
 
 /** Broadcast engine state to all connected WS clients */
 function broadcastState(state, move) {
@@ -352,6 +367,9 @@ wss.on('connection', function connection(ws) {
 
     ws.on('close', () => {
       console.log("Client disconnected.");
+      // Deterministic cleanup: tell bridges to flush all notes/CCs.
+      // Covers the "cable unplugged → notes stuck in SWAM" case.
+      if (wss.clients.size === 0) sendPanic();
       scheduleShutdown();
     });
 

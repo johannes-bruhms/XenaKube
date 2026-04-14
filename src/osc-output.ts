@@ -64,13 +64,10 @@ export function stateToOsc(state: XenaKubeState): OscMessage[] {
   // Active vertex (0-7): the single vertex currently sounding
   msgs.push({ address: '/xk/active', args: [state.activeVertex] });
 
-  // Active vertex params + complex type in a single message for convenience
-  const av = state.kVertices[state.activeVertex];
-  const ac = state.cAssignments[state.activeVertex];
-  msgs.push({
-    address: '/xk/voice',
-    args: [state.activeVertex, ac, av.density, av.intensity, av.duration],
-  });
+  // NOTE: /xk/voice is NOT emitted in the state burst. It fires only on
+  // actual voice transitions via engine.onVoice (see relay.js). Emitting
+  // it here would replay per-gyro-packet (~10 Hz) and trigger SWAM phrases
+  // continuously even when the cube is still. See revision_roadmap.md D16.
 
   // Gyro snap (target S4 element + its quaternion + deviation 0..1)
   msgs.push({ address: '/xk/snap/element', args: [state.snapElement] });
@@ -109,4 +106,22 @@ export function expressionToOsc(expr: ExpressionState): OscMessage[] {
 /** Spell detection → single OSC message */
 export function spellToOsc(match: SpellMatch): OscMessage {
   return { address: '/xk/spell', args: [match.spell.name] };
+}
+
+/**
+ * Voice output → OSC message(s). One /xk/voice per active voice event.
+ * Called from relay's engine.onVoice listener — fires only on real turns,
+ * not per gyro packet.
+ */
+export function voiceToOsc(output: import('./voice-engine.js').VoiceOutput): OscMessage[] {
+  return output.active.map(ev => ({
+    address: '/xk/voice',
+    args: [
+      ev.vertexIndex,
+      ev.complex,
+      ev.params.density,
+      ev.params.intensity,
+      ev.params.duration,
+    ],
+  }));
 }

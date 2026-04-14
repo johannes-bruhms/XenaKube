@@ -1,22 +1,25 @@
 // ================================================================
-// xk_swam.js — XenaKube → SWAM Cello 3 MIDI bridge (v2)
+// xk_swam.js — XenaKube → SWAM Cello 3 MIDI bridge (v3)
 //
 // Receives /xk/* OSC from relay.js (port 57121) and outputs
 // midievent messages directly to [vst~] hosting SWAM Cello 3.
 //
-// v2: phrase generation, legato portamento, auto-release,
-//     velocity humanization, wider expression ranges.
+// v3 — refactored per docs/revision_roadmap.md Phases 0–5:
+//   • Panic watchdog + note cleanup (D17)
+//   • Full SWAM KS model with stateful toggle diffing (D1, D2, D12)
+//   • COMPLEX config table — single source of truth per voice (D5, D7)
+//   • Expression follows per-complex envelope, not gyro tilt (D4, D8)
+//   • Tilt → Bow Position modulation (timbral, not dynamic)
+//   • Vibrato: CC 19 rate, EMA + dead zone on spin (D3, D6)
+//   • 60 Hz CC deadband when cube is still (D18)
+//   • Spell CC restore via setupComplex(active) (D11, D13)
+//   • u-perm short-gate staccato instead of fake KS (D11)
+//   • Reset starts silent (D15)
 //
-// Max patch (4 objects):
-//
-//   [udpreceive 57121]
-//           |
-//   [v8 xk_swam.js @autowatch 1]
-//      |0              |1
-//   [vst~ "SWAM Cello 3" 2]    [print xk_swam]
-//      |         |
-//   [dac~ 1 2]
-//
+// Prerequisite: SWAM preset configured per revision_roadmap.md.
+// KS Octave = C0, Vibrato Rate CC 19, Bow Position CC 16,
+// Bow Pressure CC 17, Bow Pressure Accent CC 18, Bow Speed CC 20,
+// Attack Ramp CC 73, Attack Control CC 75.
 // ================================================================
 
 autowatch = 1;
@@ -24,122 +27,352 @@ inlets = 1;
 outlets = 2;  // 0 = midievent → vst~, 1 = debug → print
 
 // ================================================================
-// SWAM CC MAP
-// Adjust to match your SWAM Cello 3 MIDI CC assignments
+// CONFIG — must match SWAM preset
 // ================================================================
-var CC = {
-	EXPRESSION:      11,
-	BOW_PRESSURE:    17,
-	BOW_POSITION:    16,   // 0 = bridge (ponticello), 127 = fingerboard (tasto)
-	BOW_SPEED:       19,
-	VIBRATO_DEPTH:    1,
-	VIBRATO_RATE:    76,
-	PORTAMENTO_TIME:  5,
-	PORTAMENTO_ON:   65,   // 0 = off, 127 = on
-	HARMONICS:       22,   // 0 = off, >64 = on
-	TREMOLO:         92,
-	BOW_SENSITIVITY: 21,
-	ATTACK_RAMP:     73,
-	SUSTAIN_PEDAL:   64
-};
 
-// Keyswitches (low MIDI notes — verify in SWAM > Preferences > MIDI)
-var KS = {
-	ARCO:      24,   // C1
-	PIZZ:      25,   // C#1
-	TREMOLO:   26,   // D1
-	STACCATO:  27    // D#1
-};
-
-// ================================================================
-// MIDI CONSTANTS
-// ================================================================
+// Performance MIDI channel (notes + continuous CCs)
 var MIDI_CH = 1;
-var STATUS_NOTE_ON  = 0x90 + (MIDI_CH - 1);
-var STATUS_NOTE_OFF = 0x80 + (MIDI_CH - 1);
-var STATUS_CC       = 0xB0 + (MIDI_CH - 1);
 
-// ================================================================
-// INTENSITY → base expression + velocity
-// ================================================================
-var INTENSITY_MAP = {
-	"p":   { expr: 20, vel: 35 },
-	"mp":  { expr: 38, vel: 50 },
-	"mf":  { expr: 55, vel: 68 },
-	"f":   { expr: 75, vel: 85 },
-	"ff":  { expr: 95, vel: 100 },
-	"fff": { expr: 115, vel: 120 }
-};
+// Key Switch channel — set to whatever the SWAM preset uses.
+// Keep distinct from MIDI_CH so KS notes never overlap pitch input.
+var KS_CH = 2;
 
-var SIEVE_BASE = 36;  // MIDI 36 = C2 (cello open C)
-
-// SWAM Cello 3 playable range: C2 (36) — F6 (89).
-// All generated pitches are clamped to this window before note-on.
+// SWAM Cello 3 input pitch window (C2–F6; instrument auto-transposes –12)
 var CELLO_MIN = 36;
 var CELLO_MAX = 89;
+
+var SIEVE_BASE = 36;  // MIDI 36 = C2
+
+// ================================================================
+// CC MAP — numbers must match what's MIDI-Learned in the SWAM preset.
+// See docs/swam_cello_reference.md §9.
+// ================================================================
+var CC = {
+	EXPRESSION:       11,   // default-bound
+	VIBRATO_DEPTH:     1,   // default-bound
+	VIBRATO_RATE:     19,   // MIDI-Learn (Expressivity page)
+	PORTAMENTO_TIME:   5,   // default-bound
+	PORTAMENTO_ON:    65,   // default-bound
+	SUSTAIN_PEDAL:    64,   // default-bound
+	BOW_POSITION:     16,   // MIDI-Learn
+	BOW_PRESSURE:     17,   // MIDI-Learn
+	BOW_PRESS_ACCENT: 18,   // MIDI-Learn
+	BOW_SPEED:        20,   // MIDI-Learn (moved off 19 to free VIBRATO_RATE)
+	ATTACK_RAMP:      73,   // MIDI-Learn
+	ATTACK_CONTROL:   75    // MIDI-Learn
+};
+
+// ================================================================
+// FEATURE FLAGS — set false for params the running SWAM build doesn't
+// expose, OR whose v3.11 semantics don't match what this bridge writes.
+// Verified against SWAM Cello 3 v3.11 (2026-04-14):
+//   • HAS_BOW_SPEED       — no Bow Speed knob exists (never had one).
+//   • HAS_ATTACK_RAMP     — no Attack Ramp knob exists (never had one).
+//   • HAS_ATTACK_CONTROL  — v3.11 has an "Attack Control" param, but it's
+//                           a 4-MODE SELECTOR (vel.soft/vel.hard/expression/
+//                           mix vel. expr.), not a continuous 0–127 ramp.
+//                           Right answer: set it to "expression" or
+//                           "mix vel. expr." once in the preset — our
+//                           scheduleExprEnvelope already shapes CC 11 and
+//                           that drives attack character for free. Leave
+//                           the flag false so we don't write mode-switch
+//                           CCs from envelope code.
+// Flip any flag true only when both (a) the knob exists in your SWAM
+// build AND (b) its 0–127 range means what this bridge writes.
+// ================================================================
+var HAS_BOW_SPEED        = false;
+var HAS_ATTACK_RAMP      = false;
+var HAS_ATTACK_CONTROL   = false;
+var HAS_BOW_PRESS_ACCENT = true;   // flip false if MIDI-Learn is not wired
+
+function hasCC(ccNum) {
+	if (ccNum === CC.BOW_SPEED)        return HAS_BOW_SPEED;
+	if (ccNum === CC.ATTACK_RAMP)      return HAS_ATTACK_RAMP;
+	if (ccNum === CC.ATTACK_CONTROL)   return HAS_ATTACK_CONTROL;
+	if (ccNum === CC.BOW_PRESS_ACCENT) return HAS_BOW_PRESS_ACCENT;
+	return true;
+}
+
+// ================================================================
+// KEY SWITCHES — SWAM Cello 3 v3.10 mapping (KS Octave = C0, KS_CH).
+//
+// v3.10 moved most controls from latch-toggles to velocity-selectors,
+// and removed Sordino, Sul Tasto, Sul Ponticello, and Section Size
+// from the KS plane entirely:
+//   • Sordino   — GUI/CC-only in v3.10
+//   • Sul Tasto / Sul Pont — controlled via Bow Position (CC 16)
+//   • Section Size — concept removed
+//
+// Velocity-select KS use velForOption(idx, optionCount) so each value
+// lands inside SWAM's KS Velocity Remap bands (defaults to even 1..127
+// thirds/quarters depending on option count).
+//
+// PRE-v3.10 NOTE: prior versions of this file mapped SORDINO=30,
+// SUL_TASTO=31, SUL_PONT=32, HARMONICS=33, TREMOLO=34 — those notes
+// now mean Harmonics, Keep Bow Direction, Tremolo, Tremolo Mode, and
+// (unassigned base page) respectively. Hence the long-standing
+// "harmonics never fire" / "tremolo never fires" symptoms (D24): the
+// bridge was sending Tremolo Mode and an unassigned KS where it
+// thought it was sending Harmonics and Tremolo.
+// ================================================================
+var KS = {
+	PLAY_MODE:     24,   // C   3-opt: Bow / Pizz / Col Legno
+	MANUAL_BOWING: 25,   // C#  preset-controlled (Tremolo or BowChange) — never write
+	GESTURE_MODE:  26,   // D   3-opt: Expression / Bipolar / Bowing — pin to Expression
+	ALT_FINGERING: 27,   // D#  3-opt: Mid / Bridge / Nut+Open
+	BOW_LIFT:      28,   // E   2-opt: Off String / On String
+	BOW_START:     29,   // F   2-opt: Down / Up
+	HARMONICS:     30,   // F#  4-opt: OFF / 2 (oct) / 3 (oct+5th) / 4 Control
+	KEEP_BOW_DIR:  31,   // G   latch — avoid (disrupts gliss alternation)
+	TREMOLO:       32,   // G#  3-opt: OFF / Slow / Fast
+	TREMOLO_MODE:  33,   // A   3-opt: Hz / Sync / Sync/Acc
+	// A# (34) unassigned base page (only meaningful as B+A# = Double Hold String Sel)
+	PAGE_MOD:      35    // B   modifier — hold + another KS for Bow Polyphony / Pizz Poly
+};
+var KS_HOLD_MS = 50;
+
+// Map a 0..(optionCount-1) selector index onto the centre of SWAM's
+// KS Velocity Remap band for that option count.
+function velForOption(idx, optionCount) {
+	var band = 127 / optionCount;
+	return clamp(Math.round(band * (idx + 0.5)), 1, 127);
+}
+
+// Harmonics enum (matches COMPLEX[n].harmonics; 4-option KS F#)
+var HARMONICS = { OFF:0, OCT:1, OCT_5TH:2, CTRL:3 };
+// Tremolo enum (matches COMPLEX[n].tremolo; 3-option KS G#)
+var TREMOLO   = { OFF:0, SLOW:1, FAST:2 };
+// Gesture Mode (3-option KS D — pinned to EXPR at init, never modulated)
+var GESTURE   = { EXPR:0, BIPOLAR:1, BOWING:2 };
+
+// Play Mode velocities — preset-tuned values that already work in our
+// running SWAM. (KS_VEL_LEGACY constants kept for back-compat.)
+var KS_VEL = { LOW: 40, MID: 80, HIGH: 110 };
+var PLAY_MODE_VEL = { bow: KS_VEL.LOW, pizz: KS_VEL.MID, col: KS_VEL.HIGH };
+
+// ================================================================
+// INTENSITY → Expression peak, note velocity, bow-pressure scalar,
+// density scalar. bowMult multiplies the complex's baseline bowPressure
+// (fff digs harder). density scales per-phrase note count.
+// ================================================================
+var INTENSITY_MAP = {
+	"p":   { expr: 20,  vel: 35,  bowMult: 0.70, density: 0.6 },
+	"mp":  { expr: 38,  vel: 50,  bowMult: 0.85, density: 0.8 },
+	"mf":  { expr: 55,  vel: 68,  bowMult: 1.00, density: 1.0 },
+	"f":   { expr: 75,  vel: 85,  bowMult: 1.15, density: 1.2 },
+	"ff":  { expr: 95,  vel: 100, bowMult: 1.30, density: 1.4 },
+	"fff": { expr: 115, vel: 120, bowMult: 1.45, density: 1.7 }
+};
+
+// ================================================================
+// COMPLEX TABLE — one record per complex type, single source of truth
+// (D5). setupComplex(n) diffs each field against current state and only
+// fires KS / writes CC on change.
+// ================================================================
+// harmonics: 0=OFF, 1=octave (+12), 2=oct+5th (+19), 3=4 Control
+// tremolo:   0=OFF, 1=Slow,         2=Fast
+var COMPLEX = {
+	1: { playMode:"pizz", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
+	     exprEnv:{ attack:1.0, peak:1.0, sustain:0.4, release:0.0 },
+	     vibrato:{ depth:0, rate:64 }, bowPos:null,
+	     bowPressure:64, portamento:{ on:false, time:0 },
+	     attackRamp:10, attackCtrl:110,
+	     register:{ lo:36, hi:72 } },
+	2: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
+	     exprEnv:{ attack:0.6, peak:1.0, sustain:0.85, release:0.4 },
+	     vibrato:{ depth:35, rate:50 }, bowPos:70,
+	     bowPressure:70, portamento:{ on:false, time:0 },
+	     attackRamp:40, attackCtrl:55,
+	     register:{ lo:40, hi:64 } },
+	3: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
+	     exprEnv:{ attack:0.5, peak:1.1, sustain:0.9, release:0.6 },
+	     vibrato:{ depth:60, rate:45 }, bowPos:110,
+	     bowPressure:55, portamento:{ on:false, time:0 },
+	     attackRamp:85, attackCtrl:30,
+	     register:{ lo:36, hi:55 } },
+	// C4: now actually fires Harmonics in v3.10 (KS F#, vel-select).
+	// OCT (+1 octave) is the most musically usable — OCT_5TH is brittle
+	// at the cello's high register.
+	4: { playMode:"bow", harmonics:HARMONICS.OCT, tremolo:TREMOLO.OFF,
+	     exprEnv:{ attack:0.7, peak:0.75, sustain:0.6, release:0.3 },
+	     vibrato:{ depth:10, rate:60 }, bowPos:85,
+	     bowPressure:30, portamento:{ on:false, time:0 },
+	     attackRamp:30, attackCtrl:20,
+	     register:{ lo:60, hi:84 } },
+	5: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
+	     exprEnv:{ attack:0.9, peak:1.1, sustain:0.7, release:0.3 },
+	     vibrato:{ depth:25, rate:70 }, bowPos:55,
+	     bowPressure:70, portamento:{ on:true, time:50 },
+	     attackRamp:30, attackCtrl:90,
+	     register:{ lo:36, hi:84 } },
+	6: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
+	     exprEnv:{ attack:0.7, peak:1.0, sustain:0.85, release:0.4 },
+	     vibrato:{ depth:40, rate:50 }, bowPos:64,
+	     bowPressure:70, portamento:{ on:true, time:80 },
+	     attackRamp:50, attackCtrl:50,
+	     register:{ lo:43, hi:67 } },
+	7: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
+	     exprEnv:{ attack:0.4, peak:1.05, sustain:0.9, release:0.7 },
+	     vibrato:{ depth:55, rate:40 }, bowPos:115,
+	     bowPressure:55, portamento:{ on:true, time:115 },
+	     attackRamp:90, attackCtrl:25,
+	     register:{ lo:36, hi:52 } },
+	// C8: now actually fires Tremolo in v3.10 (KS G#, vel-select). FAST
+	// is the spectral-aggressive ponticello character we want.
+	8: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.FAST,
+	     exprEnv:{ attack:0.9, peak:1.15, sustain:1.0, release:0.3 },
+	     vibrato:{ depth:15, rate:80 }, bowPos:5,
+	     bowPressure:100, portamento:{ on:false, time:0 },
+	     attackRamp:20, attackCtrl:100,
+	     register:{ lo:60, hi:81 } }
+};
+
+// Regime → attack-ramp multiplier (single source per D7)
+var REGIME_ATTACK_MULT = { contemplative:1.2, conversational:1.0, burst:0.5 };
+
+// Complexes whose phrases use legatoNote(): preserve the previous phrase's
+// tail note across cancelPhrase() so noteOn-before-noteOff overlap
+// triggers SWAM portamento. Pizz (C1), harmonics (C4), and the ponticello
+// cluster (C8) are re-bow / short-gate, not legato.
+var LEGATO_COMPLEX = { 2:true, 3:true, 5:true, 6:true, 7:true };
 
 // ================================================================
 // STATE
 // ================================================================
 var state = {
 	activeComplex: 0,
+	// SWAM selector state (for diff-fire of velocity-select KS, v3.10)
+	playMode: null,         // null|"bow"|"pizz"|"col"
+	harmonics: HARMONICS.OFF,    // 0..3 (KS F#)
+	tremolo:   TREMOLO.OFF,      // 0..2 (KS G#)
+	gestureMode: GESTURE.EXPR,   // pinned to EXPR; never modulated
+	altFing: 0,                  // 0..2 (KS D#) — currently unused
+	keepBowDir: false,           // KS G latch — never written by us
+
 	sieve: [36, 37, 39, 41, 43, 44, 48],
 	sieveIdx: 0,
 	sieveDir: 1,
 	path: "V1",
 	tetra: 0,
 	regime: "contemplative",
-	activeNotes: [],     // array of currently sounding MIDI pitches
 	frozen: false,
 	transpose: 0,
 	scramble: 0,
-	turnCount: 0,        // for accent patterns
-	lastTurnTime: 0,     // for gap detection
-	baseExpr: 55,        // current intensity-derived expression baseline
-	tiltExpr: -1,        // last 60Hz tilt value (-1 = not set)
+	activeNotes: [],
+	turnCount: 0,
+	lastTurnTime: 0,
+	lastVoiceTime: 0,        // for panic watchdog
+	baseExpr: 55,
+	peakExpr: 55,            // complex.exprEnv.peak * INTENSITY.expr * pathScale
 	density: 2.0,
-	duration: 1.0
+	duration: 1.0,
+	intensity: "mf",         // last received intensity label (phrase density lookup)
+	bowPressureBase: 64,     // effective bow-pressure baseline = complex × intensity.bowMult
+
+	// Continuous expression inputs
+	tilt: 0.5,
+	spin: 0,
+	spinEMA: 0,
+	dev: 0,
+	devEMA: 0,
+	spinLowSince: 0,         // timestamp when spin first dropped below deadband
+	frame60: 0               // 60 Hz counter for 30 Hz throttle
 };
 
 var ccCache = {};
-var phraseTasks = [];    // scheduled phrase note events
-var releaseTask = null;  // auto-release timer
+var phraseTasks = [];
+var releaseTask = null;
+var watchdogTask = null;
 
 // ================================================================
 // MIDI OUTPUT
 // ================================================================
+function statusNoteOn(ch)  { return 0x90 + (ch - 1); }
+function statusNoteOff(ch) { return 0x80 + (ch - 1); }
+function statusCC(ch)      { return 0xB0 + (ch - 1); }
+
 function noteOn(pitch, vel) {
 	pitch = clamp(pitch, 0, 127);
 	vel = clamp(vel, 1, 127);
-	outlet(0, "midievent", STATUS_NOTE_ON, pitch, vel);
+	outlet(0, "midievent", statusNoteOn(MIDI_CH), pitch, vel);
 }
 
 function noteOff(pitch) {
 	pitch = clamp(pitch, 0, 127);
-	outlet(0, "midievent", STATUS_NOTE_OFF, pitch, 0);
+	outlet(0, "midievent", statusNoteOff(MIDI_CH), pitch, 0);
 }
 
+// Continuous CC — cache-suppressed. Use for 60 Hz streams.
 function cc(num, val) {
+	if (!hasCC(num)) return;
 	val = clamp(Math.round(val), 0, 127);
 	if (ccCache[num] === val) return;
 	ccCache[num] = val;
-	outlet(0, "midievent", STATUS_CC, num, val);
+	outlet(0, "midievent", statusCC(MIDI_CH), num, val);
 }
 
+// Forced CC — always writes, updates cache. Use for envelopes, spell
+// transients, and setup baselines where cache coherence with SWAM must
+// be re-established (D13).
 function ccForce(num, val) {
+	if (!hasCC(num)) return;
 	val = clamp(Math.round(val), 0, 127);
 	ccCache[num] = val;
-	outlet(0, "midievent", STATUS_CC, num, val);
+	outlet(0, "midievent", statusCC(MIDI_CH), num, val);
 }
 
-function keyswitch(note) {
-	// Send with slight sustain so SWAM registers the switch
-	outlet(0, "midievent", STATUS_NOTE_ON, note, 100);
+// Key Switch — sent on KS_CH, held KS_HOLD_MS.
+// Note-off uses the SAME velocity as note-on (not 0). SWAM's velocity-
+// select KS reads velocity at note-off as well; a vel-0 note-off gets
+// interpreted as "option 0 = OFF", which flipped harmonics (C4) and
+// tremolo (C8) back off ~50 ms after each turn into those complexes.
+// Play Mode escaped notice because "bow" is option 0 anyway.
+function keyswitch(note, vel, channel) {
+	var ch = channel || KS_CH;
+	var v = vel || KS_VEL.HIGH;
+	outlet(0, "midievent", statusNoteOn(ch), note, v);
 	var ks = note;
+	var kch = ch;
+	var kv = v;
 	var t = new Task(function() {
-		outlet(0, "midievent", STATUS_NOTE_OFF, ks, 0);
+		outlet(0, "midievent", statusNoteOff(kch), ks, kv);
 	}, this);
-	t.schedule(30);
+	t.schedule(KS_HOLD_MS);
+}
+
+// ================================================================
+// SELECTOR PRIMITIVES — stateful diffing (D1, D12, D27)
+//
+// v3.10 model: most controls are velocity-select. State is the current
+// option index; setEnum diff-fires only on change.
+// ================================================================
+
+// Play Mode keeps the legacy preset-tuned velocities (40/80/110) since
+// they're known-good in the current SWAM preset.
+function setPlayMode(target) {
+	if (state.playMode === target) return;
+	var vel = PLAY_MODE_VEL[target];
+	if (vel == null) return;
+	keyswitch(KS.PLAY_MODE, vel);
+	state.playMode = target;
+}
+
+// Generic velocity-select KS — picks vel by option index via velForOption
+// so it lands inside SWAM's KS Velocity Remap band for that option count.
+function setEnum(field, ks, target, optionCount) {
+	if (state[field] === target) return;
+	keyswitch(ks, velForOption(target, optionCount));
+	state[field] = target;
+}
+
+// ================================================================
+// SCHEDULING
+// ================================================================
+function scheduleAt(ms, fn) {
+	var t = new Task(fn, this);
+	t.schedule(ms);
+	phraseTasks.push(t);
+	return t;
 }
 
 // Kill all sounding notes
@@ -150,15 +383,33 @@ function allNotesOff() {
 	state.activeNotes = [];
 }
 
-// Cancel all scheduled phrase events
-function cancelPhrase() {
+// Cancel scheduled phrase events and release sounding notes.
+// Per D17 — releasing notes prevents orphans when pending noteOffs get
+// cancelled along with the rest of phraseTasks.
+//
+// When `preserveLegatoTail` is true, the MOST RECENT active note is kept
+// alive so the next phrase's first `legatoNote()` can overlap it (20 ms
+// noteOn-before-noteOff) and trigger SWAM portamento. All earlier notes
+// are still released to protect against stuck-note accumulation across
+// fast turn sequences. handleVoice passes true for legato complexes.
+function cancelPhrase(preserveLegatoTail) {
 	for (var i = 0; i < phraseTasks.length; i++) {
 		phraseTasks[i].cancel();
 	}
 	phraseTasks = [];
+
+	if (preserveLegatoTail && state.activeNotes.length > 0) {
+		var tail = state.activeNotes[state.activeNotes.length - 1];
+		for (var j = 0; j < state.activeNotes.length - 1; j++) {
+			noteOff(state.activeNotes[j]);
+		}
+		state.activeNotes = [tail];
+	} else {
+		allNotesOff();
+	}
 }
 
-// Schedule auto-release after duration (seconds)
+// Schedule release + fade at end of phrase duration (seconds).
 function scheduleRelease(dur) {
 	if (releaseTask) {
 		releaseTask.cancel();
@@ -166,10 +417,9 @@ function scheduleRelease(dur) {
 	}
 	var ms = Math.max(dur * 1000, 200);
 	releaseTask = new Task(function() {
-		// Fade out expression before note-off for natural decay
 		var fadeSteps = 5;
 		var fadeTime = 80;
-		var startExpr = ccCache[CC.EXPRESSION] || 64;
+		var startExpr = ccCache[CC.EXPRESSION] || 0;
 
 		function fadeStep(step) {
 			if (step >= fadeSteps) {
@@ -189,102 +439,88 @@ function scheduleRelease(dur) {
 }
 
 // ================================================================
+// EXPRESSION ENVELOPE (D8)
+// peak = INTENSITY.expr * pathScale; shape comes from complex.exprEnv.
+// ================================================================
+function scheduleExprEnvelope(peakExpr, env, durMs) {
+	// Attack: first write immediately
+	ccForce(CC.EXPRESSION, Math.round(peakExpr * env.attack));
+
+	// Peak at ~25% of duration
+	var peakAt = Math.max(60, Math.round(durMs * 0.25));
+	scheduleAt(peakAt, function() {
+		ccForce(CC.EXPRESSION, Math.round(peakExpr * env.peak));
+	});
+
+	// Sustain level at 70%
+	var sustainAt = Math.max(peakAt + 40, Math.round(durMs * 0.70));
+	scheduleAt(sustainAt, function() {
+		ccForce(CC.EXPRESSION, Math.round(peakExpr * env.sustain));
+	});
+	// Release is handled by scheduleRelease()'s fade.
+}
+
+// ================================================================
 // HUMANIZATION
 // ================================================================
 function humanVel(base) {
-	// ±15% random variation + slight accent every 3rd/4th turn
 	var jitter = (Math.random() - 0.5) * 0.3 * base;
 	var accent = (state.turnCount % 3 === 0) ? 8 : 0;
 	return clamp(Math.round(base + jitter + accent), 20, 127);
 }
 
 function humanPitch(pitch) {
-	// Occasionally (10%) shift by ±1 semitone for microtonal color
-	if (Math.random() < 0.1) {
-		pitch += (Math.random() < 0.5) ? -1 : 1;
-	}
+	if (Math.random() < 0.1) pitch += (Math.random() < 0.5) ? -1 : 1;
 	return clamp(pitch, CELLO_MIN, CELLO_MAX);
 }
 
 function humanDelay() {
-	// 0-30ms random micro-delay for natural feel
 	return Math.floor(Math.random() * 30);
 }
 
 // ================================================================
-// COMPLEX TYPE SETUPS
+// COMPLEX SETUP — diffs every field; baseline CCs written with ccForce
+// so cache re-aligns with SWAM even after spell mutations (D13).
 // ================================================================
 function setupComplex(complexType) {
+	var cmx = COMPLEX[complexType];
+	if (!cmx) return;
 	state.activeComplex = complexType;
 	log("complex -> C" + complexType);
 
-	// Reset technique CCs
-	cc(CC.HARMONICS, 0);
-	cc(CC.TREMOLO, 0);
-	cc(CC.PORTAMENTO_ON, 0);
-	cc(CC.PORTAMENTO_TIME, 0);
+	// Play Mode (velocity-select KS)
+	setPlayMode(cmx.playMode);
 
-	switch (complexType) {
-		case 1:  // C1: Pizzicato cloud
-			keyswitch(KS.PIZZ);
-			cc(CC.ATTACK_RAMP, 10);
-			break;
+	// Harmonics (4-opt) and Tremolo (3-opt) — v3.10 vel-select on KS F#/G#.
+	// setEnum diffs against state.{harmonics,tremolo} so we never re-fire
+	// when the new complex shares the previous value.
+	setEnum("harmonics", KS.HARMONICS, cmx.harmonics, 4);
+	setEnum("tremolo",   KS.TREMOLO,   cmx.tremolo,   3);
 
-		case 2:  // C2: Bowed ascending/descending (legato)
-			keyswitch(KS.ARCO);
-			cc(CC.BOW_POSITION, 70);
-			cc(CC.BOW_SPEED, 80);
-			cc(CC.ATTACK_RAMP, 40);
-			state.sieveIdx = 0;
-			state.sieveDir = 1;
-			break;
+	// Baseline CCs (forced — setup is authoritative). bow pressure is
+	// applied at the complex baseline here; handleVoice then overrides
+	// with intensity × bowMult so fff digs harder than p.
+	if (cmx.bowPos != null) ccForce(CC.BOW_POSITION, cmx.bowPos);
+	state.bowPressureBase = cmx.bowPressure;
+	ccForce(CC.BOW_PRESSURE, cmx.bowPressure);
 
-		case 3:  // C3: Sustained dark legato
-			keyswitch(KS.ARCO);
-			cc(CC.BOW_POSITION, 110);  // sul tasto
-			cc(CC.BOW_SPEED, 25);
-			cc(CC.ATTACK_RAMP, 80);    // slow attack
-			break;
+	// Portamento
+	ccForce(CC.PORTAMENTO_ON,   cmx.portamento.on ? 127 : 0);
+	ccForce(CC.PORTAMENTO_TIME, cmx.portamento.time);
 
-		case 4:  // C4: Harmonics
-			keyswitch(KS.ARCO);
-			cc(CC.HARMONICS, 127);
-			cc(CC.BOW_POSITION, 85);
-			cc(CC.BOW_PRESSURE, 30);   // light pressure for harmonics
-			break;
+	// Attack ramp & control (single source; regime scales ramp)
+	var mult = REGIME_ATTACK_MULT[state.regime] || 1.0;
+	ccForce(CC.ATTACK_RAMP,    clamp(Math.round(cmx.attackRamp * mult), 0, 127));
+	ccForce(CC.ATTACK_CONTROL, cmx.attackCtrl);
 
-		case 5:  // C5: Wild glissando (portamento, big jumps)
-			keyswitch(KS.ARCO);
-			cc(CC.PORTAMENTO_ON, 127);
-			cc(CC.PORTAMENTO_TIME, 50);
-			cc(CC.BOW_POSITION, 55);
-			cc(CC.ATTACK_RAMP, 30);
-			break;
+	// Vibrato baseline (rate; depth may be modulated by spin)
+	ccForce(CC.VIBRATO_RATE, cmx.vibrato.rate);
+	ccForce(CC.VIBRATO_DEPTH, vibDepthForComplex(cmx));
 
-		case 6:  // C6: Ordered glissando (stepwise slides)
-			keyswitch(KS.ARCO);
-			cc(CC.PORTAMENTO_ON, 127);
-			cc(CC.PORTAMENTO_TIME, 80);
-			cc(CC.BOW_POSITION, 64);
-			cc(CC.ATTACK_RAMP, 50);
-			state.sieveIdx = 0;
-			state.sieveDir = 1;
-			break;
-
-		case 7:  // C7: Sustained sliding (slow portamento, sul tasto)
-			keyswitch(KS.ARCO);
-			cc(CC.PORTAMENTO_ON, 127);
-			cc(CC.PORTAMENTO_TIME, 115);
-			cc(CC.BOW_POSITION, 115);
-			cc(CC.ATTACK_RAMP, 90);
-			break;
-
-		case 8:  // C8: Sul ponticello tremolo
-			keyswitch(KS.ARCO);
-			cc(CC.BOW_POSITION, 5);    // very near bridge
-			cc(CC.TREMOLO, 110);
-			cc(CC.BOW_PRESSURE, 100);
-			break;
+	// Sieve reset for ordered phrase generators
+	if (complexType === 2 || complexType === 6) {
+		state.sieveIdx = 0;
+		state.sieveDir = 1;
 	}
 }
 
@@ -293,254 +529,242 @@ function setupComplex(complexType) {
 // ================================================================
 function pickPitch(complexType) {
 	var s = state.sieve;
-	if (s.length === 0) return 36 + state.transpose;
+	var cmx = COMPLEX[complexType];
+	var reg = cmx && cmx.register;
+	var lo, hi;
+	if (reg) {
+		// V2 widens the usable floor down an octave (keeps the bass-drone
+		// feel of C3/C7 real); C4/C8 stay high.
+		var shift = (state.path === "V2") ? -12 : 0;
+		lo = Math.max(24, reg.lo + shift);
+		hi = Math.min(CELLO_MAX, reg.hi);
+	}
+	if (s.length === 0) return foldToRange(36 + state.transpose, lo, hi);
 
 	var pitch;
 	switch (complexType) {
-		case 1:   // ataxic: random
-		case 4:   // harmonics: random high
-		case 5:   // wild gliss: random jump
+		case 1: case 4: case 5:
 			pitch = s[Math.floor(Math.random() * s.length)];
 			break;
 
-		case 2:   // ascending/descending
-		case 6:   // ordered gliss
+		case 2: case 6:
 			pitch = s[state.sieveIdx];
 			state.sieveIdx += state.sieveDir;
-			if (state.sieveIdx >= s.length) {
-				state.sieveIdx = s.length - 2;
-				state.sieveDir = -1;
-			}
-			if (state.sieveIdx < 0) {
-				state.sieveIdx = 1;
-				state.sieveDir = 1;
-			}
+			if (state.sieveIdx >= s.length) { state.sieveIdx = s.length - 2; state.sieveDir = -1; }
+			if (state.sieveIdx < 0)         { state.sieveIdx = 1;              state.sieveDir = 1;  }
 			state.sieveIdx = clamp(state.sieveIdx, 0, s.length - 1);
 			break;
 
-		case 3:   // sustained: center
-		case 7:   // sul tasto: center
-		case 8:   // ponticello: center
+		case 3: case 7: case 8:
 			pitch = s[Math.floor(s.length / 2)];
 			break;
 
 		default:
 			pitch = s[0];
 	}
-
-	return foldToRange(pitch + state.transpose);
+	return foldToRange(pitch + state.transpose, lo, hi);
 }
 
-// Pick N distinct pitches from sieve
-function pickPitches(n) {
-	var s = state.sieve;
-	if (s.length === 0) return [foldToRange(36 + state.transpose)];
-	var pool = s.slice();
-	// Shuffle
-	for (var i = pool.length - 1; i > 0; i--) {
-		var j = Math.floor(Math.random() * (i + 1));
-		var tmp = pool[i]; pool[i] = pool[j]; pool[j] = tmp;
-	}
-	var result = [];
-	for (var k = 0; k < Math.min(n, pool.length); k++) {
-		result.push(foldToRange(pool[k] + state.transpose));
-	}
-	return result;
-}
-
-// Fold a pitch into the cello range by octave transposition.
-// Prefer shifting by full octaves (preserves pitch class from the sieve)
-// rather than hard-clamping, which would collapse many notes to CELLO_MIN/MAX.
-function foldToRange(pitch) {
-	while (pitch < CELLO_MIN) pitch += 12;
-	while (pitch > CELLO_MAX) pitch -= 12;
-	// Safety clamp in case the window is ever smaller than an octave.
-	return clamp(pitch, CELLO_MIN, CELLO_MAX);
+// D9 fix: V2 can reach the cello's lowest octave. Accepts optional per-
+// complex bounds to bias the pitch register.
+function foldToRange(pitch, lo, hi) {
+	if (lo == null) lo = (state.path === "V2") ? 24 : CELLO_MIN;
+	if (hi == null) hi = CELLO_MAX;
+	while (pitch < lo) pitch += 12;
+	while (pitch > hi) pitch -= 12;
+	return clamp(pitch, lo, hi);
 }
 
 // ================================================================
-// LEGATO NOTE — sends noteOn BEFORE noteOff for portamento
+// LEGATO — noteOn before noteOff (20 ms overlap) for SWAM portamento
 // ================================================================
 function legatoNote(pitch, vel) {
 	var oldNotes = state.activeNotes.slice();
 	noteOn(pitch, vel);
 	state.activeNotes.push(pitch);
 
-	// Release old notes AFTER new note is sounding (20ms overlap for SWAM legato)
 	if (oldNotes.length > 0) {
-		var t = new Task(function() {
+		scheduleAt(20, function() {
 			for (var i = 0; i < oldNotes.length; i++) {
 				noteOff(oldNotes[i]);
 				var idx = state.activeNotes.indexOf(oldNotes[i]);
 				if (idx >= 0) state.activeNotes.splice(idx, 1);
 			}
-		}, this);
-		t.schedule(20);
-		phraseTasks.push(t);
+		});
 	}
 }
 
 // ================================================================
-// PHRASE GENERATORS — one per complex type family
-// Each turn triggers a musical gesture, not just a single note.
+// PHRASE GENERATORS — one per complex (expression handled by envelope)
 // ================================================================
 
-// C1: Pizzicato cloud — 2-5 short plucked notes scattered in time
+// Stochastic note-count per phrase. Scales baseLo/baseHi by the current
+// intensity's density multiplier and by live density state (0.5–5ish).
+function phraseCount(baseLo, baseHi) {
+	var intMap = INTENSITY_MAP[state.intensity] || INTENSITY_MAP["mf"];
+	var iMult = intMap.density;
+	var dMult = clamp(0.6 + state.density * 0.25, 0.6, 1.8);
+	var lo = Math.max(1, Math.round(baseLo * iMult));
+	var hi = Math.max(lo, Math.round(baseHi * iMult * dMult));
+	return rrand(lo, hi);
+}
+
+function intensityDensity() {
+	var intMap = INTENSITY_MAP[state.intensity] || INTENSITY_MAP["mf"];
+	return intMap.density;
+}
+
+// C1: Pizzicato cloud — short plucked notes, no legato
 function phraseC1(vel, dur) {
-	var count = rrand(2, Math.min(5, Math.max(2, Math.round(state.density + 1))));
-	var spread = Math.min(dur * 1000, 600);  // spread over up to 600ms
+	var count = phraseCount(2, 5);
+	var spread = Math.min(dur * 1000, 700);
 
 	for (var i = 0; i < count; i++) {
 		(function(idx) {
-			var delay = idx === 0 ? 0 : rrand(30, Math.round(spread));
-			var t = new Task(function() {
+			var delay = idx === 0 ? 0 : rrand(20, Math.round(spread));
+			scheduleAt(delay, function() {
 				var p = humanPitch(pickPitch(1));
 				var v = humanVel(vel);
-				// Pizzicato: short gate
 				noteOn(p, v);
 				state.activeNotes.push(p);
-				var offTask = new Task(function() {
+				scheduleAt(rrand(60, 220), function() {
 					noteOff(p);
 					var pidx = state.activeNotes.indexOf(p);
 					if (pidx >= 0) state.activeNotes.splice(pidx, 1);
-				}, this);
-				offTask.schedule(rrand(60, 200));
-				phraseTasks.push(offTask);
-			}, this);
-			t.schedule(delay);
-			phraseTasks.push(t);
+				});
+			});
 		})(i);
 	}
-}
-
-// C2: Bowed ascending/descending — legato run of 2-3 notes
-function phraseC2(vel, dur) {
-	var count = state.regime === "burst" ? 3 : 2;
-	var spacing = Math.max(120, Math.round(dur * 1000 / (count + 1)));
-
-	for (var i = 0; i < count; i++) {
-		(function(idx) {
-			var t = new Task(function() {
-				var p = pickPitch(2);
-				legatoNote(humanPitch(p), humanVel(vel));
-			}, this);
-			t.schedule(idx * spacing + humanDelay());
-			phraseTasks.push(t);
-		})(i);
-	}
-	scheduleRelease(dur * 1.2);
-}
-
-// C3: Sustained dark — single long note, expression swell
-function phraseC3(vel, dur) {
-	var p = pickPitch(3);
-	legatoNote(humanPitch(p), humanVel(vel));
-
-	// Gentle expression swell: start lower, peak at 60%, then settle
-	var startExpr = Math.round(state.baseExpr * 0.6);
-	var peakExpr = Math.round(state.baseExpr * 1.1);
-	ccForce(CC.EXPRESSION, startExpr);
-
-	var peakTime = Math.round(dur * 1000 * 0.4);
-	var settleTime = Math.round(dur * 1000 * 0.7);
-
-	var t1 = new Task(function() {
-		ccForce(CC.EXPRESSION, clamp(peakExpr, 0, 127));
-	}, this);
-	t1.schedule(peakTime);
-	phraseTasks.push(t1);
-
-	var settleExpr = state.baseExpr;
-	var t2 = new Task(function() {
-		ccForce(CC.EXPRESSION, clamp(settleExpr, 0, 127));
-	}, this);
-	t2.schedule(settleTime);
-	phraseTasks.push(t2);
-
-	scheduleRelease(dur * 1.5);
-}
-
-// C4: Harmonics — ethereal, 1-2 notes with light touch
-function phraseC4(vel, dur) {
-	var p = pickPitch(4);
-	// Harmonics sound best in upper register — push up an octave if low,
-	// but keep inside the cello's playable range.
-	if (p < 60 && p + 12 <= CELLO_MAX) p += 12;
-	legatoNote(humanPitch(p), clamp(humanVel(vel) - 15, 20, 100));
 	scheduleRelease(dur);
 }
 
-// C5: Wild glissando — two notes far apart, portamento slides between
-function phraseC5(vel, dur) {
-	// Pick two notes with big interval
-	var p1 = pickPitch(5);
-	var p2 = pickPitch(5);
-	// Ensure they're at least 5 semitones apart
-	var attempts = 0;
-	while (Math.abs(p2 - p1) < 5 && attempts < 10) {
-		p2 = pickPitch(5);
-		attempts++;
-	}
-
-	legatoNote(humanPitch(p1), humanVel(vel));
-
-	// Slide to second note
-	var slideTime = rrand(200, Math.round(dur * 1000 * 0.6));
-	var t = new Task(function() {
-		legatoNote(humanPitch(p2), humanVel(vel));
-	}, this);
-	t.schedule(slideTime);
-	phraseTasks.push(t);
-
-	scheduleRelease(dur * 1.3);
-}
-
-// C6: Ordered stepwise glissando — walk through sieve with portamento
-function phraseC6(vel, dur) {
-	var count = rrand(2, 4);
-	var spacing = Math.max(150, Math.round(dur * 1000 / (count + 1)));
-
+// C2: bowed legato run — 2–4 notes (burst regime + fff goes wider)
+function phraseC2(vel, dur) {
+	var hi = state.regime === "burst" ? 5 : 4;
+	var count = phraseCount(2, hi);
+	var spacing = Math.max(90, Math.round(dur * 1000 / (count + 1)));
 	for (var i = 0; i < count; i++) {
 		(function(idx) {
-			var t = new Task(function() {
-				var p = pickPitch(6);
-				legatoNote(humanPitch(p), humanVel(vel));
-			}, this);
-			t.schedule(idx * spacing + humanDelay());
-			phraseTasks.push(t);
+			scheduleAt(idx * spacing + humanDelay(), function() {
+				legatoNote(humanPitch(pickPitch(2)), humanVel(vel));
+			});
 		})(i);
 	}
 	scheduleRelease(dur * 1.2);
 }
 
-// C7: Sustained sliding — single note, slow portamento drift
+// C3: sustained — 1 main legato note, optional soft grace notes on f+
+function phraseC3(vel, dur) {
+	var graceCount = intensityDensity() >= 1.15 ? rrand(1, 2) : 0;
+	var graceSpacing = 120;
+	for (var i = 0; i < graceCount; i++) {
+		(function(idx) {
+			scheduleAt(idx * graceSpacing + humanDelay(), function() {
+				legatoNote(humanPitch(pickPitch(3)), Math.max(30, humanVel(vel) - 20));
+			});
+		})(i);
+	}
+	scheduleAt(graceCount * graceSpacing, function() {
+		legatoNote(humanPitch(pickPitch(3)), humanVel(vel));
+	});
+	scheduleRelease(dur * 1.5);
+}
+
+// C4: harmonics cloud — 2–5 airy flageolet touches across duration
+function phraseC4(vel, dur) {
+	var count = phraseCount(2, 5);
+	var spread = Math.max(300, dur * 1000);
+	for (var i = 0; i < count; i++) {
+		(function(idx) {
+			var delay = idx === 0 ? 0 : Math.round((idx / count) * spread) + humanDelay();
+			scheduleAt(delay, function() {
+				var p = humanPitch(pickPitch(4));
+				var v = clamp(humanVel(vel) - 15, 25, 100);
+				noteOn(p, v);
+				state.activeNotes.push(p);
+				scheduleAt(rrand(180, 400), function() {
+					noteOff(p);
+					var pidx = state.activeNotes.indexOf(p);
+					if (pidx >= 0) state.activeNotes.splice(pidx, 1);
+				});
+			});
+		})(i);
+	}
+	scheduleRelease(dur);
+}
+
+// C5: wild gliss — 2 notes ≥5 semis apart; fff adds compound gliss points
+function phraseC5(vel, dur) {
+	var segments = intensityDensity() >= 1.3 ? rrand(2, 3) : 1;
+	var lastPitch = pickPitch(5);
+	legatoNote(humanPitch(lastPitch), humanVel(vel));
+	for (var i = 0; i < segments; i++) {
+		(function(idx) {
+			var t = Math.round((idx + 1) / (segments + 1) * dur * 1000 * 0.8);
+			scheduleAt(t, function() {
+				var p = pickPitch(5);
+				var attempts = 0;
+				while (Math.abs(p - lastPitch) < 5 && attempts < 10) { p = pickPitch(5); attempts++; }
+				legatoNote(humanPitch(p), humanVel(vel));
+				lastPitch = p;
+			});
+		})(i);
+	}
+	scheduleRelease(dur * 1.4);
+}
+
+// C6: ordered stepwise walk — 3–6 notes along the sieve with portamento
+function phraseC6(vel, dur) {
+	var count = phraseCount(3, 6);
+	var spacing = Math.max(100, Math.round(dur * 1000 / (count + 1)));
+	for (var i = 0; i < count; i++) {
+		(function(idx) {
+			scheduleAt(idx * spacing + humanDelay(), function() {
+				legatoNote(humanPitch(pickPitch(6)), humanVel(vel));
+			});
+		})(i);
+	}
+	scheduleRelease(dur * 1.2);
+}
+
+// C7: sustained + multiple micro-drifts — deep breath-like floating
 function phraseC7(vel, dur) {
+	var driftCount = 1 + (intensityDensity() >= 1.1 ? rrand(1, 2) : 0);
 	var p1 = pickPitch(7);
 	legatoNote(humanPitch(p1), humanVel(vel));
-
-	// Slow drift to neighbor after half duration
-	var driftTime = Math.round(dur * 1000 * 0.5);
-	var t = new Task(function() {
-		var p2 = p1 + rrand(-3, 3);
-		p2 = clamp(p2, CELLO_MIN, CELLO_MAX);
-		legatoNote(p2, humanVel(vel));
-	}, this);
-	t.schedule(driftTime);
-	phraseTasks.push(t);
-
+	var durMs = dur * 1000;
+	for (var i = 0; i < driftCount; i++) {
+		(function(idx) {
+			var t = Math.round(durMs * (0.4 + (idx + 1) / (driftCount + 2) * 0.5));
+			scheduleAt(t, function() {
+				var lo = (state.path === "V2") ? 24 : CELLO_MIN;
+				var p2 = clamp(p1 + rrand(-3, 3), lo, CELLO_MAX);
+				legatoNote(p2, Math.max(30, humanVel(vel) - 10));
+			});
+		})(i);
+	}
 	scheduleRelease(dur * 2.0);
 }
 
-// C8: Sul ponticello tremolo — metallic, near-bridge
+// C8: ponticello tremolo cluster — 2–4 re-bows on same pitch (SWAM
+// tremolo KS still latched, so each re-bow is itself tremolo'd)
 function phraseC8(vel, dur) {
-	var p = pickPitch(8);
-	legatoNote(humanPitch(p), humanVel(vel + 10));
-	// Tremolo is already set in setupComplex
+	var count = phraseCount(2, 4);
+	var mainPitch = pickPitch(8);
+	var spacing = Math.max(150, Math.round(dur * 1000 / (count + 1)));
+	for (var i = 0; i < count; i++) {
+		(function(idx) {
+			scheduleAt(idx * spacing + humanDelay(), function() {
+				var v = clamp(humanVel(vel) + 8 - idx * 3, 40, 120);
+				legatoNote(humanPitch(mainPitch), v);
+			});
+		})(i);
+	}
 	scheduleRelease(dur);
 }
 
 // ================================================================
-// VOICE EVENT — primary trigger on /xk/voice
+// VOICE EVENT — one per real turn (after D16 upstream fix)
 // ================================================================
 function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	if (state.frozen) return;
@@ -549,98 +773,155 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	state.density = density;
 	state.duration = duration;
 	var now = Date.now();
-	var gap = now - state.lastTurnTime;
 	state.lastTurnTime = now;
+	state.lastVoiceTime = now;
 
-	// Cancel any in-progress phrase and release timer
-	cancelPhrase();
-	if (releaseTask) {
-		releaseTask.cancel();
-		releaseTask = null;
-	}
+	// Preserve the tail note for SWAM portamento when the incoming complex
+	// uses legato phrases. cancelPhrase() otherwise hard-releases — which
+	// broke portamento by emptying state.activeNotes before legatoNote()
+	// could overlap it.
+	cancelPhrase(LEGATO_COMPLEX[complexType] === true);
+	if (releaseTask) { releaseTask.cancel(); releaseTask = null; }
 
-	// Switch technique if complex type changed
+	// Technique change — diff-fire KS via setupComplex
 	if (complexType !== state.activeComplex) {
-		// Kill old notes before switching technique
-		allNotesOff();
 		setupComplex(complexType);
 	}
 
-	// Expression from intensity
+	var cmx = COMPLEX[complexType];
+	if (!cmx) return;
+
 	var intMap = INTENSITY_MAP[intensity] || INTENSITY_MAP["mf"];
+	state.intensity = intensity;
 	state.baseExpr = intMap.expr;
 	var baseVel = intMap.vel;
 
-	// Don't override expression if tilt is actively controlling it
-	if (state.tiltExpr < 0) {
-		cc(CC.EXPRESSION, intMap.expr);
-	}
+	// Path V2 scales peak Expression by 0.7 (Xenakis V2 = softer palette)
+	var pathScale = (state.path === "V2") ? 0.7 : 1.0;
+	state.peakExpr = clamp(intMap.expr * pathScale, 0, 127);
 
-	// Attack ramp from density
-	var attack = Math.round(clamp(1.0 - (density / 5.0), 0, 1) * 127);
-	cc(CC.ATTACK_RAMP, attack);
+	// Intensity-driven bow pressure: fff digs, p lightens. Rebases the
+	// deviation modulation in handleExprDev too (via state.bowPressureBase).
+	var bowBase = clamp(cmx.bowPressure * intMap.bowMult, 0, 127);
+	state.bowPressureBase = bowBase;
+	ccForce(CC.BOW_PRESSURE, Math.round(bowBase));
 
-	// Dispatch to phrase generator
+	// Defensive portamento re-assertion — written every voice event, not
+	// only on complex change. Guards against SWAM cache drift, spell resets
+	// (t-perm), autowatch reloads, and stale CC state after intensity/path
+	// swaps that don't trigger setupComplex. Requires SWAM preset setting
+	// Portamento Control = CC (P.MaxTime); see D20.
+	ccForce(CC.PORTAMENTO_ON,   cmx.portamento.on ? 127 : 0);
+	ccForce(CC.PORTAMENTO_TIME, cmx.portamento.time);
+	log("voice C" + complexType + " porta=" + (cmx.portamento.on ? "on" : "off") +
+	    " time=" + cmx.portamento.time + " bow=" + Math.round(bowBase) +
+	    " int=" + intensity);
+
+	// Schedule expression envelope for the phrase duration
+	scheduleExprEnvelope(state.peakExpr, cmx.exprEnv, Math.max(duration * 1000, 250));
+
+	// Dispatch phrase
 	switch (complexType) {
-		case 1:  phraseC1(baseVel, duration); break;
-		case 2:  phraseC2(baseVel, duration); break;
-		case 3:  phraseC3(baseVel, duration); break;
-		case 4:  phraseC4(baseVel, duration); break;
-		case 5:  phraseC5(baseVel, duration); break;
-		case 6:  phraseC6(baseVel, duration); break;
-		case 7:  phraseC7(baseVel, duration); break;
-		case 8:  phraseC8(baseVel, duration); break;
+		case 1: phraseC1(baseVel, duration); break;
+		case 2: phraseC2(baseVel, duration); break;
+		case 3: phraseC3(baseVel, duration); break;
+		case 4: phraseC4(baseVel, duration); break;
+		case 5: phraseC5(baseVel, duration); break;
+		case 6: phraseC6(baseVel, duration); break;
+		case 7: phraseC7(baseVel, duration); break;
+		case 8: phraseC8(baseVel, duration); break;
 		default:
-			// Fallback: single legato note
 			legatoNote(pickPitch(complexType), humanVel(baseVel));
 			scheduleRelease(duration);
 	}
 }
 
 // ================================================================
-// EXPRESSION — continuous 60Hz from gyro
+// CONTINUOUS EXPRESSION — 60 Hz with deadband (D18)
 // ================================================================
-function handleExprTilt(val) {
-	state.tiltExpr = val;
-	if (state.activeComplex === 1) return;  // no continuous dynamics on pizz
 
-	// Blend tilt with base intensity: tilt shapes the dynamic envelope
-	// tilt=0 (face down) → quiet, tilt=1 (face up) → full expression
-	var tiltContrib = val * val;  // exponential curve for more dramatic control
-	var blended = Math.round(state.baseExpr * 0.3 + tiltContrib * 97);
-	cc(CC.EXPRESSION, clamp(blended, 5, 127));
+// Per-complex vibrato depth baseline + spin-modulated extra (D3)
+function vibDepthForComplex(cmx) {
+	var base = cmx.vibrato.depth;          // 0–100
+	var s = state.spinEMA;
+	var extra = 0;
+	if (s > 0.15) {
+		var u = (s - 0.15) / 0.85;         // 0..1 above musical dead zone
+		extra = u * u * 30;                // up to +30
+	}
+	return clamp(base + extra, 0, 127);
+}
+
+// Should continuous CCs transmit this frame? (D18 transmission deadband)
+// Skip writes when spin has been below 0.02 for ≥200 ms. Above that,
+// throttle to 30 Hz by coalescing pairs of frames.
+function shouldTransmit(now) {
+	if (state.spin < 0.02) {
+		if (state.spinLowSince === 0) state.spinLowSince = now;
+		if (now - state.spinLowSince >= 200) return false;
+	} else {
+		state.spinLowSince = 0;
+	}
+	// 30 Hz coalesce: fire on alternating frames
+	return (state.frame60 & 1) === 0;
+}
+
+function handleExprTilt(val) {
+	state.tilt = val;
+	// Tilt → timbral Bow Position modulation around complex baseline (D4)
+	var cmx = COMPLEX[state.activeComplex];
+	if (!cmx || cmx.bowPos == null) return;
+	var now = Date.now();
+	if (!shouldTransmit(now)) return;
+	var jitter = (val - 0.5) * 60;         // ±30 — audible sul tasto↔sul pont sweep
+	cc(CC.BOW_POSITION, Math.round(cmx.bowPos + jitter));
 }
 
 function handleExprSpin(val) {
-	// Spin → Vibrato: exponential curve, only kicks in above threshold
-	var v = val > 0.15 ? (val - 0.15) / 0.85 : 0;
-	v = v * v;
-	cc(CC.VIBRATO_DEPTH, Math.round(v * 110));
-	cc(CC.VIBRATO_RATE, Math.round(50 + v * 77));
+	state.spin = val;
+	// EMA on spin (α = 0.08) — smooth, per D3
+	state.spinEMA = state.spinEMA + 0.08 * (val - state.spinEMA);
+
+	var now = Date.now();
+	state.frame60++;
+	if (!shouldTransmit(now)) return;
+
+	var cmx = COMPLEX[state.activeComplex];
+	if (!cmx) return;
+
+	// Vibrato depth: baseline + spin contribution
+	cc(CC.VIBRATO_DEPTH, vibDepthForComplex(cmx));
+	// Vibrato rate: baseline + light spin modulation
+	var rate = cmx.vibrato.rate + Math.round(state.spinEMA * 40);
+	cc(CC.VIBRATO_RATE, rate);
 }
 
 function handleExprDev(val) {
-	// Deviation → Bow Pressure: locked=light(20), boundary=heavy(127)
-	var pressure = Math.round(20 + val * val * 107);
-	cc(CC.BOW_PRESSURE, pressure);
+	state.dev = val;
+	state.devEMA = state.devEMA + 0.1 * (val - state.devEMA);
+	var now = Date.now();
+	if (!shouldTransmit(now)) return;
 
-	// Also modulate bow speed: more deviation = more erratic bowing
+	var cmx = COMPLEX[state.activeComplex];
+	if (!cmx) return;
+
+	// Deviation → ±25 modulation around the intensity-scaled baseline
+	// (state.bowPressureBase tracks complex × intensity.bowMult)
+	var mod = (state.devEMA - 0.5) * 50;   // -25 .. +25
+	var base = state.bowPressureBase != null ? state.bowPressureBase : cmx.bowPressure;
+	cc(CC.BOW_PRESSURE, Math.round(base + mod));
+
+	// Bow speed: light map (types that don't own speed)
 	if (state.activeComplex !== 3 && state.activeComplex !== 7) {
-		cc(CC.BOW_SPEED, Math.round(40 + val * 80));
+		cc(CC.BOW_SPEED, Math.round(40 + state.devEMA * 80));
 	}
 }
 
 function handleExprScramble(val) {
 	state.scramble = val;
-	// Scramble → Bow Position: solved=fingerboard(120), scrambled=bridge(5)
-	// Skip for types that own bow position
-	if (state.activeComplex !== 8
-		&& state.activeComplex !== 3
-		&& state.activeComplex !== 7
-		&& state.activeComplex !== 4) {
-		var pos = Math.round((1.0 - val) * 115 + 5);
-		cc(CC.BOW_POSITION, pos);
-	}
+	// Scramble no longer forces bow position — that's the complex's job
+	// and tilt adds timbral modulation. Leave CC writes to Phase 6
+	// (KS latch sul tasto / sul pont on thresholds).
 }
 
 // ================================================================
@@ -648,153 +929,163 @@ function handleExprScramble(val) {
 // ================================================================
 function handleTetra(orbit) {
 	state.tetra = orbit;
-	// Even=warm (lower sensitivity, fingerboard-ish), Odd=edgy (higher)
-	cc(CC.BOW_SENSITIVITY, orbit === 0 ? 50 : 110);
+	// Future: KS D# Alt Fingering toggle per D10.
 }
 
 function handlePath(p) {
 	state.path = p;
 	state.transpose = (p === "V2") ? -12 : 0;
-	log("path -> " + p + " (transpose " + state.transpose + ")");
+	// Path scales the envelope peak on the next voice event.
+	log("path -> " + p);
 }
 
 function handleRegime(r) {
+	if (state.regime === r) return;
 	state.regime = r;
 	log("regime -> " + r);
-	if (r === "contemplative") {
-		cc(CC.TREMOLO, 0);
-		// Slow attack for contemplative
-		cc(CC.ATTACK_RAMP, 90);
-	} else if (r === "burst") {
-		cc(CC.TREMOLO, 80);
-		cc(CC.ATTACK_RAMP, 10);
-	} else {
-		// conversational
-		cc(CC.TREMOLO, 0);
-		cc(CC.ATTACK_RAMP, 50);
+	// Regime only affects attack ramp (single source per D7).
+	var cmx = COMPLEX[state.activeComplex];
+	if (cmx) {
+		var mult = REGIME_ATTACK_MULT[r] || 1.0;
+		ccForce(CC.ATTACK_RAMP, clamp(Math.round(cmx.attackRamp * mult), 0, 127));
 	}
 }
 
 function handleRate(turnsPerSec) {
-	if (state.regime === "burst") {
-		cc(CC.TREMOLO, Math.round(clamp(turnsPerSec / 4.0, 0, 1) * 127));
-	}
+	// Intentionally empty — tremolo is KS-owned by C8 now.
 }
 
 function handleSieve() {
 	var args = arrayfromargs(arguments);
 	state.sieve = [];
-	for (var i = 0; i < args.length; i++) {
-		state.sieve.push(args[i] + SIEVE_BASE);
-	}
+	for (var i = 0; i < args.length; i++) state.sieve.push(args[i] + SIEVE_BASE);
 	state.sieveIdx = clamp(state.sieveIdx, 0, Math.max(0, state.sieve.length - 1));
 	log("sieve -> " + state.sieve.length + " pitches");
 }
 
 // ================================================================
-// SPELL REACTIONS
+// SPELL REACTIONS — after any mutation, restore via setupComplex(active)
+// which is idempotent thanks to D5 diffing. (D11, D13)
 // ================================================================
 function handleSpell(name) {
 	log("spell: " + name);
 
 	switch (name) {
 		case "sexy-move":
-			// Quick bow sweep: snap to bridge, ramp expression, release
-			ccForce(CC.BOW_POSITION, 5);
-			ccForce(CC.EXPRESSION, 120);
-			var sweep1 = new Task(function() {
-				ccForce(CC.BOW_POSITION, 60);
-				ccForce(CC.EXPRESSION, 90);
-			}, this);
-			sweep1.schedule(150);
-			phraseTasks.push(sweep1);
-			var sweep2 = new Task(function() {
-				handleExprScramble(state.scramble);
-			}, this);
-			sweep2.schedule(400);
-			phraseTasks.push(sweep2);
-			break;
-
-		case "sledgehammer":
-			// Toggle freeze
-			state.frozen = !state.frozen;
-			if (state.frozen) {
-				ccForce(CC.SUSTAIN_PEDAL, 127);
-				log("FROZEN — turns ignored, note sustains");
-			} else {
-				ccForce(CC.SUSTAIN_PEDAL, 0);
-				// Release held notes on unfreeze
-				allNotesOff();
-				log("UNFROZEN — resuming");
-			}
+			// Quick bow-pressure transient, then restore baseline
+			ccForce(CC.BOW_PRESS_ACCENT, 110);
+			scheduleAt(400, function() {
+				ccForce(CC.BOW_PRESS_ACCENT, 0);
+				if (state.activeComplex) setupComplex(state.activeComplex);
+			});
 			break;
 
 		case "oll-cross":
-			// Harmonic ping: brief harmonics flash + high note
-			var oldHarm = (state.activeComplex === 4) ? 127 : 0;
-			ccForce(CC.HARMONICS, 127);
-			ccForce(CC.BOW_PRESSURE, 20);
+			// Harmonic ping: switch Harmonics → octave overtone (v3.10 vel-
+			// select), play a high note, then restore to whatever the active
+			// complex owns. setEnum diffs so the restore is a no-op for C4.
+			setEnum("harmonics", KS.HARMONICS, HARMONICS.OCT, 4);
 			var harmPitch = foldToRange(pickPitch(4) + 12);
 			noteOn(harmPitch, 60);
 			state.activeNotes.push(harmPitch);
-			var harmOff = new Task(function() {
+			scheduleAt(800, function() {
 				noteOff(harmPitch);
 				var idx = state.activeNotes.indexOf(harmPitch);
 				if (idx >= 0) state.activeNotes.splice(idx, 1);
-				ccForce(CC.HARMONICS, oldHarm);
-			}, this);
-			harmOff.schedule(800);
-			phraseTasks.push(harmOff);
+				// Restore baseline (resets harmonics to the complex's value)
+				if (state.activeComplex) setupComplex(state.activeComplex);
+			});
 			break;
 
 		case "u-perm":
-			// Staccato burst: 3-5 rapid short notes (was 'combo' in old spell book)
-			keyswitch(KS.STACCATO);
+			// Staccato burst via short gate + high velocity (no fake KS).
 			var burstCount = rrand(3, 5);
+			ccForce(CC.BOW_PRESS_ACCENT, 100);
 			for (var i = 0; i < burstCount; i++) {
-				(function(idx) {
-					var bt = new Task(function() {
+				(function(idx, last) {
+					scheduleAt(idx * rrand(60, 120), function() {
 						var bp = humanPitch(pickPitch(1));
-						noteOn(bp, rrand(70, 110));
+						noteOn(bp, rrand(100, 120));
 						state.activeNotes.push(bp);
-						var boff = new Task(function() {
+						scheduleAt(rrand(60, 100), function() {
 							noteOff(bp);
 							var bidx = state.activeNotes.indexOf(bp);
 							if (bidx >= 0) state.activeNotes.splice(bidx, 1);
-							// Restore technique after last note
-							if (idx === burstCount - 1) {
-								setupComplex(state.activeComplex);
+							if (last) {
+								ccForce(CC.BOW_PRESS_ACCENT, 0);
+								if (state.activeComplex) setupComplex(state.activeComplex);
 							}
-						}, this);
-						boff.schedule(rrand(40, 100));
-						phraseTasks.push(boff);
-					}, this);
-					bt.schedule(idx * rrand(60, 120));
-					phraseTasks.push(bt);
-				})(i);
+						});
+					});
+				})(i, i === burstCount - 1);
 			}
 			break;
 
 		case "sune":
-			// V2 palette: darken, shift to tasto
-			ccForce(CC.BOW_POSITION, 100);
-			ccForce(CC.EXPRESSION, 40);
-			log("palette -> V2 (dark)");
+			state.frozen = !state.frozen;
+			if (state.frozen) {
+				ccForce(CC.SUSTAIN_PEDAL, 127);
+				log("FROZEN");
+			} else {
+				ccForce(CC.SUSTAIN_PEDAL, 0);
+				allNotesOff();
+				log("UNFROZEN");
+			}
 			break;
 
 		case "anti-sune":
-			// V1 palette: brighten
-			ccForce(CC.BOW_POSITION, 50);
-			ccForce(CC.EXPRESSION, 80);
-			log("palette -> V1 (bright)");
+			// Bright palette: nudge bow toward bridge once, then restore
+			ccForce(CC.BOW_POSITION, 40);
+			scheduleAt(600, function() {
+				if (state.activeComplex) setupComplex(state.activeComplex);
+			});
 			break;
 
 		case "t-perm":
-			// Reset everything
 			bang();
 			log("spell reset (t-perm)");
 			break;
+
+		case "niklas":
+			// Detection stub — audio effect TBD (see revision_roadmap.md D19).
+			log("niklas detected (effect TBD)");
+			break;
 	}
+}
+
+// ================================================================
+// PANIC — /xk/panic + inactivity watchdog (D17)
+// ================================================================
+function handlePanic() {
+	log("PANIC — flushing all notes + CCs");
+	bang();
+}
+
+function watchdogTick() {
+	// Fires only if ALL FOUR hold (D17): active notes, no release scheduled,
+	// no pending phrase events, and silence for ≥ 3 s. Ensures long C3/C7
+	// notes are never truncated.
+	try {
+		var now = Date.now();
+		var hasNotes = state.activeNotes.length > 0;
+		var noRelease = (releaseTask === null);
+		var noPhrase = (phraseTasks.length === 0);
+		var stale = (state.lastVoiceTime > 0) && (now - state.lastVoiceTime > 3000);
+		if (hasNotes && noRelease && noPhrase && stale) {
+			log("watchdog tripped — orphan notes, flushing");
+			allNotesOff();
+			state.lastVoiceTime = 0;
+		}
+	} catch (e) {}
+	// Reschedule
+	watchdogTask = new Task(watchdogTick, this);
+	watchdogTask.schedule(1000);
+}
+
+function startWatchdog() {
+	if (watchdogTask) watchdogTask.cancel();
+	watchdogTask = new Task(watchdogTick, this);
+	watchdogTask.schedule(1000);
 }
 
 // ================================================================
@@ -807,12 +1098,10 @@ function anything() {
 	if (addr === "/xk/voice") {
 		handleVoice(args[0], args[1], args[2], args[3], args[4]);
 	}
-	// 60Hz expression
 	else if (addr === "/xk/expr/tilt")     { handleExprTilt(args[0]); }
 	else if (addr === "/xk/expr/spin")     { handleExprSpin(args[0]); }
 	else if (addr === "/xk/expr/dev")      { handleExprDev(args[0]); }
 	else if (addr === "/xk/expr/scramble") { handleExprScramble(args[0]); }
-	// Structural
 	else if (addr === "/xk/tetra")    { handleTetra(args[0]); }
 	else if (addr === "/xk/path")     { handlePath(args[0]); }
 	else if (addr === "/xk/regime")   { handleRegime(args[0]); }
@@ -820,24 +1109,25 @@ function anything() {
 	else if (addr === "/xk/sieve")    { handleSieve.apply(this, args); }
 	else if (addr === "/xk/spell")    { handleSpell(args[0]); }
 	else if (addr === "/xk/scramble") { handleExprScramble(args[0]); }
+	else if (addr === "/xk/panic")    { handlePanic(); }
 }
 
 // ================================================================
-// RESET
+// RESET — starts silent (D15)
 // ================================================================
 function bang() {
-	// Cancel all scheduled events
 	cancelPhrase();
-	if (releaseTask) {
-		releaseTask.cancel();
-		releaseTask = null;
-	}
+	if (releaseTask) { releaseTask.cancel(); releaseTask = null; }
 
-	// All notes off
-	allNotesOff();
-
-	// Reset state
 	state.activeComplex = 0;
+	state.playMode = null;
+	// Selector state — null forces setEnum to fire once so SWAM aligns with
+	// our model on first voice event after reset (D27).
+	state.harmonics  = null;
+	state.tremolo    = null;
+	state.gestureMode = null;
+	state.altFing    = null;
+	state.keepBowDir = false;
 	state.sieveIdx = 0;
 	state.sieveDir = 1;
 	state.activeNotes = [];
@@ -845,28 +1135,48 @@ function bang() {
 	state.scramble = 0;
 	state.turnCount = 0;
 	state.lastTurnTime = 0;
-	state.baseExpr = 55;
-	state.tiltExpr = -1;
+	state.lastVoiceTime = 0;
+	state.baseExpr = 0;
+	state.peakExpr = 0;
 	state.density = 2.0;
 	state.duration = 1.0;
+	state.intensity = "mf";
+	state.bowPressureBase = 64;
+	state.tilt = 0.5;
+	state.spin = 0;
+	state.spinEMA = 0;
+	state.dev = 0;
+	state.devEMA = 0;
+	state.spinLowSince = 0;
+	state.frame60 = 0;
 	ccCache = {};
 
-	// CCs to defaults
-	ccForce(CC.EXPRESSION, 64);
-	ccForce(CC.BOW_PRESSURE, 64);
-	ccForce(CC.BOW_POSITION, 64);
-	ccForce(CC.BOW_SPEED, 64);
+	// Expression to 0 (silent) — first phrase ramps from attack fraction.
+	ccForce(CC.EXPRESSION, 0);
 	ccForce(CC.VIBRATO_DEPTH, 0);
 	ccForce(CC.VIBRATO_RATE, 64);
-	ccForce(CC.HARMONICS, 0);
-	ccForce(CC.TREMOLO, 0);
+	ccForce(CC.BOW_PRESSURE, 64);
+	ccForce(CC.BOW_POSITION, 64);
+	ccForce(CC.BOW_PRESS_ACCENT, 0);
+	ccForce(CC.BOW_SPEED, 64);
 	ccForce(CC.PORTAMENTO_ON, 0);
 	ccForce(CC.PORTAMENTO_TIME, 0);
 	ccForce(CC.SUSTAIN_PEDAL, 0);
-	ccForce(CC.BOW_SENSITIVITY, 64);
 	ccForce(CC.ATTACK_RAMP, 64);
+	ccForce(CC.ATTACK_CONTROL, 64);
 
-	keyswitch(KS.ARCO);
+	// Pin Gesture Mode = Expression (D27 / portamento safety).
+	// In v3.10, KS D's Bipolar/Bowing modes re-interpret CC 11 as bow
+	// direction/displacement instead of dynamics — which silently breaks
+	// the Expression envelope AND the legato/portamento feel even though
+	// CC 5 / CC 65 are still being written. Pin once at reset and never
+	// modulate. setEnum is idempotent so re-fires are filtered.
+	setEnum("gestureMode", KS.GESTURE_MODE, GESTURE.EXPR, 3);
+
+	// Explicit OFF for Harmonics + Tremolo so SWAM matches our state model
+	// even if the preset stored a different default (D27).
+	setEnum("harmonics", KS.HARMONICS, HARMONICS.OFF, 4);
+	setEnum("tremolo",   KS.TREMOLO,   TREMOLO.OFF,   3);
 
 	log("reset");
 }
@@ -874,21 +1184,14 @@ function bang() {
 // ================================================================
 // UTILITIES
 // ================================================================
-function clamp(v, lo, hi) {
-	return Math.max(lo, Math.min(hi, v));
-}
-
-function rrand(lo, hi) {
-	return Math.floor(Math.random() * (hi - lo + 1)) + lo;
-}
-
-function log(msg) {
-	outlet(1, "xk_swam: " + msg);
-}
+function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+function rrand(lo, hi)    { return Math.floor(Math.random() * (hi - lo + 1)) + lo; }
+function log(msg)         { outlet(1, "xk_swam: " + msg); }
 
 // ================================================================
 // INIT
 // ================================================================
 function loadbang() {
-	log("v2 ready — phrase gen, legato portamento, auto-release");
+	log("v3 ready — SWAM KS model, complex table, envelopes, deadband, watchdog");
+	startWatchdog();
 }

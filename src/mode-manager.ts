@@ -43,11 +43,10 @@ export class ModeManager {
       case 'sexy-move':
         this.mode.voiceMode = this.mode.voiceMode === 'sequential' ? 'polyphonic' : 'sequential';
         break;
-      case 'sledgehammer':
-        this.mode.frozen = !this.mode.frozen;
-        break;
       case 'sune':
-        this.mode.palette = 'V2';
+        // 7-turn sune replaces the old 4-move sledgehammer as the freeze toggle.
+        // Longer gesture = fewer accidental triggers mid-phrase.
+        this.mode.frozen = !this.mode.frozen;
         break;
       case 'anti-sune':
         this.mode.palette = 'V1';
@@ -61,6 +60,11 @@ export class ModeManager {
       case 't-perm':
         this.mode.variant = 'default';
         this.mode.palette = 'default';
+        break;
+      case 'niklas':
+        // Commutator family — audio effect TBD (see revision_roadmap.md D19).
+        // Candidates: C-cube 3-cycle / canon echo / commutator latch.
+        // Detection + /xk/spell emission only for now.
         break;
     }
 

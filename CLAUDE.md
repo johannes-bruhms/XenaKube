@@ -19,6 +19,8 @@
 Primary source: `docs/xenakis_nomos_alpha_primary_source.md` (*Formalized Music* pp. 214–237).
 Research notes, references, and design rationale: `docs/research_notes.md`.
 Implementation roadmap: `docs/todo.md`.
+SWAM Cello reference (parameters / CCs / KS): `docs/swam_cello_reference.md`.
+SWAM bridge refactor plan: `docs/revision_roadmap.md`.
 
 ## Architecture
 
@@ -38,7 +40,13 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
                               (state machine) SuperCollider  Max/SWAM  TD    Dashboard
 ```
 
-**relay.js** — BLE-to-OSC bridge. Serves dashboard on `:3000` (from `public/dashboard.html`). Receives cube events via WS, upsamples gyro from BLE rate (~10Hz) to 60Hz via quaternion Kalman filter (velocity-aware prediction + measurement correction; smoothing slider 0-1 maps to Kalman gains, default 0.2). 60Hz loop uses `process.hrtime.bigint()` spin timer (not `setInterval`, which drifts to ~40Hz on Windows). Instantiates engine (`onTurn()`/`onGyro()`), sends `/xk/*` OSC to SuperCollider (port 57120) and Max/MSP (port 57121), forwards raw `/gan/*` to TD (port 8000). 60Hz loop sends gyro OSC (`/xk/gyro`, `/gan/gyro`) + expression OSC (`/xk/expr/tilt`, `/xk/expr/spin`, `/xk/expr/dev`, `/xk/expr/scramble`) to SC and Max; full state burst (~30 messages) only fires at BLE rate on gyro updates and on turns. Sends `/xk/spell <name>` to SC and Max on algorithm detection. Broadcasts augmented engine state (includes scrambleFactor, voiceMode, performanceMode, spellBuffer, spellPartials) as JSON over WS. Sends `spell` events on algorithm detection, `spell_book` on client connect. Handles control messages: `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`. Auto-shutdown 5s after last client disconnects. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
+**relay.js** — BLE-to-OSC bridge. Instantiates `XenaKubeEngine`, serves `public/dashboard.html` on `:3000`, receives cube events via WS from the browser. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
+
+- **Gyro upsampling**: BLE ~10Hz → 60Hz via quaternion Kalman filter (velocity-aware predict + correct). Smoothing slider 0–1 maps to Kalman gains (default 0.2). 60Hz loop uses `process.hrtime.bigint()` spin timer; `setInterval` drifts to ~40Hz on Windows.
+- **OSC out**: `/xk/*` to SC (57120) and Max (57121); raw `/gan/*` to TD (8000). At 60Hz: `/xk/gyro`, `/gan/gyro`, `/xk/expr/*`. At BLE rate + on turns: full state burst (~30 messages). On algorithm detection: `/xk/spell <name>` to SC and Max.
+- **WS out**: full `XenaKubeState` JSON (includes scrambleFactor, voiceMode, performanceMode, spellBuffer, spellPartials) on every state change. `spell` events on detection; `spell_book` on client connect.
+- **Control messages**: `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`.
+- **Lifecycle**: auto-shutdown 5s after last client disconnects.
 
 ### src/ — TypeScript Engine
 
@@ -48,11 +56,11 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 | `group.ts` | S4 group: 24 elements as vertex permutations, Cayley table, generators, tetrahedral orbits |
 | `vertices.ts` | K1-K8 vertices with V1/V2 values (D×G×U), permutation |
 | `complexes.ts` | C1-C8 complex types, α/β/γ cyclic mappings (rotate every 3 subs), second cube state |
-| `spells.ts` | Spell book (12 canonical algorithms × 24 rotations = 264 variants) + rolling buffer pattern matcher. Orientation-independent: detects spells on any face pair via whole-cube-rotation expansion |
+| `spells.ts` | Spell book (6 canonical CFOP algorithms × 24 rotations = 144 variants) + rolling buffer pattern matcher. Orientation-independent: detects spells on any face pair via whole-cube-rotation expansion |
 | `scramble.ts` | BFS distance from identity in S4 Cayley graph, normalized 0-1 |
 | `voice-engine.ts` | Sequential (1 voice) vs polyphonic (8 voices) output decision |
 | `expression.ts` | Gyro quaternion → continuous control values (tilt, spin, deviation, scramble). Engine exposes `getExpressionFor(quat)` for relay 60Hz loop |
-| `mode-manager.ts` | Performance state machine: voice mode, palette, variant, freeze. Spell effects wired: sexy-move→toggle seq/poly, sledgehammer→freeze, sune→V2, anti-sune→V1, oll-cross→drone, combo→burst, t-perm→reset |
+| `mode-manager.ts` | Performance state machine: voice mode, palette, variant, freeze. Spell effects wired: sexy-move→toggle seq/poly, sune→freeze, anti-sune→V1, oll-cross→drone, u-perm→burst, t-perm→reset |
 | `turn-rate.ts` | Turn-rate tracker: circular buffer → EWMA rate → regime classification (contemplative/conversational/burst) with hysteresis |
 | `kinematic.ts` | Graph paths through S4: pre-composed diagrams + free traversal |
 | `sieve.ts` | L(m,n) logical function, prime residual classes mod 18, metabola mutations |
@@ -68,19 +76,21 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 | `xenakis_nomos_alpha_primary_source.md` | Full text extraction from *Formalized Music* pp. 214–237 |
 | `research_notes.md` | References, design rationale, Xenakis→XenaKube mapping, S4 properties, sieve theory, SWAM Cello mapping design, further reading |
 | `todo.md` | Implementation roadmap: three performance speed regimes (contemplative/conversational/burst), phased plan |
+| `swam_cello_reference.md` | SWAM Solo Strings v3.8.0 reference: all CCs, KS, Play Modes, articulations, ranges — the authoritative parameter source for the Max bridge |
+| `revision_roadmap.md` | SWAM-bridge refactor plan: 15 diagnoses (D1–D15), 8 implementation phases, verification plan. Converged from issues with pizz/harmonics/tremolo KS, tilt-driven Expression, vibrato jitter |
 
 ### public/ — Browser Dashboard
 
 | File | Role |
 |------|------|
-| `dashboard.html` | Single-page connect + live performance dashboard. 3D cube (Three.js) with per-vertex parameter labels (K#, complex type, D/G/U), ghost cube (cyan wireframe showing S4 snap target with complex labels, opacity varies with deviation), snap overlay (element + deviation % + lock bar), rotation gizmo (separate isometric mini-canvas, bottom-right, 3-axis rings for live/ghost offset). Spell detection panel (move buffer + partial match progress + toast notifications), performance mode badges (seq/poly, palette, frozen), expression gauges (tilt, spin, deviation, scramble), voice sequence bar, vertex/complex cards, sieve strip, move log. Gyro smoothing slider in header (Kalman filter, default 0.2, 0=responsive/1=smooth). Connects via WS, receives state/spell/voice broadcasts from relay. |
+| `dashboard.html` | Live performance dashboard at `http://localhost:3000`. Three.js 3D cube with per-vertex K#/complex/D/G/U labels, ghost cube showing S4 snap target (opacity = deviation), rotation gizmo. Panels: spell detection (buffer + partial progress + toasts), mode badges (seq/poly, palette, frozen), expression gauges (tilt/spin/dev/scramble), voice bar, vertex/complex cards, sieve strip, move log. Header: gyro smoothing slider (Kalman, default 0.2). WS client to relay. |
 
 
 ## Commands
 
 ```bash
 npx tsx relay.js      # run full relay (BLE → engine → OSC)
-npm test              # vitest (67 tests)
+npm test              # vitest (66 tests)
 npm run test:watch    # vitest watch
 npm run dev           # engine standalone (tsx)
 npm run build         # tsc → dist/
@@ -92,8 +102,8 @@ npx tsc --noEmit      # type-check only
 ### Core loop
 
 Each physical cube turn:
-1. Move enters **spell detector** (rolling buffer, pattern match against 13 known algorithms)
-2. If spell detected → **mode manager** updates performance state (effects TBD)
+1. Move enters **spell detector** (rolling buffer matched against 168 rotation variants of 7 canonical algorithms — 6 CFOP + Niklas commutator)
+2. If spell detected → **mode manager** applies effect (see Spell System table below)
 3. K_i cube advances (S4 right-multiplication → parameter permutation)
 4. C_i cube advances (complex type permutation)
 5. **Voice engine** emits active voices (1 in sequential, 8 in polyphonic mode)
@@ -107,19 +117,19 @@ Each physical cube turn:
 
 ### Spell System
 
-Rubik's algorithms detected from the move stream trigger mode changes. The spell book is deliberately minimal: **only the 7 fundamentals needed to solve the cube under CFOP** (Cross, F2L, OLL, PLL) are canonical spells. **Orientation-independent**: each canonical algorithm is expanded into all 24 whole-cube-rotation variants, so the same finger pattern is detected regardless of which faces it's performed on (e.g. sexy-move works as R U R' U', F R F' R', L D L' D', etc.). Spells **layer** — if a short spell is the prefix of a longer one, the short fires first and the long fires on completion. Turns always produce sound; spells are bonus triggers on top.
+Rubik's algorithms detected from the move stream trigger mode changes. The spell book covers **the 6 fundamentals needed to solve the cube under CFOP** plus Niklas — the archetypal 3-cycle commutator, included as the conceptual counterweight to CFOP. **Orientation-independent**: each canonical algorithm is expanded into all 24 whole-cube-rotation variants, so the same finger pattern is detected regardless of which faces it's performed on (e.g. sexy-move works as R U R' U', F R F' R', L D L' D', etc.). Spells **layer** — if a short spell is the prefix of a longer one, the short fires first and the long fires on completion. Turns always produce sound; spells are bonus triggers on top.
 
-| Name | Canonical Algorithm | Moves | CFOP role | Effect |
-|------|--------------------|-------|-----------|--------|
-| sexy-move | R U R' U' | 4 | F2L trigger | Toggle sequential/polyphonic |
-| sledgehammer | R' F R F' | 4 | F2L trigger | Toggle freeze |
+| Name | Canonical Algorithm | Moves | Role | Effect |
+|------|--------------------|-------|------|--------|
+| sexy-move | R U R' U' | 4 | CFOP F2L trigger | Toggle sequential/polyphonic |
 | oll-cross | F R U R' U' F' | 6 | 2-look OLL: edges | Variant → drone |
-| sune | R U R' U R U2 R' | 7 | 2-look OLL: corners | Palette → V2 |
+| sune | R U R' U R U2 R' | 7 | 2-look OLL: corners | Toggle freeze |
 | anti-sune | R U2 R' U' R U' R' | 7 | 2-look OLL: inverse corners | Palette → V1 |
+| niklas | R U' L' U R' U' L | 7 | Commutator (corner 3-cycle) | Detection only — audio effect TBD (see `docs/revision_roadmap.md` D19) |
 | u-perm | R U' R U R U R U' R' U' R2 | 11 | 2-look PLL: 3-edge cycle | Variant → burst |
 | t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 14 | 2-look PLL: corners + edges | Reset variant + palette |
 
-**Note**: inverse-sexy (U R U' R') and hedgeslammer (F R' F' R) are rotation variants of sexy-move and sledgehammer respectively, and fire under those names. 7 canonical × 24 rotations = 168 total patterns.
+**Note**: inverse-sexy (U R U' R') is a rotation variant of sexy-move and fires under that name. The 4-move sledgehammer (R' F R F') was removed — the freeze-toggle effect it previously carried now lives on the 7-turn sune, a more deliberate gesture that's harder to trigger accidentally mid-phrase. 7 canonical × 24 rotations = 168 total patterns.
 
 **Rotation expansion**: generated at load time by applying the 24 face-permutation maps (from generators x, y, z) to each canonical algorithm. Direction (CW/CCW/180°) is preserved by proper rotations — only face names change. Partial matches and spell book UI are deduplicated by spell name.
 
@@ -168,8 +178,6 @@ Boot: open in SC IDE, `Cmd+B` (boot server), select all `Cmd+A`, evaluate `Cmd+E
 
 Sequential single-voice model. One active vertex at a time — `/xk/voice` triggers voice changes. Active voice → stereo pan (by vertex position) → reverb send bus → `FreeVerb2` → `Limiter` (0.85) on master bus. Voice overlap handling: minimum 0.5s duration before switching — defers new voice until attack phase completes, preventing clipping at fast turn rates. Sieve mutation cue: bell-like chime (2 octaves above sieve centroid) on metabola. Scramble factor → reverb wet mix (solved=0.1 dry, scrambled=0.65 drenched).
 
-**Note**: SC currently implements sequential mode only. Polyphonic mode output, expression parameter receivers, and palette switching are not yet implemented.
-
 ### sc/ Directory
 
 | File | Role |
@@ -217,7 +225,7 @@ Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) d
 
 | File | Role |
 |------|------|
-| `xk_swam.js` | v8 object (v2): OSC → midievent. Phrase generators per complex type, legato note ordering (noteOn-before-noteOff with 20ms overlap for SWAM portamento), auto-release timer with fade, velocity humanization (±15% + accents), 60Hz expression → continuous CC, spell reactions, CC cache. Pitches octave-folded into cello range (C2–F6, MIDI 36–89) via `CELLO_MIN`/`CELLO_MAX` + `foldToRange()` |
+| `xk_swam.js` | v8 object (v3): OSC → midievent. SWAM KS model (12-switch `KS` map + `KS_CH`; Play Mode velocity-selected on KS C; Harmonics/Tremolo/Sordino/etc. latch toggles with stateful diffing). `COMPLEX` config table is the single source of truth per voice (play mode, envelope shape, vibrato baseline, bow pos/pressure, portamento, attack ramp/control). Expression is driven by per-complex envelope × intensity × path scalar (`scheduleExprEnvelope`); tilt is reassigned to ±10 Bow Position modulation. Vibrato on CC 19 with EMA on spin + 0.15 musical dead zone. Continuous 60 Hz CCs skip writes when `spin < 0.02` for ≥ 200 ms and throttle to 30 Hz otherwise. `cancelPhrase()` releases sounding notes before cancelling scheduled Tasks; `/xk/panic` flushes state; inactivity watchdog catches orphan notes after 3 s of silence. Legato note-ordering (20 ms overlap) and phrase generators per complex preserved. Pitches octave-folded into cello range (C2–F6; V2 widens to C1) via `CELLO_MIN`/`CELLO_MAX` + `foldToRange()` |
 | `tester.maxpat` | Reference Max patch: the 4-object chain from the doc above (`udpreceive 57121` → `v8 xk_swam.js @autowatch 1` → `vst~ "SWAM Cello 3" 2` → `dac~`). Open this to drive SWAM from a live relay. |
 | `tester1.maxpat` | Debug-harness variant of `tester.maxpat` with added message boxes (hand-fired `/xk/expr/*`, raw `midievent` CCs) and a `live.gain~` for isolated CC/midievent testing without a running relay. |
 
@@ -227,48 +235,76 @@ Each `/xk/voice` triggers a **musical gesture**, not a single note. Phrase gener
 
 | Type | Phrase |
 |------|--------|
-| C1 Pizz | Cloud of 2-5 plucked notes scattered over ≤600ms, short gates |
-| C2 Bowed | Legato run of 2-3 notes (3 in burst regime), portamento overlap |
-| C3 Sustained | Single long note, expression swell (soft→peak@40%→settle) |
-| C4 Harmonics | Single ethereal note, shifted up if below MIDI 60, light bow pressure |
-| C5 Wild gliss | Two notes ≥5 semitones apart, legato slide between at 200-600ms |
-| C6 Ordered gliss | 2-4 stepwise sieve walk with portamento |
-| C7 Sustained slide | Single note + slow drift (±3 semitones) at half-duration |
-| C8 Ponticello | Tremolo single note near bridge |
+| C1 Pizz | Cloud of 2–5 plucked notes scattered over ≤700ms, short gates |
+| C2 Bowed | Legato run of 2–4 notes (up to 5 in burst regime), portamento overlap |
+| C3 Sustained | 1 main legato note + 0–2 soft grace notes on f+ intensity |
+| C4 Harmonics | 2–5 airy flageolet touches across the duration, light velocity |
+| C5 Wild gliss | 2 notes ≥5 semitones apart; fff adds compound gliss points (2–3 segments) |
+| C6 Ordered gliss | 3–6 stepwise sieve walk with portamento |
+| C7 Sustained slide | 1 main note + 1–3 micro-drifts (±3 semitones) across back half |
+| C8 Ponticello | 2–4 re-bows on one pitch (SWAM KS Tremolo = Fast, vel-3 selector) |
+
+All counts scale with intensity (`density` field in `INTENSITY_MAP`) and live `state.density` from the engine via shared `phraseCount(lo, hi)`.
 
 Every phrase schedules its own auto-release timer (`scheduleRelease(dur)`) — no more infinite sustain. Release fades expression down over 5 steps × 80ms, then note-off. Turn events cancel any in-progress phrase and release before starting the next.
 
-### OSC → SWAM MIDI Mapping
+### OSC → SWAM MIDI Mapping (v3 implementation)
 
-- **Complex type → technique**: C1=Pizz keyswitch, C2/C3=Arco (legato vs tasto), C4=Harmonics ON, C5-C7=Portamento ON (varying glide speed), C8=near-bridge + Tremolo
-- **Intensity → Expression CC 11 + base velocity**: p={expr:20,vel:35}, mp={38,50}, mf={55,68}, f={75,85}, ff={95,100}, fff={115,120}
-- **Density → Attack Ramp CC 73**: high density = fast attack
-- **Sieve → MIDI note pool**: offsets + 36 (C2), selection strategy per complex type. Pitches are folded by octave into the cello's playable range (`CELLO_MIN`=36/C2, `CELLO_MAX`=89/F6) — out-of-range notes wrap up/down an octave rather than clamping, preserving pitch class
-- **Tilt → Expression CC 11** (60Hz, exponential `val²` curve, blended with base: `baseExpr*0.3 + tilt²*97`)
-- **Spin → Vibrato Depth CC 1 + Rate CC 76** (threshold 0.15, exponential above)
-- **Deviation → Bow Pressure CC 17 + Bow Speed CC 19** (exponential, wider range 20-127)
-- **Scramble → Bow Position CC 16**: solved=fingerboard(120), scrambled=bridge(5); skipped when complex type owns position (C3, C4, C7, C8)
-- **Tetra orbit → Bowing Sensitivity CC 21**: even=50 (warm), odd=110 (edgy)
-- **Path V1/V2 → Transpose**: 0 / -12
-- **Regime → Tremolo CC 92 + Attack Ramp**: contemplative=trem off/slow attack(90), conversational=trem off/medium(50), burst=trem on/fast(10); in burst, tremolo depth scales with turn rate
-- **Spells**:
-  - `sexy-move` = bow sweep (snap to bridge + peak expression, release after 400ms)
-  - `sledgehammer` = toggle freeze (CC64 sustain pedal + ignore voice events; second trigger releases all held notes)
-  - `oll-cross` = harmonic ping (harmonics flash + high note for 800ms)
-  - `sune` = V2 palette (tasto + dim expression)
-  - `anti-sune` = V1 palette (mid position + bright expression)
-  - `u-perm` = staccato burst (3-5 rapid short notes)
-  - `t-perm` = full reset (cancel phrases, all notes off, CCs to defaults)
+Full CC/KS numbers, intensity tables, and spell effect details live in `docs/swam_cello_reference.md`. Conceptual mapping:
+
+- **Complex type → technique** (`COMPLEX` table): C1 Pizz, C2/C3 Arco (legato vs tasto), C4 Harmonics (KS F# vel-4 = Octave), C5–C7 Portamento, C8 near-bridge + Tremolo (KS G# vel-3 = Fast). Each complex also owns a `register:{lo,hi}` MIDI window — pickPitch folds into it so C1 pizz sits low-mid, C4 harmonics/C8 ponticello sit high, C3/C7 stay deep
+- **Intensity → Expression peak + note velocity + bow-pressure scalar + phrase density**: 6-level table (p–fff); `bowMult` scales the complex's baseline bowPressure (fff digs, p lightens); `density` scales per-phrase note count via `phraseCount()`; envelope shape comes from `COMPLEX[n].exprEnv`
+- **Path V1/V2 → Expression peak scalar**: V1 ×1.0, V2 ×0.7 (plus –12 transpose + widened fold window to C1)
+- **Sieve → MIDI note pool**: offsets + 36 (C2); pitches octave-folded into cello range via `foldToRange(pitch, lo, hi)` with per-complex register bias (V2 shifts register `lo` down 12)
+- **Tilt → Bow Position ±30** modulation around the complex's baseline (timbral sul tasto↔sul pont sweep)
+- **Spin → Vibrato Depth + Rate**: EMA (α = 0.08) + musical dead zone at 0.15, added on top of per-complex baseline
+- **Deviation → Bow Pressure ±25** modulation around the complex's baseline (not overwrite), + Bow Speed for types that don't own speed
+- **Scramble**: no continuous CC binding yet — complex owns bow position. Sul tasto / sul pont KS were removed in v3.10; Phase 6 now drives Bow Position (CC 16) directly from scramble thresholds instead
+- **Regime → Attack Ramp multiplier**: contemplative ×1.2, conversational ×1.0, burst ×0.5 (applied to complex baseline, written once on regime/complex change)
+- **Path → (future) timbral shift via Bow Position bias** (Section Size KS removed in v3.10)
+- **Spells**: `sexy-move` bow-pressure accent → restore via `setupComplex`, `oll-cross` harmonic ping (KS F# vel-4 = Octave, restore), `sune` freeze toggle (CC 64), `anti-sune` bright-bow nudge + restore, `u-perm` short-gate staccato burst, `t-perm` full reset, `niklas` detection-only stub
+
+### 60 Hz transmission deadband
+
+Continuous CCs (Bow Position, Bow Pressure, Bow Speed, Vibrato Depth/Rate) only fire at 60 Hz while the cube is moving. When `state.spin < 0.02` for ≥ 200 ms, writes are skipped (last value holds in SWAM — stops vibrato wobble / bow flutter during rest). Above threshold, frames are coalesced in pairs (effective 30 Hz). Expression (CC 11) is envelope-driven, unaffected by the deadband.
+
+### Panic & watchdog
+
+- `/xk/panic` from the relay (emitted on WS-disconnect) → `bang()` — flushes all notes and CCs.
+- Inactivity watchdog (1 s tick): fires `allNotesOff()` only when all four hold — active notes, no release task pending, no scheduled phrase events, and no `/xk/voice` for ≥ 3 s. Long C3/C7 sustained notes pass through cleanly because their `releaseTask` keeps the second guard false.
 
 ### Humanization
 
-- **Velocity**: ±15% random jitter + accent (+8) every 3rd turn
-- **Pitch**: 10% chance of ±1 semitone microtonal shift
-- **Timing**: 0-30ms micro-delay between phrase notes
+- **Velocity**: ±15% jitter + accent (+8) every 3rd turn
+- **Pitch**: 10% chance of ±1 semitone shift
+- **Timing**: 0–30ms micro-delay between phrase notes
 
-### Keyswitches
+### Keyswitches — SWAM Cello 3 v3.10 (post D24/D27 migration)
 
-`KS = { ARCO:24, PIZZ:25, TREMOLO:26, STACCATO:27 }` — held 30ms (not instant) so SWAM registers the switch. Verify mapping in SWAM > Preferences > MIDI. If your SWAM config differs, edit the `KS` object at the top of `xk_swam.js`.
+Full 12-switch map on `KS_CH`, KS Octave = C0 (MIDI 24–35), 50 ms hold. v3.10 moved most controls from latch-toggles to **velocity-selectors**, and removed Sordino, Sul Tasto, Sul Ponticello, and Section Size from the KS plane entirely:
+
+```
+KS C  (24) PLAY_MODE      vel-3 = Bow / Pizz / Col Legno
+KS C# (25) MANUAL_BOWING  preset-controlled — never write
+KS D  (26) GESTURE_MODE   vel-3 = Expression / Bipolar / Bowing  (PIN to Expression)
+KS D# (27) ALT_FINGERING  latch
+KS E  (28) BOW_LIFT       latch
+KS F  (29) BOW_START      latch
+KS F# (30) HARMONICS      vel-4 = Off / Octave / Octave+5th / Control
+KS G  (31) KEEP_BOW_DIR   latch
+KS G# (32) TREMOLO        vel-3 = Off / Slow / Fast
+KS A  (33) TREMOLO_MODE   preset-controlled — never write
+KS A# (34) (unassigned base; Page-2 modifier combo target)
+KS B  (35) PAGE_MODIFIER  hold for B+x advanced combos
+```
+
+Velocity-select KS route through `setEnum(field, ks, target, optionCount)` using `velForOption(idx, n)` to land inside SWAM's KS Velocity Remap bands. `setEnum` diffs by option index, so re-asserting current state is a no-op (no inversion risk). `bang()` pins Gesture Mode = Expression so CC 11 is never silently reinterpreted as bow direction/displacement (which would silently break the Expression envelope and portamento feel).
+
+**Removed in v3.10**: Sordino → GUI/CC-only; Sul Tasto / Sul Ponticello → driven by Bow Position (CC 16); Section Size → concept removed. The pre-v3.10 bridge mapped SORDINO=30 / SUL_TASTO=31 / SUL_PONT=32 / HARMONICS=33 / TREMOLO=34 — under v3.10 those notes mean Harmonics, Keep Bow Direction, Tremolo, Tremolo Mode, and (unassigned). This was D24's root cause: bridge thought it was sending Harmonics/Tremolo, was actually sending Tremolo Mode + an unassigned KS, so C4 harmonics and C8 tremolo never sounded. COMPLEX C4 now declares `harmonics: HARMONICS.OCT` and C8 declares `tremolo: TREMOLO.FAST`; setupComplex calls `setEnum` on every change.
+
+SWAM preset prereqs: KS Octave = C0, Vibrato Rate MIDI-Learned to CC 19, Bow-page params MIDI-Learned per `docs/swam_cello_reference.md`. `docs/revision_roadmap.md` D27 + Phase 13 covers the migration; remaining Phases 6–8 / 10–12 carry forward.
+
+**Absent-param feature flags (SWAM Cello 3 v3.11)**: no Bow Speed or Attack Ramp knobs exist. Attack Control exists but as a **4-mode selector** (`vel.soft / vel.hard / expression / mix vel. expr.`), not a continuous 0–127 ramp — set it once in the preset to `expression` (or `mix vel. expr.`) so CC 11 envelope shaping drives attack for free. `max/xk_swam.js` gates all three via `HAS_BOW_SPEED / HAS_ATTACK_RAMP / HAS_ATTACK_CONTROL` (default `false`) — `cc()` and `ccForce()` early-return on ungated CCs, so setupComplex/regime/expression/spell call sites are all covered at the helper layer.
 
 ### Max MCP Bridge (live patch access)
 
@@ -310,7 +346,6 @@ All `/xk/*` messages go to SC (port 57120) and Max/MSP (port 57121). All `/gan/*
 | `/xk/perm` | int×8 | current vertex permutation |
 | `/xk/step` | int | transformation count |
 | `/xk/active` | int (0-7) | active vertex index |
-| `/xk/voice` | int, int, float, string, float | vertexIdx, complexType, density, intensity, duration |
 | `/xk/snap/element` | int (0-23) | S4 element gyro snaps to |
 | `/xk/snap/quat` | float×4 | quaternion of snap target |
 | `/xk/snap/dev` | float (0-1) | gyro deviation; 0=locked, 1=boundary |
@@ -322,6 +357,8 @@ All `/xk/*` messages go to SC (port 57120) and Max/MSP (port 57121). All `/gan/*
 | `/xk/expr/dev` | float (0-1) | S4 snap deviation; 0=locked, 1=boundary. 60Hz |
 | `/xk/expr/scramble` | float (0-1) | scramble factor (continuous). 60Hz |
 | `/xk/spell` | string | spell name on detection (e.g. "sexy-move") |
+| `/xk/voice` | int, int, float, string, float | vertexIdx, complexType, density, intensity, duration — fires only on real voice transitions (from `engine.onVoice`, not per gyro packet) |
+| `/xk/panic` | — | emitted by relay on WS-disconnect; bridges flush all notes + CCs |
 | `/gan/turn` | string | move (e.g. "R", "U'", "F2") — port 8000 to TD |
 | `/gan/gyro` | float×4 | quaternion — port 8000 to TD |
 
@@ -332,11 +369,15 @@ All `/xk/*` messages go to SC (port 57120) and Max/MSP (port 57121). All `/gan/*
 - **SC spell reactions**: `/xk/spell` is sent but SC has no OSCdef for it yet.
 - **Palette switching**: mode manager tracks palette name but no multi-palette SC code exists.
 - **Speed regime adaptation**: turn-rate tracker detects regime; contemplative mode polished (Phase 2 done), but conversational/burst SC behavior not yet implemented. See `docs/todo.md` Phases 3–4.
-- **Scramble arc (burst mode)**: scramble factor wired to SC reverb mix (Phase 2) and Max bow position. Full burst-mode arc (scramble as master decrescendo parameter) not yet implemented (Phase 4).
+- **Scramble arc (burst mode)**: scramble factor wired to SC reverb mix (Phase 2). Max bridge no longer maps scramble → bow position directly (the `COMPLEX` table owns bow position; scramble is reserved for Phase 6 KS latches of sul tasto / sul pont). Full burst-mode arc (scramble as master decrescendo parameter) not yet implemented (Phase 4).
 - **TouchDesigner**: TD receives raw `/gan/*` on port 8000. No `.toe` project exists.
+- **SWAM bridge Phases 6–12 (mixed state)**: Phases 0–5 + 9 of `docs/revision_roadmap.md` landed.
+  - **Phase 6 (pending)** — wire unused KS (Sordino on freeze, Sul Tasto/Pont on scramble thresholds, Alt Fingering on tetra, Section Size on path, Pizz Polyphony init)
+  - **Phase 7 (pending)** — V2 fold-window polish. Sub-task "CC 75 Attack Control spell spikes" is **obsolete** in SWAM v3.11 (Attack Control is a 4-mode selector, not a continuous ramp; use the CC 11 envelope path instead).
+  - **Phase 8 (pending)** — note-off velocity from turn rate
+  - **Phase 10 (open, likely upstream)** — harmonics (C4) and tremolo (C8) KS latches never fire during play. D24: hypothesis is voice-engine rarely emits complex 4/8. Needs Max-console log check (`complex -> C4` / `-> C8`) to confirm before audit of `src/voice-engine.ts` + `src/complexes.ts`.
+  - **Phase 11 (open)** — ghost-cube calibration. D25: `ghostViewOffset` in `public/dashboard.html:1075` is render-only. Needs WS `set_snap_calibration` message → `engine.setSnapCalibration(quat)` → applied in `src/quaternion.ts` before `nearestS4` and deviation computation.
+  - **Phase 12 (optional)** — pitch-bend glissando path for wide-interval C5 moments (D26), only if C5 compound-gliss segments (D22) still feel under-delivered.
+  - **Prereq before any listening test**: save `xenakube_cello.swampreset` with KS Octave = C0, KS MIDI Channel = 2, Bow-page CCs MIDI-Learned (CC 16/17/18), Vibrato Rate MIDI-Learned to CC 19, Attack Control = `expression` or `mix vel. expr.`, and **`Portamento Control = CC (P.MaxTime)` on the Advanced → MIDI page** (D20 — otherwise CC 5 writes are silently ignored and no glissando responds). CC 20 / 73 / 75 gated off by feature flags — no Learn needed.
+- **Niklas audio effect**: spell detection + `/xk/spell niklas` emission shipped; audio effect deferred (three candidates in `docs/revision_roadmap.md` D19 — pick after first listen).
 
-## Visuals Status
-
-**Browser dashboard**: `http://localhost:3000` — full performance dashboard with spell detection, expression gauges, mode indicators, 3D cube, vertex/complex cards, sieve strip, move log. Gyro smoothing control in header.
-
-**TouchDesigner**: receives raw `/gan/*` on port 8000. No `.toe` project exists yet.
