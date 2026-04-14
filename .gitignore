@@ -1,11 +1,13 @@
 node_modules/
 dist/
-.claude/
+.claude/*
+!.claude/agents/
 *.env
 .DS_Store
 
 # External MCP tooling pulled in for Max patching; not part of this project
 maxmsp-mcp/
+MaxMSP-MCP-Server/
 max/max_mcp*.js
 max/package.json
 max/package-lock.json

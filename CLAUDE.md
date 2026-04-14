@@ -270,6 +270,28 @@ Every phrase schedules its own auto-release timer (`scheduleRelease(dur)`) — n
 
 `KS = { ARCO:24, PIZZ:25, TREMOLO:26, STACCATO:27 }` — held 30ms (not instant) so SWAM registers the switch. Verify mapping in SWAM > Preferences > MIDI. If your SWAM config differs, edit the `KS` object at the top of `xk_swam.js`.
 
+### Max MCP Bridge (live patch access)
+
+Claude Code can inspect and edit the running Max patch via the `maxmsp` MCP server at `MaxMSP-MCP-Server/` (project-scoped, registered in `.mcp.json`). Use the **`max-patch` subagent** (`.claude/agents/max-patch.md`) for any patch work — it has the MCP tools scoped in and knows the XenaKube patch conventions.
+
+**Prerequisite**: open `MaxMSP-MCP-Server/MaxMSP_Agent/demo.maxpat` in Max 9+, click `script npm install` (first time), then `script start` on the agent tab. Without this, MCP tools error out on connect.
+
+**Tools exposed** (only the subagent should call these directly):
+
+| Tool | Purpose |
+|------|---------|
+| `get_objects_in_patch` | Dump all objects + patch cords in the frontmost patch |
+| `get_objects_in_selected` | Only currently-selected objects |
+| `get_object_attributes` | Attribute name/value pairs for a given `varname` |
+| `list_all_objects` / `get_object_doc` | Discover + look up Max object documentation |
+| `add_max_object` / `remove_max_object` | Create/delete objects (requires `varname`) |
+| `connect_max_objects` / `disconnect_max_objects` | Patch-cord edits by outlet/inlet index |
+| `set_object_attribute` / `set_message_text` / `set_number` | Mutate object state |
+| `send_bang_to_object` / `send_messages_to_object` | Trigger events |
+| `get_avoid_rect_position` | Bounding rect to avoid when placing new objects |
+
+**Boundary**: the XenaKube patch should stay thin — the 4-object chain in the diagram above plus `print xk_swam`. New routing/logic belongs in `max/xk_swam.js`, not in new Max objects. The subagent enforces this.
+
 ## OSC Reference
 
 All `/xk/*` messages go to SC (port 57120) and Max/MSP (port 57121). All `/gan/*` messages go to TD on port 8000. Full state burst (~30 messages) sent on every cube turn and at BLE gyro rate (~10Hz). `/xk/gyro`, `/gan/gyro`, and `/xk/expr/*` sent at 60Hz from Kalman filter predict loop. `/xk/spell` sent on algorithm detection. Full `XenaKubeState` JSON broadcast to all WS clients on every state change.

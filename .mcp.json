@@ -1,0 +1,13 @@
+{
+  "mcpServers": {
+    "maxmsp": {
+      "command": "uv",
+      "args": [
+        "--directory",
+        "G:/xenakube/MaxMSP-MCP-Server",
+        "run",
+        "server.py"
+      ]
+    }
+  }
+}
