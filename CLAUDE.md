@@ -217,7 +217,9 @@ Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) d
 
 | File | Role |
 |------|------|
-| `xk_swam.js` | v8 object (v2): OSC → midievent. Phrase generators per complex type, legato note ordering (noteOn-before-noteOff with 20ms overlap for SWAM portamento), auto-release timer with fade, velocity humanization (±15% + accents), 60Hz expression → continuous CC, spell reactions, CC cache |
+| `xk_swam.js` | v8 object (v2): OSC → midievent. Phrase generators per complex type, legato note ordering (noteOn-before-noteOff with 20ms overlap for SWAM portamento), auto-release timer with fade, velocity humanization (±15% + accents), 60Hz expression → continuous CC, spell reactions, CC cache. Pitches octave-folded into cello range (C2–F6, MIDI 36–89) via `CELLO_MIN`/`CELLO_MAX` + `foldToRange()` |
+| `tester.maxpat` | Reference Max patch: the 4-object chain from the doc above (`udpreceive 57121` → `v8 xk_swam.js @autowatch 1` → `vst~ "SWAM Cello 3" 2` → `dac~`). Open this to drive SWAM from a live relay. |
+| `tester1.maxpat` | Debug-harness variant of `tester.maxpat` with added message boxes (hand-fired `/xk/expr/*`, raw `midievent` CCs) and a `live.gain~` for isolated CC/midievent testing without a running relay. |
 
 ### Per-Turn Phrase Generation
 

@@ -2,3 +2,10 @@ node_modules/
 dist/
 .claude/
 *.env
+.DS_Store
+
+# External MCP tooling pulled in for Max patching; not part of this project
+maxmsp-mcp/
+max/max_mcp*.js
+max/package.json
+max/package-lock.json

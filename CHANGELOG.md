@@ -4,6 +4,11 @@ All notable changes to XenaKube are documented here.
 
 ## 2026-04-13
 
+### Added
+- **`max/tester.maxpat`** — reference Max patch wiring the documented 4-object chain (`udpreceive 57121` → `v8 xk_swam.js @autowatch 1` → `vst~ "SWAM Cello 3" 2` → `dac~`). Open this in Max to drive SWAM Cello 3 from a running relay.
+- **`max/tester1.maxpat`** — debug-harness variant with extra message boxes (hand-fired `/xk/expr/scramble`, raw `midievent` CCs) and a `live.gain~` for bench-testing CC/midievent flow without the relay running.
+- **`.gitignore`** — ignore `.DS_Store` and the external `maxmsp-mcp/` tooling (plus its `max/max_mcp*.js`, `max/package*.json`) which is a separate MCP server used while editing patches, not part of this project.
+
 ### Fixed
 - **Max/SWAM pitches clamped to cello range** (`max/xk_swam.js`) — SWAM Cello 3 plays C2–F6 (MIDI 36–89). Generated pitches previously clamped to 24–96 (C1–C8), producing silent notes at the extremes (and, under V2 transpose of -12, pushing sieve pitches below C2). All pitch selection now folds into the cello window by octave transposition (preserving pitch class from the sieve) rather than hard-clamping, so out-of-range notes wrap up/down an octave instead of collapsing to the min/max. New `CELLO_MIN`/`CELLO_MAX` constants at the top of the file make the range easy to re-tune.
 
