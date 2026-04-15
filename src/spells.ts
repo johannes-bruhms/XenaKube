@@ -134,10 +134,10 @@ export function expandSpellBook(canonical: Spell[]): Spell[] {
 //   2-look OLL:     oll-cross (edges), sune + anti-sune (corners)
 //   2-look PLL:     t-perm (corners+edges), u-perm (3-edge cycle)
 //
-// Inverse-sexy (U R U' R') is a rotation variant of sexy-move and is
-// detected as such. The 4-move sledgehammer was removed in favor of the
-// 7-turn sune for the freeze-toggle effect — a more deliberate gesture
-// that's less prone to accidental triggering mid-phrase.
+// Half-turn convention (CCW): X2 is expanded into two CCW quarter-turns
+// (e.g. U2 → U' U'). GAN hardware only reports 90° clicks, so the detector
+// never sees a single "X2" token. Performers habitually flick half-turns
+// CCW (left-index pull); reversing direction will fail to trigger.
 export const CANONICAL_SPELLS: Spell[] = [
   // --- F2L building block (4 moves) ---
   {
@@ -153,25 +153,29 @@ export const CANONICAL_SPELLS: Spell[] = [
     effect: 'oll-cross',
   },
   {
+    // Canonical: R U R' U R U2 R' (7). U2 expanded CCW → 8 quarter-turns.
     name: 'sune',
-    algorithm: ['R', 'U', "R'", 'U', 'R', 'U2', "R'"],
+    algorithm: ['R', 'U', "R'", 'U', 'R', "U'", "U'", "R'"],
     effect: 'sune',
   },
   {
+    // Canonical: R U2 R' U' R U' R' (7). U2 expanded CCW → 8 quarter-turns.
     name: 'anti-sune',
-    algorithm: ['R', 'U2', "R'", "U'", 'R', "U'", "R'"],
+    algorithm: ['R', "U'", "U'", "R'", "U'", 'R', "U'", "R'"],
     effect: 'anti-sune',
   },
 
   // --- 2-look PLL ---
   {
+    // Canonical: R U' R U R U R U' R' U' R2 (11). R2 expanded CCW → 12.
     name: 'u-perm',
-    algorithm: ['R', "U'", 'R', 'U', 'R', 'U', 'R', "U'", "R'", "U'", 'R2'],
+    algorithm: ['R', "U'", 'R', 'U', 'R', 'U', 'R', "U'", "R'", "U'", "R'", "R'"],
     effect: 'u-perm',
   },
   {
+    // Canonical: R U R' U' R' F R2 U' R' U' R U R' F' (14). R2 expanded CCW → 15.
     name: 't-perm',
-    algorithm: ['R', 'U', "R'", "U'", "R'", 'F', 'R2', "U'", "R'", "U'", 'R', 'U', "R'", "F'"],
+    algorithm: ['R', 'U', "R'", "U'", "R'", 'F', "R'", "R'", "U'", "R'", "U'", 'R', 'U', "R'", "F'"],
     effect: 't-perm',
   },
 

@@ -19,7 +19,7 @@
 // Prerequisite: SWAM preset configured per revision_roadmap.md.
 // KS Octave = C0, Vibrato Rate CC 19, Bow Position CC 16,
 // Bow Pressure CC 17, Bow Pressure Accent CC 18, Bow Speed CC 20,
-// Attack Ramp CC 73, Attack Control CC 75.
+// Attack Ramp CC 73, Attack Control CC 75, Sordino CC 68 (Phase 6).
 // ================================================================
 
 autowatch = 1;
@@ -59,7 +59,16 @@ var CC = {
 	BOW_PRESS_ACCENT: 18,   // MIDI-Learn
 	BOW_SPEED:        20,   // MIDI-Learn (moved off 19 to free VIBRATO_RATE)
 	ATTACK_RAMP:      73,   // MIDI-Learn
-	ATTACK_CONTROL:   75    // MIDI-Learn
+	ATTACK_CONTROL:   75,   // MIDI-Learn
+	SORDINO:          68,   // MIDI-Learn (v3.10: GUI/CC-only; see Phase 6)
+	// D31: Harmonics / Tremolo via CC because KS F# and KS G# are 2-band
+	// velocity-selects (Low=2nd/Slow, High=3rd/Fast) with Off as default-
+	// only — once fired, Off is unreachable via KS. CC lets us hit any of
+	// the 4 Harmonics states and 3 Tremolo states cleanly. MIDI-Learn
+	// required: right-click each selector in SWAM GUI → MIDI Learn →
+	// send these CCs once → save preset.
+	HARMONICS:        78,   // MIDI-Learn to Harmonics selector
+	TREMOLO:          79    // MIDI-Learn to Tremolo selector
 };
 
 // ================================================================
@@ -84,14 +93,46 @@ var HAS_BOW_SPEED        = false;
 var HAS_ATTACK_RAMP      = false;
 var HAS_ATTACK_CONTROL   = false;
 var HAS_BOW_PRESS_ACCENT = true;   // flip false if MIDI-Learn is not wired
+// D31: flip these false until you MIDI-Learn Harmonics / Tremolo selectors
+// to CC 78 / CC 79 in SWAM. When false the bridge falls back to KS F#/G#,
+// which fires ON correctly but cannot turn Off (stays stuck at 2nd / Slow).
+var HAS_HARMONICS_CC     = true;
+var HAS_TREMOLO_CC       = true;
 
 function hasCC(ccNum) {
 	if (ccNum === CC.BOW_SPEED)        return HAS_BOW_SPEED;
 	if (ccNum === CC.ATTACK_RAMP)      return HAS_ATTACK_RAMP;
 	if (ccNum === CC.ATTACK_CONTROL)   return HAS_ATTACK_CONTROL;
 	if (ccNum === CC.BOW_PRESS_ACCENT) return HAS_BOW_PRESS_ACCENT;
+	if (ccNum === CC.HARMONICS)        return HAS_HARMONICS_CC;
+	if (ccNum === CC.TREMOLO)          return HAS_TREMOLO_CC;
 	return true;
 }
+
+// ================================================================
+// D31 — Harmonics / Tremolo CC value maps
+//
+// SWAM maps a 0–127 CC onto its discrete selector states by equal-width
+// bands. Values are band centers so SWAM never sits on a boundary and a
+// 1-LSB jitter (there shouldn't be one, but belt-and-suspenders) won't
+// flip the selection.
+//
+//   Harmonics (4 states): bands ~0-31 / 32-63 / 64-95 / 96-127
+//   Tremolo   (3 states): bands ~0-42 / 43-84 / 85-127
+//
+// If your preset's Controller Mapping has the Harmonics or Tremolo
+// bands remapped, edit these values to the centers SWAM's GUI shows.
+// ================================================================
+var HARMONICS_CC_VAL = {};
+HARMONICS_CC_VAL[0] = 16;    // OFF     — lowest quarter
+HARMONICS_CC_VAL[1] = 48;    // OCT     — 2nd harmonic band
+HARMONICS_CC_VAL[2] = 80;    // OCT_5TH — 3rd harmonic band
+HARMONICS_CC_VAL[3] = 112;   // CTRL    — 4-Control band
+
+var TREMOLO_CC_VAL = {};
+TREMOLO_CC_VAL[0] = 21;      // OFF   — lowest third
+TREMOLO_CC_VAL[1] = 64;      // SLOW  — middle third
+TREMOLO_CC_VAL[2] = 106;     // FAST  — top third
 
 // ================================================================
 // KEY SWITCHES — SWAM Cello 3 v3.10 mapping (KS Octave = C0, KS_CH).
@@ -136,6 +177,24 @@ var KS_HOLD_MS = 50;
 function velForOption(idx, optionCount) {
 	var band = 127 / optionCount;
 	return clamp(Math.round(band * (idx + 0.5)), 1, 127);
+}
+
+// Per-KS velocity overrides — hard-coded tested velocities that have been
+// audited against SWAM's "KS Velocity Remap" editor for each option index.
+// Overrides beat the even-band default from velForOption because a user
+// (or preset) can shift remap boundaries; trusting thirds/quarters of 127
+// silently mis-selects when the bands are asymmetric. Audit by opening
+// SWAM GUI → Controls → Keyswitch → Velocity Remap and reading the
+// centre of each band for the KS note in question.
+var KS_VEL_OVERRIDE = {};
+KS_VEL_OVERRIDE[26] = [21, 64, 106];        // KS D  Gesture Mode (3): Expression / Bipolar / Bowing
+KS_VEL_OVERRIDE[30] = [16, 48, 80, 112];    // KS F# Harmonics    (4): OFF / 2 / 3 / 4-Ctrl
+KS_VEL_OVERRIDE[32] = [21, 64, 106];        // KS G# Tremolo      (3): OFF / Slow / Fast
+
+function velForKS(ks, idx, optionCount) {
+	var tbl = KS_VEL_OVERRIDE[ks];
+	if (tbl && tbl[idx] != null) return tbl[idx];
+	return velForOption(idx, optionCount);
 }
 
 // Harmonics enum (matches COMPLEX[n].harmonics; 4-option KS F#)
@@ -276,13 +335,37 @@ var state = {
 	dev: 0,
 	devEMA: 0,
 	spinLowSince: 0,         // timestamp when spin first dropped below deadband
-	frame60: 0               // 60 Hz counter for 30 Hz throttle
+	frame60: 0,              // 60 Hz counter for 30 Hz throttle
+
+	// Phase 6: scramble → Bow Position bias (sul tasto ↔ sul pont).
+	// Hysteresis bands: latch tasto after 2 s below 0.2, pont after 2 s above
+	// 0.8. Clear in the 0.3–0.7 transition band. scrambleBowBias feeds
+	// handleExprTilt's BOW_POSITION write.
+	scrambleBowBias: 0,
+	tastoSince: 0,
+	pontSince: 0,
+	sordinoOn: false,
+
+	// Phase 8: note-off velocity derived from turn rate.
+	turnRate: 0,
+	noteOffVel: 64,
+
+	// KS sync guard — first N voice events after bang() force-write KS
+	// regardless of state.* diff, so SWAM provably aligns with our model
+	// before diff-suppression kicks in (D28).
+	ksForceCount: 0,
+	forceKS: false
 };
 
 var ccCache = {};
 var phraseTasks = [];
 var releaseTask = null;
 var watchdogTask = null;
+
+// Pending KS noteOff tasks keyed by note number (D29). A new keyswitch()
+// on the same note cancels and eagerly fires the stale noteOff at the new
+// velocity so the old selection isn't re-asserted mid-hold.
+var ksPending = {};
 
 // ================================================================
 // MIDI OUTPUT
@@ -297,9 +380,15 @@ function noteOn(pitch, vel) {
 	outlet(0, "midievent", statusNoteOn(MIDI_CH), pitch, vel);
 }
 
-function noteOff(pitch) {
+// Phase 8: velocity default comes from state.noteOffVel (turn-rate driven).
+// Fast turns → higher note-off velocity → shorter natural release in SWAM.
+// Callers that need a specific release character (fades, explicit releases)
+// can still pass their own velocity.
+function noteOff(pitch, vel) {
 	pitch = clamp(pitch, 0, 127);
-	outlet(0, "midievent", statusNoteOff(MIDI_CH), pitch, 0);
+	if (vel == null) vel = state.noteOffVel;
+	vel = clamp(Math.round(vel), 0, 127);
+	outlet(0, "midievent", statusNoteOff(MIDI_CH), pitch, vel);
 }
 
 // Continuous CC — cache-suppressed. Use for 60 Hz streams.
@@ -327,17 +416,38 @@ function ccForce(num, val) {
 // interpreted as "option 0 = OFF", which flipped harmonics (C4) and
 // tremolo (C8) back off ~50 ms after each turn into those complexes.
 // Play Mode escaped notice because "bow" is option 0 anyway.
+//
+// D29 — Interleave guard: if a previous noteOff for this KS note is still
+// pending, fire it NOW at the NEW velocity (before the new noteOn) and
+// cancel the scheduled task. Otherwise the stale noteOff lands ~50 ms
+// later at the OLD velocity and re-selects the OLD option, silently
+// undoing the new selection. This was the "glitch on/off" cause on
+// rapid complex changes (C1 ↔ C4, C1 ↔ C8).
 function keyswitch(note, vel, channel) {
 	var ch = channel || KS_CH;
 	var v = vel || KS_VEL.HIGH;
+
+	var prev = ksPending[note];
+	if (prev) {
+		prev.task.cancel();
+		// Fire a noteOff at the NEW velocity (not the stale prev.vel) so
+		// SWAM "releases" the held KS as a re-select of the NEW option.
+		// Also guarantees the next noteOn isn't a duplicate-while-held,
+		// which some synths ignore.
+		outlet(0, "midievent", statusNoteOff(prev.ch || ch), note, v);
+		ksPending[note] = null;
+	}
+
 	outlet(0, "midievent", statusNoteOn(ch), note, v);
 	var ks = note;
 	var kch = ch;
 	var kv = v;
 	var t = new Task(function() {
 		outlet(0, "midievent", statusNoteOff(kch), ks, kv);
+		if (ksPending[ks] && ksPending[ks].task === t) ksPending[ks] = null;
 	}, this);
 	t.schedule(KS_HOLD_MS);
+	ksPending[note] = { task: t, ch: kch, vel: kv };
 }
 
 // ================================================================
@@ -350,18 +460,45 @@ function keyswitch(note, vel, channel) {
 // Play Mode keeps the legacy preset-tuned velocities (40/80/110) since
 // they're known-good in the current SWAM preset.
 function setPlayMode(target) {
-	if (state.playMode === target) return;
+	if (!state.forceKS && state.playMode === target) return;
 	var vel = PLAY_MODE_VEL[target];
 	if (vel == null) return;
 	keyswitch(KS.PLAY_MODE, vel);
 	state.playMode = target;
 }
 
-// Generic velocity-select KS — picks vel by option index via velForOption
+// D31 — Harmonics / Tremolo selector writes. CC path is preferred and goes
+// through ccForce's diff-by-cache; KS fallback is used only when the
+// MIDI-Learn hasn't been done yet and will leave the selector stuck after
+// the first fire (see HAS_HARMONICS_CC comment). Both paths still update
+// state.{harmonics,tremolo} so the rest of the bridge's diffing works.
+function setHarmonics(target) {
+	if (state.harmonics === target) return;
+	if (HAS_HARMONICS_CC) {
+		ccForce(CC.HARMONICS, HARMONICS_CC_VAL[target]);
+	} else {
+		keyswitch(KS.HARMONICS, velForKS(KS.HARMONICS, target, 4));
+	}
+	state.harmonics = target;
+}
+
+function setTremolo(target) {
+	if (state.tremolo === target) return;
+	if (HAS_TREMOLO_CC) {
+		ccForce(CC.TREMOLO, TREMOLO_CC_VAL[target]);
+	} else {
+		keyswitch(KS.TREMOLO, velForKS(KS.TREMOLO, target, 3));
+	}
+	state.tremolo = target;
+}
+
+// Generic velocity-select KS — picks vel via velForKS (overrides → even bands)
 // so it lands inside SWAM's KS Velocity Remap band for that option count.
+// The forceKS flag (set during the ksForceCount window after bang()) bypasses
+// diff-suppression so the first real voice events re-assert KS to SWAM.
 function setEnum(field, ks, target, optionCount) {
-	if (state[field] === target) return;
-	keyswitch(ks, velForOption(target, optionCount));
+	if (!state.forceKS && state[field] === target) return;
+	keyswitch(ks, velForKS(ks, target, optionCount));
 	state[field] = target;
 }
 
@@ -491,11 +628,12 @@ function setupComplex(complexType) {
 	// Play Mode (velocity-select KS)
 	setPlayMode(cmx.playMode);
 
-	// Harmonics (4-opt) and Tremolo (3-opt) — v3.10 vel-select on KS F#/G#.
-	// setEnum diffs against state.{harmonics,tremolo} so we never re-fire
-	// when the new complex shares the previous value.
-	setEnum("harmonics", KS.HARMONICS, cmx.harmonics, 4);
-	setEnum("tremolo",   KS.TREMOLO,   cmx.tremolo,   3);
+	// Harmonics (4-state) and Tremolo (3-state) — CC path (D31). The v3.10
+	// KS F#/G# were 2-band vel-selects with unreachable-Off; CC gives us
+	// clean access to every state including Off. Falls back to KS if the
+	// MIDI-Learn hasn't been done.
+	setHarmonics(cmx.harmonics);
+	setTremolo(cmx.tremolo);
 
 	// Baseline CCs (forced — setup is authoritative). bow pressure is
 	// applied at the complex baseline here; handleVoice then overrides
@@ -783,10 +921,22 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	cancelPhrase(LEGATO_COMPLEX[complexType] === true);
 	if (releaseTask) { releaseTask.cancel(); releaseTask = null; }
 
+	// KS sync guard (D28) — for the first N voice events after bang(),
+	// force-write KS via setupComplex regardless of state.activeComplex
+	// diff, so the in-JS selector state provably aligns with SWAM before
+	// diff-suppression silences subsequent re-asserts.
+	var forcing = state.ksForceCount > 0;
+	if (forcing) {
+		state.ksForceCount--;
+		state.forceKS = true;
+	}
+
 	// Technique change — diff-fire KS via setupComplex
-	if (complexType !== state.activeComplex) {
+	if (complexType !== state.activeComplex || forcing) {
 		setupComplex(complexType);
 	}
+
+	state.forceKS = false;
 
 	var cmx = COMPLEX[complexType];
 	if (!cmx) return;
@@ -813,6 +963,15 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	// Portamento Control = CC (P.MaxTime); see D20.
 	ccForce(CC.PORTAMENTO_ON,   cmx.portamento.on ? 127 : 0);
 	ccForce(CC.PORTAMENTO_TIME, cmx.portamento.time);
+
+	// D30 — Harmonics + Tremolo KS are written only by setupComplex's
+	// setEnum diff. The previous defensive re-assert here fired both KS on
+	// every voice event (bypassing the diff), which re-selected Harmonics=OFF
+	// and Tremolo=OFF whenever a new voice on a non-C4/C8 complex arrived
+	// while a still-sounding C4 harmonic or C8 tremolo note was bowing —
+	// the "flash on/off within a single turn" symptom. D28's ksForceCount +
+	// D29's interleave guard already handle the drift cases the defensive
+	// write was added for; let setEnum do its job.
 	log("voice C" + complexType + " porta=" + (cmx.portamento.on ? "on" : "off") +
 	    " time=" + cmx.portamento.time + " bow=" + Math.round(bowBase) +
 	    " int=" + intensity);
@@ -874,7 +1033,7 @@ function handleExprTilt(val) {
 	var now = Date.now();
 	if (!shouldTransmit(now)) return;
 	var jitter = (val - 0.5) * 60;         // ±30 — audible sul tasto↔sul pont sweep
-	cc(CC.BOW_POSITION, Math.round(cmx.bowPos + jitter));
+	cc(CC.BOW_POSITION, Math.round(cmx.bowPos + jitter + state.scrambleBowBias));
 }
 
 function handleExprSpin(val) {
@@ -917,11 +1076,40 @@ function handleExprDev(val) {
 	}
 }
 
+// Phase 6: scramble drives a Bow Position bias (sul tasto ↔ sul pont).
+// v3.10 removed the KS latches, so the same "solved = warm / scrambled =
+// aggressive" timbral shift now comes from CC 16 bias, layered on top of the
+// complex's baseline and the tilt ±30 modulation. 2 s hysteresis prevents
+// thrash near the thresholds; the bias is skipped for C8 (already at the
+// bridge — biasing further would saturate at bowPos=0).
 function handleExprScramble(val) {
 	state.scramble = val;
-	// Scramble no longer forces bow position — that's the complex's job
-	// and tilt adds timbral modulation. Leave CC writes to Phase 6
-	// (KS latch sul tasto / sul pont on thresholds).
+	var now = Date.now();
+	if (val < 0.2) {
+		if (state.tastoSince === 0) state.tastoSince = now;
+		state.pontSince = 0;
+	} else if (val > 0.8) {
+		if (state.pontSince === 0) state.pontSince = now;
+		state.tastoSince = 0;
+	} else if (val > 0.3 && val < 0.7) {
+		state.tastoSince = 0;
+		state.pontSince = 0;
+	}
+	var newBias = 0;
+	if (state.tastoSince && now - state.tastoSince >= 2000) newBias = 40;
+	else if (state.pontSince && now - state.pontSince >= 2000 &&
+	         state.activeComplex !== 8) newBias = -40;
+	if (newBias === state.scrambleBowBias) return;
+
+	state.scrambleBowBias = newBias;
+	// Apply immediately so the shift is audible without waiting for the next
+	// tilt frame (and so it still happens when the cube is held still).
+	var cmx = COMPLEX[state.activeComplex];
+	if (cmx && cmx.bowPos != null) {
+		var jitter = (state.tilt - 0.5) * 60;
+		ccForce(CC.BOW_POSITION, Math.round(cmx.bowPos + jitter + newBias));
+	}
+	log("scramble bow bias -> " + newBias);
 }
 
 // ================================================================
@@ -951,8 +1139,13 @@ function handleRegime(r) {
 	}
 }
 
+// Phase 8: turn rate → note-off velocity. Fast turns (burst) produce
+// short, bitten releases; slow turns (contemplative) produce long,
+// naturally-decayed releases. Mapping: 0 turns/sec → vel 25, 8+ → vel 120.
 function handleRate(turnsPerSec) {
-	// Intentionally empty — tremolo is KS-owned by C8 now.
+	state.turnRate = turnsPerSec;
+	var v = 25 + turnsPerSec * 12;
+	state.noteOffVel = clamp(Math.round(v), 1, 127);
 }
 
 function handleSieve() {
@@ -981,10 +1174,10 @@ function handleSpell(name) {
 			break;
 
 		case "oll-cross":
-			// Harmonic ping: switch Harmonics → octave overtone (v3.10 vel-
-			// select), play a high note, then restore to whatever the active
-			// complex owns. setEnum diffs so the restore is a no-op for C4.
-			setEnum("harmonics", KS.HARMONICS, HARMONICS.OCT, 4);
+			// Harmonic ping: switch Harmonics → octave overtone, play a high
+			// note, then restore to whatever the active complex owns.
+			// setHarmonics diffs so the restore is a no-op for C4.
+			setHarmonics(HARMONICS.OCT);
 			var harmPitch = foldToRange(pickPitch(4) + 12);
 			noteOn(harmPitch, 60);
 			state.activeNotes.push(harmPitch);
@@ -1023,13 +1216,21 @@ function handleSpell(name) {
 
 		case "sune":
 			state.frozen = !state.frozen;
+			// Phase 6: sordino colors the freeze — muted, veiled sustain.
+			// v3.10 removed Sordino from the KS plane; drive via MIDI-Learned
+			// CC (default 68) so the preset routes it to the GUI Sordino
+			// toggle. Paired with the sustain pedal so held notes keep
+			// sounding under the mute.
+			state.sordinoOn = state.frozen;
 			if (state.frozen) {
 				ccForce(CC.SUSTAIN_PEDAL, 127);
-				log("FROZEN");
+				ccForce(CC.SORDINO, 127);
+				log("FROZEN (sordino on)");
 			} else {
 				ccForce(CC.SUSTAIN_PEDAL, 0);
+				ccForce(CC.SORDINO, 0);
 				allNotesOff();
-				log("UNFROZEN");
+				log("UNFROZEN (sordino off)");
 			}
 			break;
 
@@ -1149,6 +1350,17 @@ function bang() {
 	state.devEMA = 0;
 	state.spinLowSince = 0;
 	state.frame60 = 0;
+	state.scrambleBowBias = 0;
+	state.tastoSince = 0;
+	state.pontSince = 0;
+	state.sordinoOn = false;
+	state.turnRate = 0;
+	state.noteOffVel = 64;
+	// KS sync guard: first 3 voice events after reset force-write KS so
+	// SWAM aligns with our selector model even if the preset or a prior
+	// session drifted its state (D28).
+	state.ksForceCount = 3;
+	state.forceKS = false;
 	ccCache = {};
 
 	// Expression to 0 (silent) — first phrase ramps from attack fraction.
@@ -1164,6 +1376,7 @@ function bang() {
 	ccForce(CC.SUSTAIN_PEDAL, 0);
 	ccForce(CC.ATTACK_RAMP, 64);
 	ccForce(CC.ATTACK_CONTROL, 64);
+	ccForce(CC.SORDINO, 0);
 
 	// Pin Gesture Mode = Expression (D27 / portamento safety).
 	// In v3.10, KS D's Bipolar/Bowing modes re-interpret CC 11 as bow
@@ -1174,9 +1387,10 @@ function bang() {
 	setEnum("gestureMode", KS.GESTURE_MODE, GESTURE.EXPR, 3);
 
 	// Explicit OFF for Harmonics + Tremolo so SWAM matches our state model
-	// even if the preset stored a different default (D27).
-	setEnum("harmonics", KS.HARMONICS, HARMONICS.OFF, 4);
-	setEnum("tremolo",   KS.TREMOLO,   TREMOLO.OFF,   3);
+	// even if the preset stored a different default (D27, D31). CC path
+	// reaches Off cleanly; KS fallback cannot (F#/G# 2-band vel-select).
+	setHarmonics(HARMONICS.OFF);
+	setTremolo(TREMOLO.OFF);
 
 	log("reset");
 }

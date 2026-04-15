@@ -84,12 +84,16 @@ Stateful diffing is still required so we don't re-fire when an option is already
 | **D#** | 27 | Alternate Fingering | 3-opt | Mid / Bridge / Nut+Open |
 | E      | 28 | Bow Lift | 2-opt | Off String / On String |
 | F      | 29 | Bow Start | 2-opt | Down Bow / Up Bow |
-| **F#** | 30 | **Harmonics** | 4-opt | OFF / +oct / +oct+5th / 4 Control |
+| **F#** | 30 | **Harmonics** | **2-opt** + default-Off (D31) | **Low=2nd / High=3rd** (Off is default only — NOT reachable via KS; no KS access to 4th) |
 | G      | 31 | Keep Bow Direction | latch | (avoid — disrupts gliss alternation) |
-| **G#** | 32 | **Tremolo** | 3-opt | OFF / Slow / Fast |
+| **G#** | 32 | **Tremolo** | **2-opt** + default-Off (D31) | **Low=Slow / High=Fast** (Off is default only — NOT reachable via KS) |
 | A      | 33 | Tremolo Mode | 3-opt | Hz / Sync / Sync/Acc |
-| A#     | 34 | (unassigned base page) | — | only meaningful as B+A# |
+| A#     | 34 | Sordino | 2-opt (at next Note On) | Low=Off / High=On |
 | **B**  | 35 | Page Modifier | hold | hold + another KS for Bow/Pizz Polyphony, Double Hold String |
+
+> **D31 — Harmonics F# and Tremolo G# are NOT 3-/4-opt velocity-selects.** Earlier revisions of this doc (and `xk_swam.js`) claimed 4-opt Harmonics and 3-opt Tremolo with selectable Off. The official v3.10 PDF (`docs/v3.10-keyswitches.pdf` pp. 100–102) shows only **Low / High** velocity bands for both — Off is the instrument's initial state, not a velocity band. Once fired, **Off is unreachable via KS**. Every 3-opt KS in the same PDF explicitly names a **Mid Velocity**; F# and G# do not. The symptom this caused: sending our "OFF" velocity for non-C4/non-C8 complexes actually selected 2nd / Slow, leaving Harmonics and Tremolo stuck on.
+>
+> **`xk_swam.js` now drives Harmonics and Tremolo via CC** (CC 78 and CC 79 — SWAM's "all KS params also respond to CC via the Controller Mapping section", PDF p. 102). MIDI-Learn required once: right-click the Harmonics selector in SWAM → MIDI Learn → send CC 78 from the bridge (or any MIDI source) → same for Tremolo selector with CC 79. Save the preset. Fall-back to KS firing is retained behind `HAS_HARMONICS_CC` / `HAS_TREMOLO_CC = false` if you want to test without the MIDI-Learn step; fall-back will fire ON correctly but cannot turn Off.
 
 **Removed from KS in v3.10** (vs v3.8): Sordino, Sul Tasto, Sul Ponticello, Section Size. Sordino is now GUI/CC-only; Sul Tasto/Pont are controlled via Bow/Pizz Position (CC 16); Section Size is removed entirely.
 
@@ -349,6 +353,9 @@ CC 22  Vibrato Fade-In  (MIDI-Learn; set to 250 ms at init)
 CC 73  Attack Ramp      (MIDI-Learn)
 CC 74  Bow Noise        (optional MIDI-Learn)
 CC 75  Attack Control   (MIDI-Learn; onset shape, distinct from 73)
+CC 68  Sordino          (MIDI-Learn to the GUI Sordino toggle — driven by sune freeze, Phase 6)
+CC 78  Harmonics        (MIDI-Learn to Harmonics selector — D31 replaces KS F# path)
+CC 79  Tremolo          (MIDI-Learn to Tremolo selector   — D31 replaces KS G# path)
 ```
 
 ### KS map — SWAM Cello 3 v3.10 (KS Octave = C0; KS_CH; hold 50 ms)
@@ -373,5 +380,6 @@ KS B   (MIDI 35) Page Modifier       hold for B+x combos (advanced)
 - KS page: KS Octave = **C0**, KS Channel noted, Pizz Polyphony = **Poly**, all KS enabled
 - Expressivity page: Vibrato Fade-In = 250 ms; right-click Vibrato Rate → MIDI Learn → CC 19
 - Bow page: right-click each of Bow Position / Bow Pressure / Bow Pressure Accent / Bow Speed / Attack Ramp / Attack Control → MIDI Learn → CCs 16 / 17 / 18 / 20 / 73 / 75
+- **Harmonics + Tremolo selectors (D31)**: right-click each on the main page → MIDI Learn → CC 78 (Harmonics) / CC 79 (Tremolo). Required because KS F#/G# are 2-band with no Off band — the bridge routes these through CC to reach every state cleanly.
 - Verify Expression responds to CC 11 and Vibrato Depth to CC 1; if not, MIDI-Learn them
 - Save as `xenakube_cello.swampreset`

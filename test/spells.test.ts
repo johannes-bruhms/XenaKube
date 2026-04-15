@@ -12,17 +12,31 @@ describe('SpellDetector', () => {
     expect(result!.spell.name).toBe('sexy-move');
   });
 
-  it('detects sune (R U R\' U R U2 R\')', () => {
+  it('detects sune (R U R\' U R U\' U\' R\') — CCW quarter-turn expansion of U2', () => {
     const detector = new SpellDetector();
     detector.push('R');
     detector.push('U');
     detector.push("R'");
     detector.push('U');
     detector.push('R');
-    detector.push('U2');
+    detector.push("U'");
+    detector.push("U'");
     const result = detector.push("R'");
     expect(result).not.toBeNull();
     expect(result!.spell.name).toBe('sune');
+  });
+
+  it('sune with CW half-turn (U U) does NOT fire — CCW convention only', () => {
+    const detector = new SpellDetector();
+    detector.push('R');
+    detector.push('U');
+    detector.push("R'");
+    detector.push('U');
+    detector.push('R');
+    detector.push('U');
+    detector.push('U');
+    const result = detector.push("R'");
+    expect(result).toBeNull();
   });
 
   it('does not trigger on partial match', () => {
@@ -59,8 +73,8 @@ describe('SpellDetector', () => {
 
   it('buffer is not consumed — sequential spells both fire', () => {
     const detector = new SpellDetector();
-    // sexy + sune back-to-back: R U R' U' R U R' U R U2 R'
-    const moves: string[] = ['R', 'U', "R'", "U'", 'R', 'U', "R'", 'U', 'R', 'U2', "R'"];
+    // sexy + sune back-to-back: R U R' U' R U R' U R U' U' R' (U2 → U' U')
+    const moves: string[] = ['R', 'U', "R'", "U'", 'R', 'U', "R'", 'U', 'R', "U'", "U'", "R'"];
     const allResults: string[] = [];
     for (const m of moves) {
       const matches = detector.pushAll(m);
@@ -184,15 +198,16 @@ describe('Orientation-independent spell detection', () => {
     expect(r!.spell.name).toBe('sexy-move');
   });
 
-  it('detects sune on different faces (F U F\' U F U2 F\')', () => {
+  it('detects sune on different faces (F U F\' U F U\' U\' F\')', () => {
     const detector = new SpellDetector();
-    // sune R U R' U R U2 R' under y' rotation (R→F, U→U): F U F' U F U2 F'
+    // sune R U R' U R U' U' R' under y' rotation (R→F, U→U): F U F' U F U' U' F'
     expect(detector.push('F')).toBeNull();
     expect(detector.push('U')).toBeNull();
     expect(detector.push("F'")).toBeNull();
     expect(detector.push('U')).toBeNull();
     expect(detector.push('F')).toBeNull();
-    expect(detector.push('U2')).toBeNull();
+    expect(detector.push("U'")).toBeNull();
+    expect(detector.push("U'")).toBeNull();
     const r = detector.push("F'");
     expect(r).not.toBeNull();
     expect(r!.spell.name).toBe('sune');
@@ -246,8 +261,8 @@ describe('Orientation-independent spell detection', () => {
   it('layered detection: both sexy-move and sune fire when cast back-to-back', () => {
     const detector = new SpellDetector();
     // sexy-move = R U R' U' (first 4 moves)
-    // sune = R U R' U R U2 R' (next 7 moves, fully disjoint from sexy-move's window)
-    const moves = ['R', 'U', "R'", "U'", 'R', 'U', "R'", 'U', 'R', 'U2', "R'"];
+    // sune (CCW U2) = R U R' U R U' U' R' (next 8 moves, fully disjoint from sexy-move's window)
+    const moves = ['R', 'U', "R'", "U'", 'R', 'U', "R'", 'U', 'R', "U'", "U'", "R'"];
     const allResults: string[] = [];
     for (const m of moves) {
       const matches = detector.pushAll(m);

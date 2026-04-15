@@ -11,6 +11,12 @@ import {
   multiply, parseMoveToElement, getPermutation,
   IDENTITY, tetraOrbit,
 } from './group.js';
+
+// Fixed S4 element used to shift the C-cube's advance law so it diverges
+// from the K-cube. U generator (order 4) gives a 4-cycle offset; combined
+// with the α/β/γ 3-cycle, the C-cube's full visible period is lcm(4,3)=12
+// substitutions, plenty of contrast against K. See engine.onTurn for why.
+const C_SHIFT = parseMoveToElement('U')!;
 import { getTransformedVertices, getBaseVertices } from './vertices.js';
 import { ComplexCube } from './complexes.js';
 import { DiagramTraversal, getBuiltinDiagrams, type KinematicDiagram } from './kinematic.js';
@@ -145,13 +151,27 @@ export class XenaKubeEngine {
       this.kGroup = this.kDiagram.advance();
     }
 
-    // Advance C_i cube
+    // Advance C_i cube.
+    // Xenakis (Formalized Music pp. 223-224, §IV): K_i and C_i traverse
+    // *separate* closed graphs — "C_i graph {D Q12}" vs "K_i graph {D Q3}" —
+    // so the two cubes must not advance by the same element. Prior behaviour
+    // multiplied both by `el` from IDENTITY, which made
+    // `complexCube.groupElement === kGroup` forever; the ghost cube was just
+    // the live cube rendered twice, and K# ↔ complex pairing only shifted
+    // when α → β → γ rotated every 3 substitutions.
+    //
+    // Fix: when no explicit cDiagram is loaded, shift each move by the
+    // fixed generator U before applying it to the C-cube. The move still
+    // drives the advance (so different physical turns produce different
+    // complex states), but C's orbit diverges from K's by a 4-cycle offset,
+    // and landing on the same K-permutation no longer forces the same
+    // complex assignment.
     if (this.mode.cCube === 'algorithmic') {
       if (this.cDiagram) {
         const cEl = this.cDiagram.advance();
         this.complexCube.transform(cEl);
       } else {
-        this.complexCube.transform(el);
+        this.complexCube.transform(multiply(C_SHIFT, el));
       }
     }
 

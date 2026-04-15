@@ -53,6 +53,23 @@ describe('XenaKubeEngine', () => {
     expect(state.cGroup).not.toBe(0);
   });
 
+  it('K_i and C_i cubes do not advance in lockstep', () => {
+    // Regression guard for the lockstep bug — before the C_SHIFT fix, both
+    // cubes multiplied by the same element from IDENTITY, so cGroup === kGroup
+    // after every turn, and the ghost cube's permutation was identical to the
+    // live cube's. Per Xenakis (Formalized Music pp. 223-224), the two cubes
+    // must traverse separate graphs.
+    const engine = new XenaKubeEngine({ cCube: 'algorithmic' });
+    const moves = ['R', 'U', 'F', "R'", 'U', 'R'];
+    let diverged = false;
+    for (const m of moves) {
+      engine.onTurn(m);
+      const s = engine.getState();
+      if (s.cGroup !== s.kGroup) diverged = true;
+    }
+    expect(diverged).toBe(true);
+  });
+
   it('cycles α → β → γ every 3 substitutions', () => {
     const engine = new XenaKubeEngine({ cCube: 'algorithmic' });
 

@@ -5,9 +5,9 @@
 Full diagnoses + phased plan in **`docs/revision_roadmap.md`**. Parameter/CC/KS authority: **`docs/swam_cello_reference.md`**.
 
 - **Phases 0–5 — DONE**. Upstream voice firehose fix, panic/watchdog (D16/D17), SWAM KS model with stateful diffing (D1/D2/D12), `COMPLEX` config table (D5/D7), expression envelopes + tilt→bow-position (D4/D8/D15/D18), vibrato on CC 19 with EMA (D3/D6), spell restore via `setupComplex` (D11/D13/D14), Niklas detection (D19 detection only). **Next listening test required before Phases 6+.**
-- **Phase 6 (pending)** — wire unused KS (Sordino on freeze, Sul Tasto/Pont on scramble thresholds, Alt Fingering on tetra, Section Size on path, Pizz Polyphony init).
-- **Phase 7 (pending)** — V2 fold-window strategy choice; CC 75 Attack Control spell-accent spikes.
-- **Phase 8 (pending)** — note-off velocity from turn rate.
+- **Phase 6 (partial, 2026-04-14)** — Sordino on freeze (CC 68, MIDI-Learn) and Sul Tasto/Pont on scramble thresholds (Bow Position bias via 2 s hysteresis) landed. Still pending: Alt Fingering on tetra, Bow Lift / Bow Start on spell color, Pizz Polyphony init.
+- **Phase 7 (done, 2026-04-14)** — V2 fold window already widened per complex (`max(24, reg.lo − 12)`); CC 75 Attack Control spikes declared obsolete in v3.11 (preset-side mode selector).
+- **Phase 8 (done, 2026-04-14)** — `noteOff(pitch, vel?)` signature extended; `state.noteOffVel` driven by `handleRate` (25 → 120 across turns/sec).
 - **Niklas audio effect** — pick between C-cube 3-cycle / canon echo / commutator latch after first listen.
 
 ---

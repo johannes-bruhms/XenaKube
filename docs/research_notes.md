@@ -25,7 +25,7 @@ Nomos Alpha was the first composition to use group theory (specifically the rota
 | Two paths V1 (loud/short) and V2 (quiet/long) | 218–220 | `vertices.ts`: V1_VERTICES, V2_VERTICES |
 | C_i sound complex types (C1–C8) | 222–224 | `complexes.ts`: 8 timbral categories |
 | α/β/γ cyclic mapping rotation | 222 | `complexes.ts`: ALPHA, BETA, GAMMA arrays, cycle every 3 subs |
-| Second independent cube for C_i | 222–224 | `complexes.ts`: ComplexCube class with own S4 state |
+| Second independent cube for C_i | 222–224 | `complexes.ts`: ComplexCube class. Advance law shifted by fixed `C_SHIFT = U` in `engine.ts` so C diverges from K (Xenakis §IV: C_i and K_i traverse *separate* closed graphs, "C_i graph {D Q12}" vs "K_i graph {D Q3}") |
 | Kinematic diagrams (graph paths through S4) | 220–222 | `kinematic.ts`: cyclic subgroups + Hamiltonian path |
 | Sequential (t₀) vs simultaneous (t₁) temporal modes | 220 | `voice-engine.ts`: sequential/polyphonic modes |
 | L(m,n) sieve function for pitch | 230–234 | `sieve.ts`: evaluateSieve, prime residual classes mod 18 |
@@ -255,7 +255,7 @@ No complete bar-by-bar analysis exists. Closest resources:
 
 Xenakis' C1–C8 complex types are cello techniques. SWAM Cello 3 (Audio Modeling) is a physical-modeling VST that exposes parameters as a mix of **Key Switches** (techniques — Play Mode, Harmonics, Tremolo, etc.) and **MIDI CC** (continuous — Expression, Bow Position, Vibrato). See `docs/swam_cello_reference.md` for the full KS/CC authority.
 
-**The bridge mapping below documents the v2 design (currently shipping); it has structural mismatches with SWAM's actual control model — tracked in `docs/revision_roadmap.md` for a phased refactor.** Known gaps: Play Mode is KS C + velocity (not separate ARCO/PIZZ notes); Harmonics/Tremolo are KS latch toggles on A/A# (not the CCs 22/92 currently used); Expression should be per-complex-envelope (not 60 Hz tilt-driven); Vibrato Rate default is CC 19 (not 76).
+**The bridge mapping below documents the v2 design; the v3+ bridge (currently shipping in `max/xk_swam.js`) has been refactored against SWAM's actual control model — see `docs/revision_roadmap.md` (D1–D31) for the full trail.** Current live mapping: Play Mode = KS C velocity-select; Gesture Mode / Alt Fingering = KS D / D# velocity-select; Harmonics + Tremolo = CC 78 / CC 79 (v3.10 KS F#/G# are 2-band with default-only Off, so CC is the only way to reach every state — D31); Expression is per-complex envelope; Vibrato Rate = CC 19. The v2 mapping below is preserved for design-rationale continuity.
 
 ### Complex Type → SWAM Phrase (v2)
 

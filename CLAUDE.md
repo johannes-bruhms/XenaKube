@@ -214,14 +214,14 @@ Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) d
 
 | File | Role |
 |------|------|
-| `xk_swam.js` | v8 object: OSC → midievent. SWAM v3.10 KS plane (velocity-select via `setEnum` + `velForOption`). `COMPLEX` config table is the per-voice source of truth (play mode, envelope, vibrato, bow pos/pressure, portamento, register). Expression = per-complex envelope × intensity × path scalar. Spin-deadband on 60 Hz CCs; `/xk/panic` + inactivity watchdog for cleanup. One `phraseCX` generator per complex with stochastic counts. Pitches folded into cello range via `foldToRange(pitch, lo, hi)`. |
+| `xk_swam.js` | v8 object: OSC → midievent. SWAM v3.10 KS plane (velocity-select via `setEnum` + `velForOption`) for Play Mode / Gesture Mode / Alt Fingering; Harmonics + Tremolo via CC 78 / CC 79 (D31). `COMPLEX` config table is the per-voice source of truth (play mode, envelope, vibrato, bow pos/pressure, portamento, register). Expression = per-complex envelope × intensity × path scalar. Spin-deadband on 60 Hz CCs; `/xk/panic` + inactivity watchdog for cleanup. One `phraseCX` generator per complex with stochastic counts. Pitches folded into cello range via `foldToRange(pitch, lo, hi)`. |
 | `tester.maxpat` | Reference 4-object chain for driving SWAM from a live relay. |
 | `tester1.maxpat` | Debug harness: message boxes for hand-fired `/xk/expr/*` and raw `midievent` CCs. |
 | `ks_logger.js` | Optional pass-through v8 between `xk_swam.js` and `vst~`. Toggleable (`on`/`off`/`dump`). Captures raw `midievent` with timestamps; `dump` prints KS-only timeline (field, option guess, Δprev, Δfield) plus non-KS summary + full JSON for LLM review. Use for diagnosing KS glitches (flashing harmonics / tremolo). |
 
 ### Conceptual mapping
 
-- **Complex type → technique** (COMPLEX table): C1 Pizz, C2/C3 Arco, C4 Harmonics (KS F#), C5–C7 Portamento, C8 near-bridge + Tremolo (KS G#). Each complex owns a `register: {lo, hi}`.
+- **Complex type → technique** (COMPLEX table): C1 Pizz, C2/C3 Arco, C4 Harmonics (CC 78), C5–C7 Portamento, C8 near-bridge + Tremolo (CC 79). Each complex owns a `register: {lo, hi}`.
 - **Intensity → Expression peak + note velocity + bow-pressure scalar + phrase density** (6-level INTENSITY_MAP).
 - **Path V1/V2 → Expression peak scalar** (V2 × 0.7) + widened V2 fold window.
 - **Tilt → Bow Position ±30** around the complex baseline (timbral sul tasto↔pont sweep).
@@ -230,11 +230,11 @@ Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) d
 - **Regime → Attack Ramp multiplier** (contemplative 1.2 / conversational 1.0 / burst 0.5).
 - **Spells** route through `setupComplex(active)` for idempotent restore.
 
-See `docs/swam_cello_reference.md` for CC/KS numbers, KS Velocity Remap bands, preset prerequisites, and v3.10/v3.11 migration notes. `docs/revision_roadmap.md` D1–D27 document every mapping decision.
+See `docs/swam_cello_reference.md` for CC/KS numbers, KS Velocity Remap bands, preset prerequisites, and v3.10/v3.11 migration notes. `docs/revision_roadmap.md` D1–D31 document every mapping decision.
 
 ### v3.10 KS plane, in one paragraph
 
-Full 12-switch map on `KS_CH`, KS Octave = C0 (MIDI 24–35), 50 ms hold. Most controls are velocity-selectors (Play Mode, Gesture Mode, Harmonics, Tremolo, Alt Fingering); `setEnum(field, ks, target, optionCount)` diffs by option index so re-asserting current state is a no-op. `bang()` pins Gesture Mode = Expression so CC 11 is never silently reinterpreted as bow direction. Sordino / Sul Tasto / Sul Ponticello / Section Size were removed from the KS plane in v3.10 — Sordino is GUI/CC-only, Sul Tasto/Pont are now driven by Bow Position (CC 16), Section Size is gone. Absent-param feature flags (`HAS_BOW_SPEED`, `HAS_ATTACK_RAMP`, `HAS_ATTACK_CONTROL`, default `false`) gate v3.11-missing knobs at the `cc()` helper layer.
+KS map on `KS_CH`, KS Octave = C0 (MIDI 24–35), 50 ms hold. **Play Mode, Gesture Mode, Alt Fingering** are 3-opt velocity-selectors driven via `setEnum(field, ks, target, optionCount)` which diffs by option index so re-asserting current state is a no-op. `bang()` pins Gesture Mode = Expression so CC 11 is never silently reinterpreted as bow direction. **Harmonics and Tremolo route through CC (CC 78 / CC 79) instead of KS F#/G#** — D31 revealed those KS are 2-band with a default-only Off state (Low = 2nd/Slow, High = 3rd/Fast, Off unreachable via KS once fired); CC reaches every state cleanly. `HAS_HARMONICS_CC` / `HAS_TREMOLO_CC` feature-flag the CC path with KS fall-back when the MIDI-Learn hasn't been done. Sordino / Sul Tasto / Sul Ponticello / Section Size were removed from the KS plane in v3.10 — Sordino is GUI/CC-only, Sul Tasto/Pont are driven by Bow Position (CC 16), Section Size is gone. Absent-param feature flags (`HAS_BOW_SPEED`, `HAS_ATTACK_RAMP`, `HAS_ATTACK_CONTROL`, default `false`) gate v3.11-missing knobs at the `cc()` helper layer.
 
 ### Max MCP Bridge
 

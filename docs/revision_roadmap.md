@@ -413,6 +413,77 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 
 **SWAM preset additions** (see Prerequisites): pin Gesture Mode at instantiation; audit that no sample contains a stuck `KS A#` (page-2 unassigned) from the old code path.
 
+### D31 — KS F# / KS G# are 2-band with default-Off; Harmonics + Tremolo must route through CC *(RESOLVED 2026-04-15)*
+
+**Defect**: D24 → D30 all left the same underlying misunderstanding untouched — that KS F# (Harmonics) is a 4-option velocity-select and KS G# (Tremolo) is a 3-option velocity-select with Off as a selectable low-velocity band. User reports that across all three prior "fixes" (D27 KS migration, D28 sync guard, D29 interleave + defensive, D30 revert) "harmonics and tremolo still don't work at all, same symptoms remain."
+
+**Actual SWAM behavior** (from the official v3.10 Key Switches PDF, `docs/v3.10-keyswitches.pdf` pp. 100–102):
+
+```
+F# = Harmonics
+  • Off (default)                ← default state of the instrument, not a KS band
+  • Low Velocity  = 2nd harmonic
+  • High Velocity = 3rd harmonic
+Note: it's not possible to control the 4th harmonic through Key Switches
+
+G# = Tremolo
+  • OFF (default)                ← same
+  • Low Velocity  = Slow
+  • High Velocity = Fast
+```
+
+The tell: every genuine 3-opt KS on the same pages explicitly lists **Low / Mid / High Velocity** (Play Mode, Gesture Mode, Alt Fingering, Tremolo Mode). F# and G# list only **Low / High**. "Off (default)" is a bullet at the top because it's the instrument's initial state — not because vel ~20 selects Off.
+
+**Consequence**: sending our "OFF" velocities (Harmonics 16, Tremolo 21) landed inside the **Low** band and silently selected **2nd harmonic / Slow tremolo**. C4 Harmonics-ON (vel 48) and C8 Tremolo-ON (vel 106) fired correctly — so the ON edges worked — but every subsequent non-C4/C8 complex re-selected 2nd / Slow instead of turning the effect off. To the performer this looked like "harmonics and tremolo never fire correctly" because the effect decoupled entirely from complex identity.
+
+**Why D27–D30 didn't catch it**: D27 correctly moved KS numbers from v3.8 → v3.10 (F#→Harmonics, G#→Tremolo), but inherited the wrong option-count assumption. D28's KS sync guard ensured SWAM matched our state — but our state was lying, claiming OFF while SWAM was at 2nd. D29's interleave guard and defensive re-assert were both real bugs, just not *this* bug. D30's revert of D29's defensive re-assert was also correct (it caused a new glitch) but left the core misunderstanding in place.
+
+**Fix**: route Harmonics and Tremolo through CC, not KS. PDF p. 102: *"All parameters controlled by the Key Switches can be controlled by MIDI Control Change, Aftertouch and NRPN messages as well, through the Controller Mapping section."* CC gives clean access to all 4 Harmonics states (including the `4 Control` mode that KS can't reach per the PDF note) and all 3 Tremolo states including Off.
+
+Implementation in `max/xk_swam.js`:
+1. `CC.HARMONICS = 78`, `CC.TREMOLO = 79`.
+2. Feature flags `HAS_HARMONICS_CC` / `HAS_TREMOLO_CC` (default `true`). `hasCC` gates writes so users who haven't MIDI-Learned yet can flip false and fall back to the (broken-but-familiar) KS path.
+3. `HARMONICS_CC_VAL = [16, 48, 80, 112]` — band centers for SWAM's 4-way CC quantization. `TREMOLO_CC_VAL = [21, 64, 106]` — 3-way band centers.
+4. New helpers `setHarmonics(target)` / `setTremolo(target)` encapsulate the CC-preferred / KS-fallback switch and update `state.{harmonics,tremolo}` so existing diffing still works. Replaces the 3 `setEnum("harmonics"|"tremolo"…)` call sites (`setupComplex`, oll-cross spell case, `bang()`).
+
+**Setup required in SWAM** (one-time, save preset): right-click the Harmonics selector → MIDI Learn → send CC 78 from bridge or any MIDI source. Repeat for Tremolo → CC 79. Without this, flip both `HAS_*_CC` flags false — bridge falls back to KS and at least fires ON for C4/C8 (but still can't turn off).
+
+**Verification**: listening test — play a sequence that visits C4 then C1 then C4 then C1. Harmonics should be heard only during C4 voices, silent during C1. Same test for C8 → C1 → C8 → C1 with Tremolo.
+
+### D29 — Harmonics + Tremolo glitch on/off on rapid complex changes *(RESOLVED 2026-04-14)*
+
+**Defect**: D27's v3.10 KS migration and D28's startup guard landed, and yet the user still reports "harmonics and tremolo don't work properly — they still glitch on/off, most of the time not firing correctly." Two orthogonal causes, neither addressed by D27/D28.
+
+**Root cause A — stale noteOff interleave**: `keyswitch(note, vel)` schedules a noteOff for the same note 50 ms later at the same velocity. SWAM's v3.10 velocity-select KS re-read velocity on noteOff, so the scheduled noteOff "re-selects" the option on release. But when a second keyswitch on the same KS note fires inside that 50 ms hold window (common on rapid C1↔C4 or C1↔C8 complex swaps at 3-5 turns/s), the *first* keyswitch's stale noteOff still lands ~50 ms later at the *old* velocity — silently re-selecting the old option after the new noteOn already flipped state. The bridge thinks SWAM is at the new option; SWAM has been yanked back to the old one. Every subsequent voice event into the "same" complex then diff-returns and never resyncs.
+
+**Root cause B — diff-suppression hides SWAM drift**: Once `state.harmonics === target`, `setEnum` returns early. No re-assert happens on subsequent voice events into the same complex. Anything that drifts SWAM's real selection (cause A above, preset reload, user touching the GUI, `autowatch` reload mid-session, a subtle missed KS) silently desyncs our model from SWAM until the *next* complex change — which might be many turns away. Symptom: "works sometimes, not others", weighted toward "not firing correctly".
+
+**Fix**:
+1. **`ksPending[note]` interleave guard in `keyswitch()`**. Track the scheduled noteOff task per KS note. When a new `keyswitch(note, ...)` fires with a pending noteOff on the same note: cancel the task and fire a noteOff *immediately* at the *new* velocity (not the stale one), before the new noteOn. This (i) releases the held key so the fresh noteOn isn't a duplicate-while-held, (ii) ensures any SWAM re-read of noteOff velocity lands on the current selection, not the old one.
+2. **Defensive Harmonics + Tremolo re-assertion in `handleVoice`**. ~~Force-write KS F# and G# on every voice event, bypassing `setEnum`'s diff.~~ **Superseded by D30** — the defensive re-assert caused a new glitch (voices on non-C4/C8 complexes rewrote Harmonics/Tremolo OFF mid-note). Interleave guard (fix 1) retained.
+
+**Verification**: listening test — rapid alternation C4 ↔ C1 and C8 ↔ C1 at 3-5 turns/s should produce clean harmonics/tremolo on every C4/C8 voice and clean normal bow on every C1 voice, with no residual tremolo "flicker" surviving into C1 and no harmonics dropouts during repeated C4 entries.
+
+### D30 — Harmonics/Tremolo flash ON→OFF within a single turn *(RESOLVED 2026-04-15)*
+
+**Defect**: User reports harmonics and tremolo "flashing on and off instantly" on certain turns — the technique fires, then silences mid-note. `max/ks_logger.js` capture confirmed: every `handleVoice` call emitted a HARMONICS+TREMOLO KS pair at the *new voice's* complex values (typically OFF for C1/C2/C3/C5–C7), independently of whether the complex changed. When a voice into C1 followed a still-sounding C8 tremolo note (release scheduled by `phraseC8`), the C1 voice's defensive write selected TREMOLO=OFF while the previous note was still bowing — audible as a 30–600 ms tremolo cutoff before the old note finally released. Same pathology for C4 harmonics.
+
+**Root cause**: D29's fix 2 — the defensive `keyswitch(KS.HARMONICS, …)` / `keyswitch(KS.TREMOLO, …)` block in `handleVoice` (written after D29 landed) bypasses `setEnum`'s diff. It was added to paper over drift cases (preset reloads, GUI touches) that D28's `ksForceCount` and D29's interleave guard already handle correctly. The log shows every voice event carried the defensive pair, so any voice-cycling through mixed-complex phrases repeatedly rewrote the KS under still-sounding notes.
+
+**Fix**: Delete the defensive block in `handleVoice` (`max/xk_swam.js` ~lines 901-912). HARMONICS and TREMOLO are now written only by `setupComplex` via `setEnum`, which fires exactly when the target option index changes. D28's `ksForceCount` still force-writes for the first 3 voice events after `bang()`; D29's `ksPending` interleave guard still protects against stale-noteOff re-selection on rapid complex changes.
+
+**Verification**: listening test — C8 tremolo note followed by a C1/C2 voice should hear tremolo sustain for the C8 note's full duration, not cut off when the next voice fires. Same for C4 harmonics → any non-C4 voice. Confirm via `ks_logger` dump: every KS event should correspond to an actual complex change or startup force-write, never a defensive re-write.
+
+### D28 — KS sync guard: per-KS velocity overrides + force-write on reset *(RESOLVED 2026-04-14)*
+
+**Defect**: Two silent drift modes around `setEnum` / SWAM's KS Velocity Remap. (a) `velForOption(idx, optionCount)` returns the *centre of the even band* — correct only while SWAM's Velocity Remap bands remain at their factory positions. A user or preset that shifts a band boundary causes our "centre" velocity to fall in the neighbouring option's bucket, silently mis-selecting. (b) After `bang()`, selector state is nulled so the first `setEnum` for each KS fires — but if SWAM's own state *also* differs (e.g. preset loaded a non-default value the bridge isn't aware of, or autowatch reloaded mid-session), the next voice event with the same target option diff-suppresses and SWAM never gets a re-assert.
+
+**Fix**:
+1. **Per-KS velocity overrides**. New `KS_VEL_OVERRIDE` table in `max/xk_swam.js` keyed by KS note (D=26, F#=30, G#=32). Each entry is an array indexed by option index, hand-audited against SWAM's "KS Velocity Remap" editor. New helper `velForKS(ks, idx, optionCount)` checks overrides first, falls back to `velForOption`. `setEnum` routes through `velForKS`.
+2. **Force-write KS for first N voice events after reset**. New `state.ksForceCount` (initialized to 3 in `bang()`) + `state.forceKS` flag. `handleVoice` decrements `ksForceCount` and sets `forceKS = true` for the call; `setEnum` / `setPlayMode` bypass their `state.*` diff when `forceKS` is set; `handleVoice` force-calls `setupComplex(complexType)` when forcing even if the complex hasn't changed. After 3 voice events the guard releases and normal diff-suppression resumes.
+
+**Verification**: listening test — after `bang()` → 3 turns into different complexes, confirm C4 harmonics and C8 tremolo audibly fire on the first event into each (not only on a subsequent change).
+
 ### D25 — Ghost-cube calibration doesn't feed back to engine *(OPEN)*
 
 **Defect**: User rotates the ghost cube in the dashboard; no change to `deviation`, no change to which S4 element the engine believes the gyro is snapped to. The ghost's rotation is *visual only*. Consequence: the rendered K/C labels and overlays can diverge from the engine's actual snap target without the performer seeing anything change.
@@ -501,22 +572,22 @@ Highest-leverage first. Stop-test-listen between phases.
 - [x] Deviation → bow pressure becomes ±25 modulation
 - [x] Add Niklas spell: `src/spells.ts` entry (`R U' L' U R' U' L`), `mode-manager.ts` stub, `xk_swam.js` handler. Effect TBD — pick between C-cube 3-cycle / canon echo / commutator latch after first listening test.
 
-### Phase 6 — Wire unused KS / continuous controls (D10, post-D27)
+### Phase 6 — Wire unused KS / continuous controls (D10, post-D27) *(partial 2026-04-14)*
 *Leverage what v3.10 still exposes. Sordino / Sul Tasto / Sul Pont / Section Size were removed from the KS plane in v3.10 — the items below replace those slots with v3.10-correct paths.*
 - [ ] Pizz Polyphony init (preset-side; not a KS)
-- [ ] **Sordino on freeze** — write CC for Sordino (GUI/CC-only in v3.10); MIDI-Learn it once in the preset, then drive from `mode-manager` freeze toggle
-- [ ] **Sul Tasto / Sul Pont on scramble thresholds** — bias `state.bowPositionBase` (CC 16) on hysteresis bands instead of latching KS (KS slots gone in v3.10)
+- [x] **Sordino on freeze** — `CC.SORDINO = 68` (MIDI-Learn to the Sordino GUI toggle), written in `handleSpell('sune')` alongside the sustain pedal; bang() resets to 0.
+- [x] **Sul Tasto / Sul Pont on scramble thresholds** — `handleExprScramble` maintains `state.scrambleBowBias` via 2 s hysteresis on <0.2 (tasto, +40) and >0.8 (pont, −40, skipped when C8 active). `handleExprTilt` adds the bias to its CC 16 write; bias changes also force a write immediately so the shift is audible with the cube still.
 - [ ] Alt Fingering on tetra flip (KS D# latch — survived v3.10)
 - [ ] Bow Lift / Bow Start (KS E / F latches — survived v3.10) on spell color
 - [ ] ~~Section Size on path~~ — **removed in v3.10**; consider Bow Position bias or Vibrato baseline shift per path instead
 
-### Phase 7 — V2 fold window + Attack Control polish (D9)
-- [ ] Choose V2 strategy: widened fold window (default) or Section Size KS fallback (per D9 caveat)
+### Phase 7 — V2 fold window + Attack Control polish (D9) *(landed 2026-04-14)*
+- [x] Widened fold window is the default V2 strategy. `pickPitch` passes `lo = max(24, reg.lo - 12)` for V2 so low sieve pitches can reach the cello's bottom octave; `foldToRange(pitch, lo, hi)` accepts per-complex bounds. No Section Size fallback needed (Section Size was removed from the KS plane in v3.10 anyway).
 - [x] ~~CC 75 Attack Control spell-accent spikes~~ — **obsolete in SWAM Cello 3 v3.11**. Attack Control is a 4-mode selector (`vel.soft / vel.hard / expression / mix vel. expr.`), not a continuous ramp. Set it once in the preset to `expression` or `mix vel. expr.`; spell accents already reach attack character via the existing CC 11 envelope path (`scheduleExprEnvelope`). `HAS_ATTACK_CONTROL = false` in `max/xk_swam.js`.
 
-### Phase 8 — Note-off velocity from turn rate
-- [ ] Extend `noteOff` to accept velocity
-- [ ] Route through turn-rate tracker
+### Phase 8 — Note-off velocity from turn rate *(landed 2026-04-14)*
+- [x] `noteOff(pitch, vel?)` signature extended; default velocity comes from `state.noteOffVel`.
+- [x] `handleRate` maps `turnsPerSec` → `state.noteOffVel` (25 at rest → 120 at ≥8 turns/sec). Fast turns produce bitten releases; slow turns produce long, naturally-decayed releases. All phrase-generator note-offs pick this up automatically.
 
 ### Phase 9 — Expressivity pass (D20, D21, D22, D23) *(landed 2026-04-14)*
 *After the preset was corrected to `Portamento Control = CC (P.MaxTime)`, first proper listening test exposed weak tilt, sparse phrases, and no intensity→timbre contrast. This phase is retrospective — fixes already in tree.*
