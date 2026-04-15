@@ -18,104 +18,105 @@
     --active-glow: rgba(0, 255, 136, 0.25);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
   body {
     font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
     background: var(--bg);
     color: var(--text);
-    overflow-x: hidden;
+    position: relative;
   }
 
-  /* Header */
-  header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    padding: 10px 20px;
-    border-bottom: 1px solid var(--border);
-    background: var(--panel);
-    flex-wrap: wrap;
-    gap: 10px;
+  /* Full-viewport cube canvas — background layer */
+  #cube-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    touch-action: none;
+    z-index: 0;
   }
-  header h1 {
-    font-size: 16px;
-    font-weight: 600;
+
+  /* Overlay panels — transparent backgrounds over cube */
+  .ovl {
+    position: fixed;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .ovl > * { pointer-events: auto; }
+
+  .ovl-tl { top: 16px; left: 20px; width: 480px; max-height: calc(100vh - 120px); display: flex; flex-direction: column; gap: 18px; overflow-y: auto; scrollbar-width: none; font-size: 22px; }
+  .ovl-tl::-webkit-scrollbar { display: none; }
+  .ovl-tc { top: 16px; left: 50%; transform: translateX(-50%); text-align: center; max-width: 60vw; pointer-events: none; }
+  .ovl-tr { top: 16px; right: 20px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  .ovl-bottom { position: fixed; bottom: 0; left: 0; right: 0; z-index: 2; padding: 6px 12px 10px; pointer-events: none; }
+  .ovl-section { display: flex; flex-direction: column; gap: 6px; }
+
+  h1.title {
+    font-size: 50px;
+    font-weight: 700;
     color: var(--accent);
-    letter-spacing: 2px;
+    letter-spacing: 3px;
   }
-  .header-connect {
+  .conn-row {
     display: flex;
-    align-items: center;
-    gap: 10px;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 6px;
+    margin-top: 8px;
   }
-  .header-connect input {
-    padding: 5px 10px;
-    font-size: 12px;
-    width: 180px;
-    text-align: center;
-    border-radius: 4px;
+  .conn-row input {
+    padding: 7px 12px;
+    font-size: 22px;
+    width: 360px;
+    border-radius: 3px;
     border: 1px solid var(--border);
-    background: var(--bg);
-    color: var(--accent);
+    background: rgba(10, 10, 15, 0.5);
+    color: var(--warm);
     font-family: monospace;
+    letter-spacing: 1px;
   }
-  .header-connect button, .ctrl-btn {
-    padding: 5px 14px;
-    font-size: 12px;
+  .conn-row button, .ctrl-btn {
+    padding: 8px 20px;
+    font-size: 22px;
     font-weight: 600;
     cursor: pointer;
-    background: var(--accent);
-    color: var(--bg);
-    border: none;
-    border-radius: 4px;
-    font-family: monospace;
-  }
-  .header-connect button:hover, .ctrl-btn:hover { opacity: 0.85; }
-  .header-connect button:disabled, .ctrl-btn:disabled {
-    background: var(--dim);
-    cursor: default;
-  }
-  #zeroBtn { background: var(--accent2); }
-  #cube-status {
-    font-size: 11px;
+    background: transparent;
     color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-family: monospace;
+    letter-spacing: 1px;
   }
+  .conn-row button:hover, .ctrl-btn:hover { color: var(--text); border-color: var(--dim); }
+  .conn-row button.connected { color: var(--accent); border-color: var(--accent); }
+  #cube-status { font-size: 22px; color: var(--dim); }
   #cube-status.ok { color: var(--accent); }
   #cube-status.err { color: var(--warm); }
 
-  .header-status {
-    display: flex;
-    gap: 16px;
-    font-size: 12px;
+  .ws-status-inline {
+    font-size: 22px;
     color: var(--dim);
   }
-  .header-status .val { color: var(--text); }
   .ws-dot {
     display: inline-block;
-    width: 8px; height: 8px;
+    width: 7px; height: 7px;
     border-radius: 50%;
     background: #ff3333;
     margin-right: 5px;
     vertical-align: middle;
   }
   .ws-dot.connected { background: var(--accent); }
-
-  /* Main grid */
-  .grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    grid-template-rows: auto;
-    gap: 1px;
-    background: var(--border);
-    max-width: 1400px;
-    margin: 0 auto;
+  .header-status {
+    display: flex;
+    gap: 12px;
+    font-size: 10px;
+    color: var(--dim);
   }
+  .header-status .val { color: var(--text); }
 
-  .panel {
-    background: var(--panel);
-    padding: 16px;
-  }
   .panel-title {
-    font-size: 11px;
+    font-size: 22px;
     font-weight: 700;
     letter-spacing: 1.5px;
     color: var(--dim);
@@ -123,22 +124,13 @@
     margin-bottom: 12px;
   }
 
-  /* Cube 3D panel */
-  .cube-panel { grid-column: 1 / 2; grid-row: 1 / 2; min-height: 320px; position: relative; }
-  #cube-canvas { width: 100%; height: 280px; display: block; touch-action: none; }
-
   .cube-rotate-ctrl {
-    position: absolute;
-    top: 10px;
-    right: 10px;
     display: flex;
     gap: 4px;
     align-items: center;
-    z-index: 2;
-    background: rgba(18, 18, 26, 0.75);
-    padding: 4px 6px;
-    border-radius: 4px;
-    border: 1px solid var(--border);
+    background: transparent;
+    padding: 0;
+    border: none;
     user-select: none;
   }
   .cube-rotate-ctrl .cr-label {
@@ -153,7 +145,7 @@
     font-size: 10px;
     font-family: monospace;
     font-weight: 600;
-    background: var(--bg);
+    background: transparent;
     color: var(--dim);
     border: 1px solid var(--border);
     border-radius: 3px;
@@ -166,19 +158,19 @@
     border-color: var(--accent);
   }
 
-  /* State panel */
-  .state-panel { grid-column: 2 / 3; grid-row: 1 / 2; }
+  /* State rows (left overlay, transparent) */
+  .state-rows { display: flex; flex-direction: column; gap: 3px; }
   .state-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
     padding: 6px 0;
-    border-bottom: 1px solid var(--border);
-    font-size: 13px;
+    font-size: 24px;
+    background: transparent;
+    gap: 10px;
   }
-  .state-row:last-child { border-bottom: none; }
-  .state-label { color: var(--dim); }
-  .state-val { font-weight: 600; }
+  .state-label { color: var(--dim); text-transform: lowercase; letter-spacing: 0.5px; }
+  .state-val { font-weight: 600; color: var(--text); font-size: 22px; }
   .state-val.accent { color: var(--accent); }
   .state-val.accent2 { color: var(--accent2); }
   .state-val.warm { color: var(--warm); }
@@ -263,40 +255,38 @@
   }
   .seq-vertex-pip.active .pip-complex { color: var(--text); }
 
-  /* Vertices panel */
-  .vertices-panel { grid-column: 1 / -1; }
-  .vertex-grid {
-    display: grid;
-    grid-template-columns: repeat(8, 1fr);
-    gap: 6px;
-  }
-  .vertex-card {
-    background: var(--bg);
-    border: 1px solid var(--border);
+  /* Active vertex + complex cards (bottom-left overlay) */
+  .vertex-grid, .complex-grid { display: block; }
+  .vertex-card, .complex-card {
+    display: none;
+    background: rgba(10, 10, 15, 0.55);
+    border: 1px solid var(--accent);
     border-radius: 4px;
-    padding: 8px;
+    padding: 6px 10px;
     text-align: center;
     transition: all 0.25s;
   }
-  .vertex-card.active {
+  .vertex-card.active, .complex-card.active {
+    display: block;
     border-color: var(--accent);
-    background: var(--active-glow);
-    box-shadow: 0 0 16px var(--active-glow), inset 0 0 8px rgba(0, 255, 136, 0.08);
+    background: rgba(0, 255, 136, 0.10);
+    box-shadow: 0 0 12px var(--active-glow);
+    padding: 8px 12px;
   }
-  .vertex-card.inactive {
-    opacity: 0.35;
-  }
+  .vertex-card.active .intensity-bar { display: none; }
   .vertex-label {
-    font-size: 11px;
+    font-size: 36px;
     font-weight: 700;
     color: var(--accent);
-    margin-bottom: 4px;
+    margin-bottom: 6px;
   }
   .vertex-param {
-    font-size: 11px;
-    color: var(--dim);
-    line-height: 1.6;
+    font-size: 27px;
+    color: var(--text);
+    line-height: 1.3;
+    white-space: nowrap;
   }
+  .vertex-param .val { color: var(--accent); font-weight: 600; }
   .vertex-param .val { color: var(--text); }
   .vertex-card.active .vertex-param .val { color: #fff; }
   .intensity-bar {
@@ -313,32 +303,13 @@
     transition: width 0.3s;
   }
 
-  /* Complexes panel */
-  .complexes-panel { grid-column: 1 / -1; }
-  .complex-grid {
-    display: grid;
-    grid-template-columns: repeat(8, 1fr);
-    gap: 6px;
-  }
-  .complex-card {
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 4px;
-    padding: 8px;
-    text-align: center;
-    transition: all 0.25s;
-  }
-  .complex-card.inactive { opacity: 0.35; }
-  .complex-card.active {
-    box-shadow: 0 0 12px rgba(255, 255, 255, 0.1);
-  }
   .complex-num {
-    font-size: 14px;
+    font-size: 39px;
     font-weight: 700;
-    margin-bottom: 2px;
+    margin-bottom: 6px;
   }
   .complex-name {
-    font-size: 9px;
+    font-size: 22px;
     color: var(--dim);
     line-height: 1.3;
   }
@@ -353,26 +324,53 @@
   .ct-7 { border-color: #ff44cc; color: #ff44cc; }
   .ct-8 { border-color: #cccccc; color: #cccccc; }
 
-  /* Sieve */
+  /* Sieve — piano roll */
   .sieve-strip {
     display: flex;
-    gap: 1px;
-    height: 48px;
-    align-items: flex-end;
+    gap: 0;
+    height: 52px;
+    align-items: stretch;
+    pointer-events: auto;
+    border-radius: 3px;
+    overflow: hidden;
+    background: rgba(0, 0, 0, 0.35);
+    border: 1px solid rgba(0, 204, 255, 0.25);
   }
   .sieve-cell {
     flex: 1;
     min-width: 0;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 2px;
     position: relative;
     height: 100%;
-    transition: background 0.2s, border-color 0.2s;
+    border-right: 1px solid rgba(0, 0, 0, 0.4);
+    transition: background 0.2s, box-shadow 0.2s;
+  }
+  /* White keys — default */
+  .sieve-cell {
+    background: rgba(200, 220, 235, 0.10);
+  }
+  /* Black keys — darker, slightly shorter (top band) */
+  .sieve-cell.black {
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .sieve-cell.black::after {
+    content: '';
+    position: absolute;
+    top: 0; left: 15%; right: 15%;
+    height: 62%;
+    background: rgba(0, 0, 0, 0.75);
+    border-radius: 0 0 2px 2px;
+    pointer-events: none;
+  }
+  /* Octave C gets a left divider line */
+  .sieve-cell.octave-start {
+    border-left: 1px solid rgba(0, 204, 255, 0.35);
   }
   .sieve-cell.active {
-    background: rgba(0, 204, 255, 0.15);
-    border-color: var(--accent2);
+    background: var(--accent2);
+    box-shadow: 0 0 12px var(--accent2), inset 0 0 8px rgba(255,255,255,0.3);
+  }
+  .sieve-cell.active::after {
+    background: var(--accent2);
   }
   .sieve-cell.active .sieve-bar {
     background: var(--accent2);
@@ -383,25 +381,34 @@
     left: 0;
     right: 0;
     height: 0;
-    background: var(--border);
+    background: transparent;
     transition: height 0.3s;
   }
   .sieve-labels {
     display: flex;
-    gap: 1px;
-    margin-top: 4px;
+    gap: 0;
+    margin-top: 3px;
+    height: 14px;
   }
   .sieve-labels span {
     flex: 1;
     text-align: center;
-    font-size: 8px;
+    font-size: 11px;
+    font-weight: 700;
     color: var(--dim);
+    line-height: 14px;
+    letter-spacing: 0.5px;
   }
-  .sieve-labels span.active { color: var(--accent2); }
+  .sieve-labels span.octave-label {
+    color: var(--accent2);
+  }
+  .sieve-labels span.active { color: var(--accent); }
 
-  /* Bottom row: Move log + Gyro */
-  .log-panel { grid-column: 1 / 2; max-height: 200px; }
-  .gyro-panel { grid-column: 2 / 3; }
+  /* Hidden (JS still writes to these) */
+  .log-panel, .gyro-panel, .sequence-panel, .vertices-panel, .complexes-panel, .spell-panel { display: none !important; }
+  /* Keep active vertex/complex cards visible even though grid containers hide by default */
+  .ovl-tl .vertex-grid, .ovl-tl .complex-grid { display: block !important; }
+  .active-cards { display: flex; flex-direction: column; gap: 6px; }
 
   .move-log {
     font-size: 12px;
@@ -431,22 +438,31 @@
   .perm-display {
     display: flex;
     gap: 4px;
-    margin-top: 6px;
+    margin-top: 2px;
+    flex-wrap: nowrap;
+    width: 100%;
   }
   .perm-slot {
-    width: 28px;
-    height: 28px;
-    background: var(--bg);
+    flex: 1;
+    min-width: 0;
+    height: 44px;
+    background: rgba(10, 10, 15, 0.5);
     border: 1px solid var(--border);
     border-radius: 3px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 11px;
+    font-size: 21px;
     font-weight: 600;
     color: var(--accent);
     transition: all 0.3s;
   }
+  /* Make the permutation row stack label above slots so 8 boxes fit */
+  .state-row.perm-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .state-row.perm-row .state-label { margin-bottom: 2px; }
   .perm-slot.active {
     border-color: var(--accent);
     background: var(--active-glow);
@@ -455,22 +471,24 @@
 
   /* === V2 Panels === */
 
-  /* Spell panel */
-  .spell-panel { grid-column: 1 / -1; }
+  /* Spell buffer (top-center, transparent) */
   .spell-row {
     display: flex;
-    gap: 12px;
+    flex-direction: column;
+    gap: 4px;
     align-items: center;
   }
   .spell-notification {
-    font-size: 14px;
+    font-size: 18px;
     font-weight: 700;
     color: var(--gold);
-    min-width: 180px;
-    min-height: 28px;
+    letter-spacing: 3px;
+    text-transform: uppercase;
+    min-height: 22px;
     display: flex;
     align-items: center;
     gap: 8px;
+    justify-content: center;
   }
   .spell-notification.active {
     animation: spell-flash 1.5s ease-out forwards;
@@ -481,24 +499,23 @@
   }
   .spell-buffer {
     display: flex;
-    gap: 3px;
+    gap: 10px;
     flex-wrap: wrap;
-    flex: 1;
+    justify-content: center;
   }
   .spell-buffer-move {
-    padding: 2px 6px;
-    font-size: 11px;
+    padding: 0;
+    font-size: 18px;
     font-weight: 600;
-    background: var(--bg);
-    border: 1px solid var(--border);
-    border-radius: 3px;
-    color: var(--dim);
-    transition: all 0.15s;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: var(--text);
+    transition: color 0.15s;
+    letter-spacing: 2px;
   }
   .spell-buffer-move.matched {
-    border-color: var(--gold);
     color: var(--gold);
-    background: rgba(255, 204, 0, 0.08);
   }
   .spell-partials {
     font-size: 10px;
@@ -520,21 +537,21 @@
     transition: width 0.15s;
   }
 
-  /* Mode bar */
-  .mode-panel { grid-column: 1 / -1; }
+  /* Mode badges (left overlay) */
   .mode-row {
     display: flex;
-    gap: 16px;
-    align-items: center;
+    gap: 6px;
+    align-items: flex-start;
     flex-wrap: wrap;
   }
   .mode-badge {
-    padding: 4px 12px;
-    font-size: 12px;
+    padding: 7px 16px;
+    font-size: 22px;
     font-weight: 700;
-    border-radius: 4px;
+    border-radius: 3px;
     letter-spacing: 0.5px;
     text-transform: uppercase;
+    background: transparent;
   }
   .mode-badge.voice-seq {
     background: rgba(0, 255, 136, 0.12);
@@ -572,10 +589,10 @@
     color: var(--warm);
   }
   .turn-rate-val {
-    font-size: 11px;
+    font-size: 22px;
     color: var(--dim);
     font-variant-numeric: tabular-nums;
-    min-width: 56px;
+    min-width: 100px;
     text-align: right;
   }
   .scramble-wrap {
@@ -591,11 +608,11 @@
     letter-spacing: 1px;
   }
   .scramble-bar-outer {
-    width: 100px;
-    height: 8px;
-    background: var(--bg);
+    width: 150px;
+    height: 10px;
+    background: rgba(10,10,15,0.5);
     border: 1px solid var(--border);
-    border-radius: 4px;
+    border-radius: 3px;
     overflow: hidden;
   }
   .scramble-bar-inner {
@@ -606,44 +623,52 @@
     transition: width 0.3s, background 0.3s;
   }
   .scramble-val {
-    font-size: 11px;
+    font-size: 22px;
     font-weight: 600;
     color: var(--text);
-    min-width: 30px;
+    min-width: 56px;
   }
 
-  /* Expression panel */
-  .expression-panel { grid-column: 1 / -1; }
+  /* Expression overlay (now in left column) */
+  .expression-panel {
+    background: transparent;
+    padding: 0;
+    border-top: 1px solid var(--border);
+    padding-top: 10px;
+  }
   .expr-grid {
-    display: grid;
-    grid-template-columns: repeat(4, 1fr);
-    gap: 8px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
   }
   .expr-item {
-    background: var(--bg);
-    border-radius: 4px;
-    padding: 10px;
-    text-align: center;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: transparent;
+    padding: 2px 0;
   }
   .expr-label {
-    font-size: 9px;
+    font-size: 22px;
     color: var(--dim);
     text-transform: uppercase;
     letter-spacing: 1px;
-    margin-bottom: 4px;
+    flex: 0 0 180px;
   }
   .expr-value {
-    font-size: 20px;
+    font-size: 27px;
     font-weight: 600;
-    color: var(--accent2);
+    color: var(--accent);
     font-family: monospace;
+    min-width: 90px;
   }
   .expr-bar-wrap {
-    height: 4px;
+    flex: 1;
+    height: 3px;
     background: var(--border);
     border-radius: 2px;
-    margin-top: 6px;
     overflow: hidden;
+    display: none;
   }
   .expr-bar {
     height: 100%;
@@ -651,6 +676,36 @@
     background: var(--accent2);
     border-radius: 2px;
     transition: width 0.1s;
+  }
+  .expr-controls {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-bottom: 10px;
+  }
+  .expr-controls button {
+    padding: 9px 20px;
+    font-size: 22px;
+    font-family: monospace;
+    font-weight: 600;
+    background: transparent;
+    color: var(--accent);
+    border: 1px solid var(--accent);
+    border-radius: 3px;
+    cursor: pointer;
+    letter-spacing: 1px;
+    align-self: flex-start;
+  }
+  .expr-controls .smooth-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 22px;
+    color: var(--dim);
+  }
+  .expr-controls .smooth-row input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent2);
   }
 
   /* Spell history toast */
@@ -681,15 +736,8 @@
   }
 
   /* No data overlay */
-  .waiting {
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    min-height: 200px;
-    color: var(--dim);
-    font-size: 14px;
-  }
+  .waiting { display: none; }
+  .ovl-legacy { display: none !important; }
   .waiting::after {
     content: '';
     display: inline-block;
@@ -708,59 +756,25 @@
 </head>
 <body>
 
+<canvas id="cube-canvas"></canvas>
+
 <div class="spell-history" id="spell-history"></div>
 
-<header>
-  <h1>XENAKUBE</h1>
-  <div class="header-connect">
-    <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
-    <button id="connectBtn">Connect Cube</button>
-    <button id="zeroBtn">Zero Gyro</button>
-    <label style="font-size:10px;color:var(--dim);margin-left:8px">smooth</label>
-    <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.20"
-      style="width:80px;vertical-align:middle;accent-color:var(--accent2)">
-    <span id="gyroSmoothVal" style="font-size:10px;color:var(--accent2);min-width:28px">0.20</span>
-    <span id="cube-status"></span>
-  </div>
-  <div class="header-status">
-    <span><span class="ws-dot" id="ws-dot"></span><span id="ws-status">disconnected</span></span>
-    <span>step <span class="val" id="h-step">0</span></span>
-    <span>S4 <span class="val" id="h-path">--</span></span>
-  </div>
-</header>
-
-<div class="grid">
-
-  <!-- 3D Cube -->
-  <div class="panel cube-panel">
-    <div class="panel-title">Cube</div>
-    <div class="cube-rotate-ctrl" id="rotate-ctrl">
-      <span class="cr-label">rotate</span>
-      <button class="cr-btn active" data-target="camera">cam</button>
-      <button class="cr-btn" data-target="live">live</button>
-      <button class="cr-btn" data-target="ghost">ghost</button>
-      <button class="cr-reset" title="reset selected view">&#x21ba;</button>
+<!-- Top-left: everything that lives on the left edge -->
+<div class="ovl ovl-tl">
+  <div class="ovl-section">
+    <h1 class="title">XENAKUBE</h1>
+    <div class="conn-row">
+      <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
+      <button id="connectBtn">Connect Cube</button>
+      <span id="cube-status"></span>
+      <span class="ws-status-inline">
+        <span class="ws-dot" id="ws-dot"></span><span id="ws-status">disconnected</span>
+      </span>
     </div>
-    <div id="snap-overlay" style="position:absolute;bottom:8px;left:8px;right:8px;display:flex;justify-content:space-between;align-items:flex-end;pointer-events:none;z-index:2;font-size:11px;font-family:monospace">
-      <span id="snap-label" style="color:var(--accent2);opacity:0.8">snap: --</span>
-      <span id="snap-dev-label" style="color:var(--dim)">dev: --</span>
-    </div>
-    <div id="snap-bar" style="position:absolute;bottom:0;left:0;height:3px;background:var(--accent2);opacity:0.6;z-index:2;transition:width 0.1s;width:0%"></div>
-    <canvas id="cube-canvas"></canvas>
   </div>
 
-  <!-- Performance State (v2 primary) -->
-  <div class="panel state-panel">
-    <div class="panel-title">Performance</div>
-
-    <div class="mode-row" style="margin-bottom:12px">
-      <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
-      <span class="mode-badge palette" id="mode-palette">default</span>
-      <span class="mode-badge frozen" id="mode-frozen" style="display:none">FROZEN</span>
-      <span class="mode-badge regime-contemplative" id="mode-regime">CONTEMPLATIVE</span>
-      <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
-    </div>
-
+  <div class="state-rows">
     <div class="state-row">
       <span class="state-label">active voice</span>
       <span class="state-val accent" id="s-active-vertex">K1</span>
@@ -786,25 +800,37 @@
         <span class="scramble-val" id="scramble-val">0.0</span>
       </div>
     </div>
-    <div class="state-row">
+    <div class="state-row perm-row">
       <span class="state-label">permutation</span>
       <div class="perm-display" id="s-perm"></div>
     </div>
   </div>
 
-  <!-- Spell Detection -->
-  <div class="panel spell-panel">
-    <div class="panel-title">Spells</div>
-    <div class="spell-row">
-      <div class="spell-notification" id="spell-notification"></div>
-      <div class="spell-buffer" id="spell-buffer"></div>
-      <div class="spell-partials" id="spell-partials"></div>
-    </div>
+  <div class="mode-row">
+    <span class="mode-badge palette" id="mode-palette">default</span>
+    <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
+    <span class="mode-badge frozen" id="mode-frozen" style="display:none">FROZEN</span>
+    <span class="mode-badge regime-contemplative" id="mode-regime">CONTEMPLATIVE</span>
+    <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
   </div>
 
-  <!-- Expression -->
-  <div class="panel expression-panel">
+  <!-- Active vertex + complex card (moved from bottom-left) -->
+  <div class="active-cards">
+    <div class="vertex-grid" id="vertex-grid"></div>
+    <div class="complex-grid" id="complex-grid"></div>
+  </div>
+
+  <!-- Expression (moved from right) -->
+  <div class="expression-panel">
     <div class="panel-title">Expression</div>
+    <div class="expr-controls">
+      <button id="zeroBtn">Zero Gyro</button>
+      <div class="smooth-row">
+        <label>smooth</label>
+        <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.20">
+        <span id="gyroSmoothVal" style="color:var(--accent2);min-width:28px">0.20</span>
+      </div>
+    </div>
     <div class="expr-grid">
       <div class="expr-item">
         <div class="expr-label">Tilt</div>
@@ -828,53 +854,53 @@
       </div>
     </div>
   </div>
+</div>
 
-  <!-- Vertex Sequence Bar -->
-  <div class="panel sequence-panel">
-    <div class="panel-title">Voice Sequence</div>
-    <div class="seq-controls">
-      <select id="diagram-select" style="font-size:11px">
-        <option value="">direct (free)</option>
-      </select>
-      <select id="path-select" style="font-size:11px">
-        <option value="V1">V1</option>
-        <option value="V2">V2</option>
-      </select>
-      <select id="cmode-select" style="font-size:11px">
-        <option value="algorithmic">algorithmic</option>
-        <option value="gyro">gyro snap</option>
-      </select>
-      <button class="ctrl-btn" id="resetBtn">Reset</button>
-    </div>
-    <div class="seq-vertex-bar" id="seq-vertex-bar"></div>
+<!-- Top-center: spell buffer + notification -->
+<div class="ovl ovl-tc">
+  <div class="spell-row">
+    <div class="spell-buffer" id="spell-buffer"></div>
+    <div class="spell-notification" id="spell-notification"></div>
+    <div class="spell-partials" id="spell-partials" style="display:none"></div>
   </div>
+</div>
 
-  <!-- Vertices -->
-  <div class="panel vertices-panel">
-    <div class="panel-title">Vertices K1-K8</div>
-    <div class="vertex-grid" id="vertex-grid"></div>
+<!-- Top-right: rotate controls + gizmo slot + status -->
+<div class="ovl ovl-tr">
+  <div class="cube-rotate-ctrl" id="rotate-ctrl">
+    <span class="cr-label" style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-right:2px">rotate</span>
+    <button class="cr-btn active" data-target="camera">cam</button>
+    <button class="cr-btn" data-target="live">live</button>
+    <button class="cr-btn" data-target="ghost">ghost</button>
+    <button class="cr-reset" title="reset selected view">&#x21ba;</button>
   </div>
-
-  <!-- Complexes -->
-  <div class="panel complexes-panel">
-    <div class="panel-title">Complexes C1-C8</div>
-    <div class="complex-grid" id="complex-grid"></div>
+  <!-- gizmo canvas is injected here by JS at top:56px right:20px -->
+  <div style="height:210px"></div>
+  <div class="header-status">
+    <span>step <span class="val" id="h-step">0</span></span>
+    <span>S4 <span class="val" id="h-path">--</span></span>
   </div>
-
-  <!-- Move Log + Sieve -->
-  <div class="panel log-panel">
-    <div class="panel-title">Move Log</div>
-    <div class="move-log" id="move-log">
-      <div class="waiting" id="waiting-msg">Waiting for cube data</div>
-    </div>
+  <div id="snap-overlay" style="font-size:10px;font-family:monospace;text-align:right">
+    <span id="snap-label" style="color:var(--accent2);opacity:0.8">snap: --</span>
+    <span id="snap-dev-label" style="color:var(--dim);margin-left:8px">dev: --</span>
   </div>
+  <div id="snap-bar" style="height:2px;background:var(--accent2);opacity:0.6;transition:width 0.1s;width:0%"></div>
+</div>
 
-  <div class="panel gyro-panel">
-    <div class="panel-title">Sieve</div>
-    <div class="sieve-strip" id="sieve-strip"></div>
-    <div class="sieve-labels" id="sieve-labels"></div>
-  </div>
+<!-- Bottom: sieve strip, full width -->
+<div class="ovl-bottom">
+  <div class="sieve-strip" id="sieve-strip"></div>
+  <div class="sieve-labels" id="sieve-labels"></div>
+</div>
 
+<!-- Hidden elements kept for JS compatibility -->
+<div class="ovl-legacy">
+  <select id="diagram-select"><option value="">direct (free)</option></select>
+  <select id="path-select"><option value="V1">V1</option><option value="V2">V2</option></select>
+  <select id="cmode-select"><option value="algorithmic">algorithmic</option><option value="gyro">gyro snap</option></select>
+  <button id="resetBtn">Reset</button>
+  <div id="seq-vertex-bar"></div>
+  <div id="move-log"><div id="waiting-msg"></div></div>
 </div>
 
 <script type="importmap">
@@ -1077,9 +1103,9 @@ let rotateTarget = 'camera'; // 'camera' | 'live' | 'ghost'
 
 // ---- Rotation Gizmo (separate mini-canvas, bottom-right corner) ----
 const gizmoCanvas = document.createElement('canvas');
-gizmoCanvas.width = 120; gizmoCanvas.height = 120;
-gizmoCanvas.style.cssText = 'position:absolute;bottom:8px;right:8px;width:100px;height:100px;z-index:3;touch-action:none;border-radius:50%;cursor:grab;';
-canvas.parentElement.appendChild(gizmoCanvas);
+gizmoCanvas.width = 200; gizmoCanvas.height = 200;
+gizmoCanvas.style.cssText = 'position:fixed;top:56px;right:20px;width:200px;height:200px;z-index:3;touch-action:none;border-radius:50%;cursor:grab;';
+document.body.appendChild(gizmoCanvas);
 
 const gizmoRenderer = new THREE.WebGLRenderer({ canvas: gizmoCanvas, antialias: true, alpha: true });
 gizmoRenderer.setPixelRatio(window.devicePixelRatio);
@@ -1343,22 +1369,19 @@ function updateVertexLabels(perm, vertices, complexTypes, activeIdx) {
     const W = 128, H = 80;
     ctx.clearRect(0, 0, W, H);
 
-    // Background pill for active vertex
-    if (isActive) {
-      ctx.fillStyle = 'rgba(0,255,136,0.18)';
-      ctx.beginPath();
-      ctx.roundRect(4, 0, W - 8, H, 8);
-      ctx.fill();
-    }
+    // No background pill — active vertex is indicated by the glow ring
+    // in the 3D scene and the active-card in the bottom-left overlay.
 
-    // Line 1: K# + complex type
+    // Line 1: K# only. Complex labels live on the GHOST cube — the live
+    // cube is the K_i (parameter) domain, the ghost is the C_i (complex)
+    // domain. Previously both cubes rendered complex abbreviations, which
+    // (together with the engine's old lockstep advance) made it look like
+    // `pizz/bow/harm` were glued to K#s. Keep K# exclusive to the live cube.
     ctx.font = 'bold 18px monospace';
     ctx.fillStyle = color;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    const ct = complexTypes ? complexTypes[i] : null;
-    const ctStr = ct ? ` ${COMPLEX_ABBR[ct] || 'C' + ct}` : '';
-    ctx.fillText(`K${kIndex + 1}${ctStr}`, W / 2, 2);
+    ctx.fillText(`K${kIndex + 1}`, W / 2, 2);
 
     // Line 2: intensity + density
     if (vertices) {
@@ -1462,16 +1485,24 @@ const sieveStrip = document.getElementById('sieve-strip');
 const sieveLabelsEl = document.getElementById('sieve-labels');
 const SIEVE_RANGE = 49;
 const sieveCells = [];
+// Black-key semitone offsets (C#, D#, F#, G#, A#)
+const BLACK_KEYS = new Set([1, 3, 6, 8, 10]);
 for (let i = 0; i < SIEVE_RANGE; i++) {
   const cell = document.createElement('div');
-  cell.className = 'sieve-cell';
+  const pc = i % 12;
+  const classes = ['sieve-cell'];
+  if (BLACK_KEYS.has(pc)) classes.push('black');
+  if (pc === 0) classes.push('octave-start');
+  cell.className = classes.join(' ');
   cell.innerHTML = '<div class="sieve-bar"></div>';
   sieveStrip.appendChild(cell);
   sieveCells.push(cell);
 
   const lbl = document.createElement('span');
-  if (i % 12 === 0) lbl.textContent = semitoneName(i);
-  else if (i % 12 === 7) lbl.textContent = semitoneName(i);
+  if (pc === 0) {
+    lbl.textContent = semitoneName(i);
+    lbl.classList.add('octave-label');
+  }
   sieveLabelsEl.appendChild(lbl);
 }
 
@@ -1502,7 +1533,8 @@ function updateState(state, move) {
   document.getElementById('s-tetra').textContent = state.tetraIndex === 0 ? 'even' : 'odd';
   document.getElementById('s-tetra').className = 'state-val ' + (state.tetraIndex === 0 ? 'accent' : 'warm');
   document.getElementById('s-cycle').textContent = state.cyclicPhase;
-  document.getElementById('s-active-vertex').textContent = `K${activeIdx + 1}`;
+  const activeKIdx = state.kPermutation ? state.kPermutation[activeIdx] : activeIdx;
+  document.getElementById('s-active-vertex').textContent = `K${activeKIdx + 1}`;
 
   if (state.kPermutation) {
     for (let i = 0; i < 8; i++) {
@@ -1515,9 +1547,17 @@ function updateState(state, move) {
   tetraBLines.material.opacity = state.tetraIndex === 1 ? 0.6 : 0.15;
 
   if (state.kVertices) {
+    // state.kVertices[i] = basevertices[perm[i]] — already permuted. The card
+    // at screen-position i must therefore be labelled with the K-number of
+    // whichever vertex currently occupies that position, i.e. perm[i]+1. The
+    // old static `K${i+1}` label showed the slot position instead of the
+    // vertex identity, so e.g. K2's values could appear under a card labelled
+    // K3. Rename on every render.
     for (let i = 0; i < 8; i++) {
       const v = state.kVertices[i];
       const card = vertexCards[i];
+      const kIdx = state.kPermutation ? state.kPermutation[i] : i;
+      card.querySelector('.vertex-label').textContent = `K${kIdx + 1}`;
       card.querySelector('[data-v="d"]').textContent = v.density.toFixed(1);
       card.querySelector('[data-v="g"]').textContent = v.intensity;
       card.querySelector('[data-v="u"]').textContent = v.duration;
@@ -1539,8 +1579,12 @@ function updateState(state, move) {
 
     for (let i = 0; i < 8; i++) {
       const ct = state.cAssignments[i];
+      const kIdx = state.kPermutation ? state.kPermutation[i] : i;
       seqPips[i].className = 'seq-vertex-pip' + (i === activeIdx ? ' active' : '');
-      seqPips[i].querySelector('.pip-complex').textContent = COMPLEX_SHORT[ct] || '';
+      // Keep the pip's K-label in sync with whichever vertex currently sits
+      // in this slot (same fix as vertex cards above). Re-create the inner
+      // HTML since the K-number prefix is a plain text node.
+      seqPips[i].innerHTML = `K${kIdx + 1}<span class="pip-complex">${COMPLEX_SHORT[ct] || ''}</span>`;
     }
   }
 
@@ -1587,7 +1631,7 @@ function updateState(state, move) {
     const ct = state.cAssignments ? state.cAssignments[activeIdx] : '?';
     entry.innerHTML = `
       <span class="move-name">${move}</span>
-      <span class="move-vertex">K${activeIdx + 1}</span>
+      <span class="move-vertex">K${activeKIdx + 1}</span>
       <span class="move-detail">C${ct} ${state.cyclicPhase} step ${state.step}</span>
     `;
     log.insertBefore(entry, log.firstChild);

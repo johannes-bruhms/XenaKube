@@ -118,7 +118,15 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 
 ### public/ — Browser Dashboard
 
-`dashboard.html` at `http://localhost:3000`. Three.js 3D cube with per-vertex K#/complex/D/G/U labels, ghost cube showing S4 snap target (opacity = deviation), rotation gizmo. Panels: spell detection (buffer + partial progress + toasts), mode badges (seq/poly, palette, frozen), expression gauges, voice bar, vertex/complex cards, sieve strip, move log. WS client to relay.
+`dashboard.html` at `http://localhost:3000`. **Full-viewport HUD**: `#cube-canvas` fills the window (100vw × 100vh, z-index 0); all UI floats as transparent overlays on top of it. Three.js 3D cube with per-vertex K#/D/G/U labels, ghost cube showing S4 snap target (opacity = deviation), rotation gizmo (fixed 200×200 at top-right, under the cam/live/ghost toggles).
+
+Overlay layout:
+- **Top-left column** (`.ovl-tl`, 480 px): title + MAC/connect row → state rows (active voice, S4, phase, orbit, scramble, permutation) → mode badges (palette, voice, frozen, regime, turn rate) → active K/C card → Expression panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble readouts).
+- **Top-center**: spell buffer + spell notification.
+- **Top-right**: rotate cam/live/ghost toggles → rotation gizmo → step / S4 element / snap dev.
+- **Bottom**: full-width sieve piano-roll (white/black keys, octave dividers, C2–C6 labels).
+
+Only the **active** K/C cards render in the HUD (`.vertex-card:not(.active), .complex-card:not(.active) { display:none }`); JS still populates all 8 internally. Legacy elements (full K1–K8 grid, C1–C8 grid, move-log list, voice-sequence selects/reset button) remain in DOM for JS compatibility but are hidden via `.ovl-legacy { display:none }`. WS client to relay.
 
 ## Performance Model
 
@@ -209,6 +217,7 @@ Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) d
 | `xk_swam.js` | v8 object: OSC → midievent. SWAM v3.10 KS plane (velocity-select via `setEnum` + `velForOption`). `COMPLEX` config table is the per-voice source of truth (play mode, envelope, vibrato, bow pos/pressure, portamento, register). Expression = per-complex envelope × intensity × path scalar. Spin-deadband on 60 Hz CCs; `/xk/panic` + inactivity watchdog for cleanup. One `phraseCX` generator per complex with stochastic counts. Pitches folded into cello range via `foldToRange(pitch, lo, hi)`. |
 | `tester.maxpat` | Reference 4-object chain for driving SWAM from a live relay. |
 | `tester1.maxpat` | Debug harness: message boxes for hand-fired `/xk/expr/*` and raw `midievent` CCs. |
+| `ks_logger.js` | Optional pass-through v8 between `xk_swam.js` and `vst~`. Toggleable (`on`/`off`/`dump`). Captures raw `midievent` with timestamps; `dump` prints KS-only timeline (field, option guess, Δprev, Δfield) plus non-KS summary + full JSON for LLM review. Use for diagnosing KS glitches (flashing harmonics / tremolo). |
 
 ### Conceptual mapping
 
