@@ -24,7 +24,7 @@ Primary source: `docs/xenakis_nomos_alpha_primary_source.md` (*Formalized Music*
 
 ```bash
 npx tsx relay.js      # run full relay (BLE → engine → OSC)
-npm test              # vitest (66 tests)
+npm test              # vitest
 npm run test:watch    # vitest watch
 npm run dev           # engine standalone (tsx)
 npm run build         # tsc → dist/
@@ -33,7 +33,7 @@ npx tsc --noEmit      # type-check only
 
 ## OSC Reference
 
-`/xk/*` → SC (57120) and Max (57121). `/gan/*` → TD (8000). Full state burst (~30 messages) on every cube turn and at BLE gyro rate (~10 Hz). `/xk/gyro`, `/gan/gyro`, `/xk/expr/*` at 60 Hz from the relay's Kalman loop. `/xk/voice` fires only on real voice transitions (from `engine.onVoice`, not per gyro packet). `/xk/spell` on algorithm detection. Full `XenaKubeState` JSON broadcast to all WS clients on every state change.
+`/xk/*` → SC (57120) and Max (57121). `/gan/*` → TD (8000). Multi-message state burst on every cube turn and at BLE gyro rate (~10 Hz). `/xk/gyro`, `/gan/gyro`, `/xk/expr/*` at 60 Hz from the relay's Kalman loop. `/xk/voice` fires only on real voice transitions (from `engine.onVoice`, not per gyro packet). `/xk/spell` on algorithm detection. Full `XenaKubeState` JSON broadcast to all WS clients on every state change.
 
 | Address | Args | Meaning |
 |---------|------|---------|
@@ -118,16 +118,16 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 
 ### public/ — Browser Dashboard
 
-`dashboard.html` at `http://localhost:3000`. **Full-viewport HUD**: `#cube-canvas` fills the window (100vw × 100vh, z-index 0); all UI floats as transparent overlays on top of it. Three.js 3D cube with per-vertex K#/D/G/U labels, ghost cube showing S4 snap target (opacity = deviation), rotation gizmo (fixed 200×200 at top-right, under the cam/live/ghost toggles).
+`dashboard.html` at `http://localhost:3000`. **Full-viewport HUD**: `#cube-canvas` fills the window; all UI floats as transparent overlays. Three.js 3D cube with per-vertex K#/D/G/U labels, ghost cube showing S4 snap target (opacity = deviation). WS client to relay. Pixel/zoom values live in the CSS (L48-60).
 
-Overlay layout:
-- **Top-left column** (`.ovl-tl`, 480 px): XENAKUBE title + MAC/connect row (single "Connected" indicator — the button itself turns green via `.connected` class) → mode badges (palette, voice, frozen, regime, turn rate) → active K/C cards (160 px wide, left-aligned). Section titles (State/Expression) are cyan (`--accent2`).
-- **Fixed bottom-left stack** (above the piano roll): **State** panel (active voice, S4 element, path, step, snap, complex phase, orbit, scramble, permutation) then **Expression** panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble readouts). Both scaled `zoom: 0.75`.
+Overlay regions:
+- **Top-left column** (`.ovl-tl`): title + MAC/connect (button turns green via `.connected`), mode badges, active K/C cards.
+- **Bottom-left stack** (above piano roll): **State** panel (active voice, S4 element, path, step, snap, complex phase, orbit, scramble, permutation) then **Expression** panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble).
 - **Top-center**: spell buffer + spell notification.
-- **Top-right**: rotate cam/live/ghost toggles (scaled `zoom: 1.5`, cyan "Rotate" label) → rotation gizmo (200×200, unscaled). Step / S4 / snap readouts moved into the left-side State panel; redundant dev% + snap-bar removed (Deviation already in Expression).
-- **Bottom**: full-width sieve piano-roll (white/black keys, octave dividers, C2–C6 labels).
+- **Top-right**: cam/live/ghost rotate toggles, then rotation gizmo.
+- **Bottom**: full-width sieve piano-roll (C2–C6).
 
-Only the **active** K/C cards render in the HUD (`.vertex-card:not(.active), .complex-card:not(.active) { display:none }`); JS still populates all 8 internally. Legacy elements (full K1–K8 grid, C1–C8 grid, move-log list, voice-sequence selects/reset button) remain in DOM for JS compatibility but are hidden via `.ovl-legacy { display:none }`. WS client to relay.
+Only the active K/C cards render; the 8-vertex/complex grids and legacy controls are populated but hidden via `.ovl-legacy`.
 
 ## Performance Model
 
@@ -192,9 +192,7 @@ Rubik's algorithms detected from the move stream trigger mode changes. The spell
 
 ## SuperCollider
 
-All composition math stays in the TS engine; SC only receives OSC and synthesizes. Single file: `sc/xenakube.scd`.
-
-Boot: open in SC IDE, `Cmd+B`, select all, `Cmd+Enter`. Listens on lang port 57120. `Cmd+.` = panic.
+Single file: `sc/xenakube.scd`. Boot: open in SC IDE, `Cmd+B`, select all, `Cmd+Enter`. Listens on lang port 57120. `Cmd+.` = panic.
 
 Sequential single-voice model. Active voice → stereo pan (by vertex position) → reverb send bus → `FreeVerb2` → `Limiter` (0.85). SynthDef roster, voice-overlap rules (min 0.5 s duration before switching), and OSC→synth param bindings are all in `sc/xenakube.scd` comments — source of truth.
 
@@ -215,27 +213,27 @@ Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) d
 
 | File | Role |
 |------|------|
-| `xk_swam.js` | v8 object: OSC → midievent. SWAM v3.10 KS plane (velocity-select via `setEnum` + `velForOption`) for Play Mode / Gesture Mode / Alt Fingering; Harmonics + Tremolo via CC 78 / CC 79 (D31). `COMPLEX` config table is the per-voice source of truth (play mode, envelope, vibrato, bow pos/pressure, portamento, register). Expression = per-complex envelope × intensity × path scalar. Spin-deadband on 60 Hz CCs; `/xk/panic` + inactivity watchdog for cleanup. One `phraseCX` generator per complex with stochastic counts. Pitches folded into cello range via `foldToRange(pitch, lo, hi)`. |
+| `xk_swam.js` | v8 object: OSC → midievent. SWAM v3.10 KS plane (velocity-select via `setEnum` + `velForOption`) for Play Mode / Gesture Mode / Alt Fingering; Harmonics + Tremolo via CC 78 / CC 79 (D31); Tremolo Min Speed via CC 80 as per-step automation (D32), ±8 % per-voice jitter for visible slider motion + musical microvariation. `COMPLEX` config table is the per-voice source of truth (play mode, envelope, vibrato, bow pos/pressure, portamento, register, `tremoloRate`, per-stage `exprEnv` ramp ms). Expression = per-complex envelope × intensity × path scalar, slewed through `rampCC` (D33) so CC 11 interpolates between stages. Gliss phrases (C5/C6/C7) use `glissNote` (low-vel overlap) to trigger SWAM portamento; `legatoNote` (high-vel overlap) stays for attack notes and non-gliss legato (D34). Spin-deadband on 60 Hz CCs; `/xk/panic` + inactivity watchdog for cleanup. One `phraseCX` generator per complex with stochastic counts. Pitches folded into cello range via `foldToRange(pitch, lo, hi)`. |
 | `tester.maxpat` | Reference 4-object chain for driving SWAM from a live relay. |
 | `tester1.maxpat` | Debug harness: message boxes for hand-fired `/xk/expr/*` and raw `midievent` CCs. |
 | `ks_logger.js` | Optional pass-through v8 between `xk_swam.js` and `vst~`. Toggleable (`on`/`off`/`dump`). Captures raw `midievent` with timestamps; `dump` prints KS-only timeline (field, option guess, Δprev, Δfield) plus non-KS summary + full JSON for LLM review. Use for diagnosing KS glitches (flashing harmonics / tremolo). |
 
 ### Conceptual mapping
 
-- **Complex type → technique** (COMPLEX table): C1 Pizz, C2/C3 Arco, C4 Harmonics (CC 78), C5–C7 Portamento, C8 near-bridge + Tremolo (CC 79). Each complex owns a `register: {lo, hi}`.
-- **Intensity → Expression peak + note velocity + bow-pressure scalar + phrase density** (6-level INTENSITY_MAP).
-- **Path V1/V2 → Expression peak scalar** (V2 × 0.7) + widened V2 fold window.
+- **Complex type → technique** (COMPLEX table): C1 Pizz, C2/C3 Arco, C4 Harmonics (CC 78), C5–C7 Portamento, C8 near-bridge + Tremolo (CC 79). Each complex owns a `register: {lo, hi}`, a `tremoloRate` baseline (CC 80), and per-stage `exprEnv.{attackRampMs, sustainRampMs, releaseRampMs}`.
+- **Intensity → Expression peak + note velocity + bow-pressure scalar + phrase density + tremolo-rate scalar** (6-level INTENSITY_MAP).
+- **Path V1/V2 → Expression peak scalar** (V2 × 0.7) + tremolo-rate × 0.85 on V2 + widened V2 fold window.
 - **Tilt → Bow Position ±30** around the complex baseline (timbral sul tasto↔pont sweep).
 - **Spin → Vibrato Depth/Rate** (CC 19; EMA α = 0.08, musical dead zone at 0.15).
 - **Deviation → Bow Pressure ±25** modulation around the complex baseline.
-- **Regime → Attack Ramp multiplier** (contemplative 1.2 / conversational 1.0 / burst 0.5).
+- **Regime → Attack Ramp multiplier** (contemplative 1.2 / conversational 1.0 / burst 0.5) **and Expression-ramp multiplier** (contemplative 1.5 / conversational 1.0 / burst 0.4, D33).
 - **Spells** route through `setupComplex(active)` for idempotent restore.
 
-See `docs/swam_cello_reference.md` for CC/KS numbers, KS Velocity Remap bands, preset prerequisites, and v3.10/v3.11 migration notes. `docs/revision_roadmap.md` D1–D31 document every mapping decision.
+See `docs/swam_cello_reference.md` for CC/KS numbers, KS Velocity Remap bands, preset prerequisites, and v3.10/v3.11 migration notes. `docs/revision_roadmap.md` D1–D34 document every mapping decision.
 
-### v3.10 KS plane, in one paragraph
+### v3.10 plane, one-liner
 
-KS map on `KS_CH`, KS Octave = C0 (MIDI 24–35), 50 ms hold. **Play Mode, Gesture Mode, Alt Fingering** are 3-opt velocity-selectors driven via `setEnum(field, ks, target, optionCount)` which diffs by option index so re-asserting current state is a no-op. `bang()` pins Gesture Mode = Expression so CC 11 is never silently reinterpreted as bow direction. **Harmonics and Tremolo route through CC (CC 78 / CC 79) instead of KS F#/G#** — D31 revealed those KS are 2-band with a default-only Off state (Low = 2nd/Slow, High = 3rd/Fast, Off unreachable via KS once fired); CC reaches every state cleanly. `HAS_HARMONICS_CC` / `HAS_TREMOLO_CC` feature-flag the CC path with KS fall-back when the MIDI-Learn hasn't been done. Sordino / Sul Tasto / Sul Ponticello / Section Size were removed from the KS plane in v3.10 — Sordino is GUI/CC-only, Sul Tasto/Pont are driven by Bow Position (CC 16), Section Size is gone. Absent-param feature flags (`HAS_BOW_SPEED`, `HAS_ATTACK_RAMP`, `HAS_ATTACK_CONTROL`, default `false`) gate v3.11-missing knobs at the `cc()` helper layer.
+Play/Gesture/Alt Fingering via KS velocity-select (`setEnum`, diff by option index); `bang()` pins Gesture Mode = Expression. Harmonics/Tremolo via CC 78/79 (D31: KS is 2-band, Off unreachable). Tremolo Min Speed via CC 80 as per-voice automation (D32). CC 11 Expression interpolated via `rampCC` slew limiter (D33). `HAS_HARMONICS_CC`/`HAS_TREMOLO_CC`/`HAS_TREMOLO_RATE` gate CC with KS fallback; `HAS_BOW_SPEED`/`HAS_ATTACK_RAMP`/`HAS_ATTACK_CONTROL` default `false` to gate v3.11-absent knobs at the `cc()` helper. Full parameter map, KS bands, and v3.10/v3.11 migration: `docs/swam_cello_reference.md`.
 
 ### Max MCP Bridge
 

@@ -68,7 +68,11 @@ var CC = {
 	// required: right-click each selector in SWAM GUI → MIDI Learn →
 	// send these CCs once → save preset.
 	HARMONICS:        78,   // MIDI-Learn to Harmonics selector
-	TREMOLO:          79    // MIDI-Learn to Tremolo selector
+	TREMOLO:          79,   // MIDI-Learn to Tremolo selector
+	// D32 — Tremolo Min Speed (Play Modes → Right Hand). MIDI-Learn required.
+	// With Tremolo Mode = Hz, this is the continuous rate knob; written per
+	// voice so each walk step lands a pre-composed rate (like automation).
+	TREMOLO_RATE:     80    // MIDI-Learn to Tremolo Min Speed slider
 };
 
 // ================================================================
@@ -98,6 +102,10 @@ var HAS_BOW_PRESS_ACCENT = true;   // flip false if MIDI-Learn is not wired
 // which fires ON correctly but cannot turn Off (stays stuck at 2nd / Slow).
 var HAS_HARMONICS_CC     = true;
 var HAS_TREMOLO_CC       = true;
+// D32 — flip false until you MIDI-Learn Tremolo Min Speed to CC 80 in SWAM.
+// When false the per-voice tremolo-rate write is suppressed; the slider keeps
+// whatever value was last set by hand.
+var HAS_TREMOLO_RATE     = true;
 
 function hasCC(ccNum) {
 	if (ccNum === CC.BOW_SPEED)        return HAS_BOW_SPEED;
@@ -106,6 +114,7 @@ function hasCC(ccNum) {
 	if (ccNum === CC.BOW_PRESS_ACCENT) return HAS_BOW_PRESS_ACCENT;
 	if (ccNum === CC.HARMONICS)        return HAS_HARMONICS_CC;
 	if (ccNum === CC.TREMOLO)          return HAS_TREMOLO_CC;
+	if (ccNum === CC.TREMOLO_RATE)     return HAS_TREMOLO_RATE;
 	return true;
 }
 
@@ -215,12 +224,12 @@ var PLAY_MODE_VEL = { bow: KS_VEL.LOW, pizz: KS_VEL.MID, col: KS_VEL.HIGH };
 // (fff digs harder). density scales per-phrase note count.
 // ================================================================
 var INTENSITY_MAP = {
-	"p":   { expr: 20,  vel: 35,  bowMult: 0.70, density: 0.6 },
-	"mp":  { expr: 38,  vel: 50,  bowMult: 0.85, density: 0.8 },
-	"mf":  { expr: 55,  vel: 68,  bowMult: 1.00, density: 1.0 },
-	"f":   { expr: 75,  vel: 85,  bowMult: 1.15, density: 1.2 },
-	"ff":  { expr: 95,  vel: 100, bowMult: 1.30, density: 1.4 },
-	"fff": { expr: 115, vel: 120, bowMult: 1.45, density: 1.7 }
+	"p":   { expr: 20,  vel: 35,  bowMult: 0.70, density: 0.6, tremRateMult: 0.85 },
+	"mp":  { expr: 38,  vel: 50,  bowMult: 0.85, density: 0.8, tremRateMult: 0.92 },
+	"mf":  { expr: 55,  vel: 68,  bowMult: 1.00, density: 1.0, tremRateMult: 1.00 },
+	"f":   { expr: 75,  vel: 85,  bowMult: 1.15, density: 1.2, tremRateMult: 1.08 },
+	"ff":  { expr: 95,  vel: 100, bowMult: 1.30, density: 1.4, tremRateMult: 1.15 },
+	"fff": { expr: 115, vel: 120, bowMult: 1.45, density: 1.7, tremRateMult: 1.22 }
 };
 
 // ================================================================
@@ -230,64 +239,85 @@ var INTENSITY_MAP = {
 // ================================================================
 // harmonics: 0=OFF, 1=octave (+12), 2=oct+5th (+19), 3=4 Control
 // tremolo:   0=OFF, 1=Slow,         2=Fast
+// exprEnv adds per-stage ramp times (ms) for the CC 11 slew limiter (D33).
+// attackRampMs  — climb from 0 → attack fraction at voice onset
+// sustainRampMs — climb/decline attack → peak → sustain
+// releaseRampMs — fade sustain → 0 before allNotesOff
+// Regime scales all three via REGIME_EXPR_RAMP_MULT.
+//
+// tremoloRate (0–127) — pre-composed per-complex rate for the Tremolo Min
+// Speed slider (CC 80). Only C8 tremolos by default; the others carry a
+// sensible value so spells that flip tremolo on land coherently (D32).
 var COMPLEX = {
 	1: { playMode:"pizz", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
-	     exprEnv:{ attack:1.0, peak:1.0, sustain:0.4, release:0.0 },
+	     exprEnv:{ attack:1.0, peak:1.0, sustain:0.4, release:0.0,
+	               attackRampMs:2,  sustainRampMs:40,  releaseRampMs:60 },
 	     vibrato:{ depth:0, rate:64 }, bowPos:null,
 	     bowPressure:64, portamento:{ on:false, time:0 },
-	     attackRamp:10, attackCtrl:110,
+	     attackRamp:10, attackCtrl:110, tremoloRate:40,
 	     register:{ lo:36, hi:72 } },
 	2: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
-	     exprEnv:{ attack:0.6, peak:1.0, sustain:0.85, release:0.4 },
+	     exprEnv:{ attack:0.6, peak:1.0, sustain:0.85, release:0.4,
+	               attackRampMs:45, sustainRampMs:120, releaseRampMs:140 },
 	     vibrato:{ depth:35, rate:50 }, bowPos:70,
 	     bowPressure:70, portamento:{ on:false, time:0 },
-	     attackRamp:40, attackCtrl:55,
+	     attackRamp:40, attackCtrl:55, tremoloRate:45,
 	     register:{ lo:40, hi:64 } },
 	3: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
-	     exprEnv:{ attack:0.5, peak:1.1, sustain:0.9, release:0.6 },
+	     exprEnv:{ attack:0.5, peak:1.1, sustain:0.9, release:0.6,
+	               attackRampMs:80, sustainRampMs:180, releaseRampMs:220 },
 	     vibrato:{ depth:60, rate:45 }, bowPos:110,
 	     bowPressure:55, portamento:{ on:false, time:0 },
-	     attackRamp:85, attackCtrl:30,
+	     attackRamp:85, attackCtrl:30, tremoloRate:35,
 	     register:{ lo:36, hi:55 } },
 	// C4: now actually fires Harmonics in v3.10 (KS F#, vel-select).
 	// OCT (+1 octave) is the most musically usable — OCT_5TH is brittle
 	// at the cello's high register.
 	4: { playMode:"bow", harmonics:HARMONICS.OCT, tremolo:TREMOLO.OFF,
-	     exprEnv:{ attack:0.7, peak:0.75, sustain:0.6, release:0.3 },
+	     exprEnv:{ attack:0.7, peak:0.75, sustain:0.6, release:0.3,
+	               attackRampMs:30, sustainRampMs:90,  releaseRampMs:120 },
 	     vibrato:{ depth:10, rate:60 }, bowPos:85,
 	     bowPressure:30, portamento:{ on:false, time:0 },
-	     attackRamp:30, attackCtrl:20,
+	     attackRamp:30, attackCtrl:20, tremoloRate:55,
 	     register:{ lo:60, hi:84 } },
 	5: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
-	     exprEnv:{ attack:0.9, peak:1.1, sustain:0.7, release:0.3 },
+	     exprEnv:{ attack:0.9, peak:1.1, sustain:0.7, release:0.3,
+	               attackRampMs:35, sustainRampMs:100, releaseRampMs:120 },
 	     vibrato:{ depth:25, rate:70 }, bowPos:55,
 	     bowPressure:70, portamento:{ on:true, time:50 },
-	     attackRamp:30, attackCtrl:90,
+	     attackRamp:30, attackCtrl:90, tremoloRate:50,
 	     register:{ lo:36, hi:84 } },
 	6: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
-	     exprEnv:{ attack:0.7, peak:1.0, sustain:0.85, release:0.4 },
+	     exprEnv:{ attack:0.7, peak:1.0, sustain:0.85, release:0.4,
+	               attackRampMs:55, sustainRampMs:140, releaseRampMs:160 },
 	     vibrato:{ depth:40, rate:50 }, bowPos:64,
 	     bowPressure:70, portamento:{ on:true, time:80 },
-	     attackRamp:50, attackCtrl:50,
+	     attackRamp:50, attackCtrl:50, tremoloRate:50,
 	     register:{ lo:43, hi:67 } },
 	7: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
-	     exprEnv:{ attack:0.4, peak:1.05, sustain:0.9, release:0.7 },
+	     exprEnv:{ attack:0.4, peak:1.05, sustain:0.9, release:0.7,
+	               attackRampMs:100, sustainRampMs:200, releaseRampMs:260 },
 	     vibrato:{ depth:55, rate:40 }, bowPos:115,
 	     bowPressure:55, portamento:{ on:true, time:115 },
-	     attackRamp:90, attackCtrl:25,
+	     attackRamp:90, attackCtrl:25, tremoloRate:40,
 	     register:{ lo:36, hi:52 } },
 	// C8: now actually fires Tremolo in v3.10 (KS G#, vel-select). FAST
 	// is the spectral-aggressive ponticello character we want.
 	8: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.FAST,
-	     exprEnv:{ attack:0.9, peak:1.15, sustain:1.0, release:0.3 },
+	     exprEnv:{ attack:0.9, peak:1.15, sustain:1.0, release:0.3,
+	               attackRampMs:20, sustainRampMs:80,  releaseRampMs:100 },
 	     vibrato:{ depth:15, rate:80 }, bowPos:5,
 	     bowPressure:100, portamento:{ on:false, time:0 },
-	     attackRamp:20, attackCtrl:100,
+	     attackRamp:20, attackCtrl:100, tremoloRate:95,
 	     register:{ lo:60, hi:81 } }
 };
 
 // Regime → attack-ramp multiplier (single source per D7)
 var REGIME_ATTACK_MULT = { contemplative:1.2, conversational:1.0, burst:0.5 };
+
+// D33 — Regime scalar for the Expression (CC 11) slew-ramp times.
+// contemplative slurs longer; burst snaps faster to keep transients sharp.
+var REGIME_EXPR_RAMP_MULT = { contemplative:1.5, conversational:1.0, burst:0.4 };
 
 // Complexes whose phrases use legatoNote(): preserve the previous phrase's
 // tail note across cancelPhrase() so noteOn-before-noteOff overlap
@@ -408,6 +438,45 @@ function ccForce(num, val) {
 	val = clamp(Math.round(val), 0, 127);
 	ccCache[num] = val;
 	outlet(0, "midievent", statusCC(MIDI_CH), num, val);
+}
+
+// ================================================================
+// CC SLEW LIMITER (D33) — generic per-CC ramp so writes interpolate
+// instead of jumping. Primary user is CC 11 (Expression): the old
+// envelope fired three hard ccForce writes that created audible CC
+// stair-steps. rampCC walks ccCache[num] → target in ~15 ms ticks and
+// cancels any prior ramp on the same CC so fresh targets always win.
+// durMs <= 0 or equal start/target degrade to a single ccForce.
+// ================================================================
+var ccRampTasks = {};
+
+function cancelCCRamp(num) {
+	var tasks = ccRampTasks[num];
+	if (!tasks) return;
+	for (var i = 0; i < tasks.length; i++) tasks[i].cancel();
+	ccRampTasks[num] = null;
+}
+
+function rampCC(num, target, durMs) {
+	cancelCCRamp(num);
+	if (!hasCC(num)) return;
+	target = clamp(Math.round(target), 0, 127);
+	var start = ccCache[num];
+	if (start == null) start = 0;
+	if (durMs <= 0 || start === target) { ccForce(num, target); return; }
+
+	var tickMs = 15;
+	var steps  = Math.max(1, Math.round(durMs / tickMs));
+	var tasks  = [];
+	for (var i = 1; i <= steps; i++) {
+		(function(step) {
+			var v = start + (target - start) * (step / steps);
+			var t = new Task(function() { ccForce(num, v); }, this);
+			t.schedule(step * tickMs);
+			tasks.push(t);
+		})(i);
+	}
+	ccRampTasks[num] = tasks;
 }
 
 // Key Switch — sent on KS_CH, held KS_HOLD_MS.
@@ -535,6 +604,10 @@ function cancelPhrase(preserveLegatoTail) {
 	}
 	phraseTasks = [];
 
+	// D33 — kill any in-flight CC 11 ramp so a brand-new voice's envelope
+	// doesn't fight the previous phrase's slew back to sustain.
+	cancelCCRamp(CC.EXPRESSION);
+
 	if (preserveLegatoTail && state.activeNotes.length > 0) {
 		var tail = state.activeNotes[state.activeNotes.length - 1];
 		for (var j = 0; j < state.activeNotes.length - 1; j++) {
@@ -547,6 +620,9 @@ function cancelPhrase(preserveLegatoTail) {
 }
 
 // Schedule release + fade at end of phrase duration (seconds).
+// D33 — the fade is now a single slewed rampCC(CC.EXPRESSION, 0, …) whose
+// duration comes from the active complex's releaseRampMs scaled by regime,
+// instead of five hard step-writes.
 function scheduleRelease(dur) {
 	if (releaseTask) {
 		releaseTask.cancel();
@@ -554,47 +630,49 @@ function scheduleRelease(dur) {
 	}
 	var ms = Math.max(dur * 1000, 200);
 	releaseTask = new Task(function() {
-		var fadeSteps = 5;
-		var fadeTime = 80;
-		var startExpr = ccCache[CC.EXPRESSION] || 0;
+		var cmx = COMPLEX[state.activeComplex];
+		var rampMs = (cmx && cmx.exprEnv && cmx.exprEnv.releaseRampMs) || 120;
+		var rm = REGIME_EXPR_RAMP_MULT[state.regime] || 1.0;
+		var fadeMs = Math.max(20, Math.round(rampMs * rm));
 
-		function fadeStep(step) {
-			if (step >= fadeSteps) {
-				allNotesOff();
-				releaseTask = null;
-				return;
-			}
-			var ratio = 1.0 - (step + 1) / fadeSteps;
-			ccForce(CC.EXPRESSION, Math.round(startExpr * ratio));
-			var t = new Task(function() { fadeStep(step + 1); }, this);
-			t.schedule(fadeTime);
-			phraseTasks.push(t);
-		}
-		fadeStep(0);
+		rampCC(CC.EXPRESSION, 0, fadeMs);
+		var offT = new Task(function() {
+			allNotesOff();
+			releaseTask = null;
+		}, this);
+		offT.schedule(fadeMs + 20);
+		phraseTasks.push(offT);
 	}, this);
 	releaseTask.schedule(ms);
 }
 
 // ================================================================
-// EXPRESSION ENVELOPE (D8)
+// EXPRESSION ENVELOPE (D8, D33)
 // peak = INTENSITY.expr * pathScale; shape comes from complex.exprEnv.
+// Every stage transition is slewed via rampCC so CC 11 interpolates
+// instead of jumping. Per-stage ms come from exprEnv.{attackRampMs,
+// sustainRampMs, releaseRampMs} scaled by REGIME_EXPR_RAMP_MULT.
 // ================================================================
 function scheduleExprEnvelope(peakExpr, env, durMs) {
-	// Attack: first write immediately
-	ccForce(CC.EXPRESSION, Math.round(peakExpr * env.attack));
+	var rm = REGIME_EXPR_RAMP_MULT[state.regime] || 1.0;
+	var aMs = (env.attackRampMs  != null ? env.attackRampMs  : 40) * rm;
+	var sMs = (env.sustainRampMs != null ? env.sustainRampMs : 120) * rm;
+
+	// Attack: slew from current CC 11 up to attack fraction
+	rampCC(CC.EXPRESSION, Math.round(peakExpr * env.attack), aMs);
 
 	// Peak at ~25% of duration
 	var peakAt = Math.max(60, Math.round(durMs * 0.25));
 	scheduleAt(peakAt, function() {
-		ccForce(CC.EXPRESSION, Math.round(peakExpr * env.peak));
+		rampCC(CC.EXPRESSION, Math.round(peakExpr * env.peak), sMs);
 	});
 
 	// Sustain level at 70%
 	var sustainAt = Math.max(peakAt + 40, Math.round(durMs * 0.70));
 	scheduleAt(sustainAt, function() {
-		ccForce(CC.EXPRESSION, Math.round(peakExpr * env.sustain));
+		rampCC(CC.EXPRESSION, Math.round(peakExpr * env.sustain), sMs);
 	});
-	// Release is handled by scheduleRelease()'s fade.
+	// Release is handled by scheduleRelease()'s slewed fade.
 }
 
 // ================================================================
@@ -634,6 +712,15 @@ function setupComplex(complexType) {
 	// MIDI-Learn hasn't been done.
 	setHarmonics(cmx.harmonics);
 	setTremolo(cmx.tremolo);
+
+	// D32 — Tremolo Min Speed baseline (CC 80). Only written when this
+	// complex actually tremolos — no point nudging the SWAM slider for C1
+	// pizz or C3 arco, and on a preset where CC 80 collides with another
+	// MIDI-Learn binding the unconditional write was landing noise.
+	// handleVoice overrides per turn with intensity × path scaling.
+	if (cmx.tremoloRate != null && cmx.tremolo !== TREMOLO.OFF) {
+		ccForce(CC.TREMOLO_RATE, cmx.tremoloRate);
+	}
 
 	// Baseline CCs (forced — setup is authoritative). bow pressure is
 	// applied at the complex baseline here; handleVoice then overrides
@@ -730,6 +817,18 @@ function legatoNote(pitch, vel) {
 			}
 		});
 	}
+}
+
+// D34 — glissando trigger. SWAM's musical-interpretation rule: a slide is
+// engaged when the overlapping second note has a LOW Note-On velocity.
+// A high-vel overlap is heard as slurred legato (smooth timbre, no pitch
+// sweep). phraseC5/C6/C7 used legatoNote(pitch, humanVel(vel)) for every
+// note, so SWAM never engaged portamento even with CC 65/5 set correctly.
+// glissNote overlaps at a fixed low velocity — the first note of a phrase
+// still uses legatoNote to establish the attack, subsequent slides use this.
+var GLISS_VEL = 18;  // below SWAM's slide threshold; expression drives dynamics
+function glissNote(pitch) {
+	legatoNote(pitch, GLISS_VEL);
 }
 
 // ================================================================
@@ -831,7 +930,9 @@ function phraseC4(vel, dur) {
 	scheduleRelease(dur);
 }
 
-// C5: wild gliss — 2 notes ≥5 semis apart; fff adds compound gliss points
+// C5: wild gliss — 2 notes ≥5 semis apart; fff adds compound gliss points.
+// First note establishes attack (humanVel); every overlap after uses
+// glissNote (low vel) so SWAM engages portamento instead of slurred legato.
 function phraseC5(vel, dur) {
 	var segments = intensityDensity() >= 1.3 ? rrand(2, 3) : 1;
 	var lastPitch = pickPitch(5);
@@ -843,7 +944,7 @@ function phraseC5(vel, dur) {
 				var p = pickPitch(5);
 				var attempts = 0;
 				while (Math.abs(p - lastPitch) < 5 && attempts < 10) { p = pickPitch(5); attempts++; }
-				legatoNote(humanPitch(p), humanVel(vel));
+				glissNote(humanPitch(p));
 				lastPitch = p;
 			});
 		})(i);
@@ -851,21 +952,27 @@ function phraseC5(vel, dur) {
 	scheduleRelease(dur * 1.4);
 }
 
-// C6: ordered stepwise walk — 3–6 notes along the sieve with portamento
+// C6: ordered stepwise walk — 3–6 notes along the sieve with portamento.
+// First note attacks; walk-step overlaps glide at low vel.
 function phraseC6(vel, dur) {
 	var count = phraseCount(3, 6);
 	var spacing = Math.max(100, Math.round(dur * 1000 / (count + 1)));
 	for (var i = 0; i < count; i++) {
 		(function(idx) {
 			scheduleAt(idx * spacing + humanDelay(), function() {
-				legatoNote(humanPitch(pickPitch(6)), humanVel(vel));
+				if (idx === 0) {
+					legatoNote(humanPitch(pickPitch(6)), humanVel(vel));
+				} else {
+					glissNote(humanPitch(pickPitch(6)));
+				}
 			});
 		})(i);
 	}
 	scheduleRelease(dur * 1.2);
 }
 
-// C7: sustained + multiple micro-drifts — deep breath-like floating
+// C7: sustained + multiple micro-drifts — deep breath-like floating.
+// First note attacks; drift overlaps glide at low vel (gentle sigh).
 function phraseC7(vel, dur) {
 	var driftCount = 1 + (intensityDensity() >= 1.1 ? rrand(1, 2) : 0);
 	var p1 = pickPitch(7);
@@ -877,7 +984,7 @@ function phraseC7(vel, dur) {
 			scheduleAt(t, function() {
 				var lo = (state.path === "V2") ? 24 : CELLO_MIN;
 				var p2 = clamp(p1 + rrand(-3, 3), lo, CELLO_MAX);
-				legatoNote(p2, Math.max(30, humanVel(vel) - 10));
+				glissNote(p2);
 			});
 		})(i);
 	}
@@ -955,6 +1062,22 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	var bowBase = clamp(cmx.bowPressure * intMap.bowMult, 0, 127);
 	state.bowPressureBase = bowBase;
 	ccForce(CC.BOW_PRESSURE, Math.round(bowBase));
+
+	// D32 — per-step tremolo rate (CC 80). Pre-composed baseline from the
+	// complex, modulated by intensity (fff faster) and path (V2 × 0.85
+	// slower, matching the softer palette), plus ±8% per-voice jitter so
+	// the slider breathes visibly even when intensity/path hold steady
+	// (without jitter the same value ships every turn and the slider looks
+	// frozen). Gated on tremolo state so the slider only moves on complexes
+	// that actually tremolo.
+	if (cmx.tremoloRate != null && cmx.tremolo !== TREMOLO.OFF) {
+		var pathTrem = (state.path === "V2") ? 0.85 : 1.0;
+		var jitter = 0.92 + Math.random() * 0.16;  // 0.92 – 1.08
+		var tremRate = clamp(cmx.tremoloRate * intMap.tremRateMult * pathTrem * jitter, 0, 127);
+		var tremOut = Math.round(tremRate);
+		ccForce(CC.TREMOLO_RATE, tremOut);
+		log("tremRate CC80 = " + tremOut + " (C" + complexType + " base=" + cmx.tremoloRate + ")");
+	}
 
 	// Defensive portamento re-assertion — written every voice event, not
 	// only on complex change. Guards against SWAM cache drift, spell resets
@@ -1262,6 +1385,26 @@ function handlePanic() {
 	bang();
 }
 
+// ================================================================
+// /xk/tremLearn <val> — clean CC 80 emission for SWAM MIDI-Learn (D32).
+// Problem: when the Expression ramp is firing CC 11 at ~15 ms ticks,
+// hitting MIDI-Learn on Tremolo Min Speed latches CC 11 first. This
+// handler halts all notes, cancels any in-flight CC 11 slew, and emits
+// exactly one CC 80 = val message — nothing else on the wire — so SWAM
+// can latch it unambiguously. Usage: send /xk/tremLearn 100 (or any
+// 0-127 value) from the dashboard while SWAM's MIDI-Learn is armed.
+// ================================================================
+function handleTremLearn(val) {
+	cancelPhrase();
+	if (releaseTask) { releaseTask.cancel(); releaseTask = null; }
+	cancelCCRamp(CC.EXPRESSION);
+	var v = clamp(Math.round(val != null ? val : 100), 0, 127);
+	// Bypass hasCC so it fires even if HAS_TREMOLO_RATE is false.
+	outlet(0, "midievent", statusCC(MIDI_CH), CC.TREMOLO_RATE, v);
+	ccCache[CC.TREMOLO_RATE] = v;
+	log("tremLearn CC 80 = " + v + " (clean single-shot for MIDI-Learn)");
+}
+
 function watchdogTick() {
 	// Fires only if ALL FOUR hold (D17): active notes, no release scheduled,
 	// no pending phrase events, and silence for ≥ 3 s. Ensures long C3/C7
@@ -1311,6 +1454,7 @@ function anything() {
 	else if (addr === "/xk/spell")    { handleSpell(args[0]); }
 	else if (addr === "/xk/scramble") { handleExprScramble(args[0]); }
 	else if (addr === "/xk/panic")    { handlePanic(); }
+	else if (addr === "/xk/tremLearn") { handleTremLearn(args[0]); }
 }
 
 // ================================================================
@@ -1377,6 +1521,8 @@ function bang() {
 	ccForce(CC.ATTACK_RAMP, 64);
 	ccForce(CC.ATTACK_CONTROL, 64);
 	ccForce(CC.SORDINO, 0);
+	// D32 — no CC 80 write at reset. Tremolo starts OFF; setupComplex emits
+	// a rate only when the next complex flips tremolo ON.
 
 	// Pin Gesture Mode = Expression (D27 / portamento safety).
 	// In v3.10, KS D's Bipolar/Bowing modes re-interpret CC 11 as bow

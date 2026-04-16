@@ -52,6 +52,9 @@ Nothing in `xk_swam.js` will work until these are set. One-time operations in th
 - Attack Control = `expression` or `mix vel. expr.` (CC 11 envelope drives attack character; see feature-flag note for CC 75)
 - KS MIDI Channel = `2` (matches `KS_CH` in `max/xk_swam.js`)
 
+**Play Modes → Left Hand page** *(confirmed necessary 2026-04-16; see D34)*
+- **Bow Polyphony = `Mono`** — NOT `Poly` / `Auto`. With Poly/Auto, overlapping notes are split into a two-voice chord and portamento is never engaged, no matter how correctly Portamento Mode / Control / Time / velocity are set. The bridge's gliss phrases (C5/C6/C7) depend on low-velocity overlap → slide; in Poly/Auto they are silently reinterpreted as chords.
+
 **Sanity check**: send CC 11 → Expression responds; CC 1 → Vibrato Depth responds. If not, MIDI-Learn them.
 
 **Save as `xenakube_cello.swampreset`.**
@@ -412,6 +415,65 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 - Stale `setSectionSize` helper deleted; sune freeze still uses `CC.SUSTAIN_PEDAL` (untouched by migration).
 
 **SWAM preset additions** (see Prerequisites): pin Gesture Mode at instantiation; audit that no sample contains a stuck `KS A#` (page-2 unassigned) from the old code path.
+
+### D34 — C5 / C6 / C7 legato phrases never engage glissando *(RESOLVED 2026-04-16)*
+
+**Defect**: Performer report — C5 "wild gliss" NEVER glisses, C6 "ord. gliss" plays stepwise discrete notes with no slide, C7 sounds like held bow with no micro-drift. Portamento CCs (65 on, 5 time) were writing correctly; preset was in CC (P.MaxTime) mode per D20. The phrase generators `phraseC5` / `phraseC6` / `phraseC7` all called `legatoNote(humanPitch(...), humanVel(vel))` — full intensity-scaled velocity 50–120 — on every overlap note.
+
+**Root cause**: **Bow Polyphony was `Poly` / `Auto` in the SWAM preset.** With non-Mono polyphony, SWAM interprets a second note that overlaps the first as a **chord voice**, not as a continuation of the same monophonic line — so there is no single line for the portamento engine to slide along. Every other layer of the stack (Portamento Mode ≠ Off, Portamento Control mode, CC 65/5 writes, overlap timing, note velocity) becomes irrelevant once the overlap is split into two independent voices. This is why D20's CC-mode flip, D33's CC 11 slew, and any amount of portamento-time tuning never surfaced any slide: the gliss path was gated off upstream at the polyphony decision.
+
+Complicating matters, SWAM's musical-interpretation rule (`docs/v3.10-musicalinterpretation.pdf` p. 105) requires the overlapping second note to carry a **low Note-On velocity** for Velocity-mode portamento-control — a high-vel overlap is instead interpreted as slurred legato (smooth timbre, no pitch sweep). In Mono + CC-mode the CC P.MaxTime value drives the slide; in Mono + Velocity mode the low-vel overlap is the trigger. Either way, **Mono is the prerequisite**, and our phrase generators were shipping full intensity-scaled velocity (50–120) on every overlap — so even with polyphony corrected we would have needed a low-velocity overlap for Velocity-mode setups.
+
+**Fix**: two parts — one preset-side, one code-side.
+
+1. **Preset (owned by SWAM)**: Bow Polyphony → `Mono`. Added to Prerequisites. Without this, nothing below matters.
+2. **Code (`max/xk_swam.js`)**: new `glissNote(pitch)` helper wraps `legatoNote(pitch, GLISS_VEL)` with `GLISS_VEL = 18` (below SWAM's Velocity-mode slide threshold). The first note of each phrase still uses `legatoNote(humanPitch, humanVel(vel))` to establish the attack character; every subsequent overlapping note in `phraseC5` / `phraseC6` / `phraseC7` calls `glissNote`. Dynamics remain driven by CC 11 Expression (via `rampCC`, D33), so the low-velocity overlap is inaudible as a dynamic dip. This keeps the bridge compatible with both Velocity-mode and CC-mode setups — in CC-mode the velocity value is ignored but the overlap still needs Mono to land on a single slidable voice.
+
+**Verification**: listening test — land on C5 at any intensity; the 2–3 segment phrase should audibly slide between pitches rather than play as discrete notes or chord dyads. C6 walks should hear stepwise portamento between adjacent sieve notes. C7 drifts should hear a gentle sigh within ±3 semitones of the sustained pitch. If any phrase plays as a two-note chord, Bow Polyphony is not Mono — check the preset first, not the code.
+
+### D33 — CC 11 step-writes produce audible Expression jumps; no slew *(RESOLVED 2026-04-16)*
+
+**Defect**: `scheduleExprEnvelope` used three hard `ccForce(CC.EXPRESSION, …)` writes (attack, peak at 25 %, sustain at 70 %) and `scheduleRelease` faded to 0 in five 80 ms step-writes. Each write landed as an instantaneous CC 11 value, so SWAM's Expression climbed in audible stair-steps — most obvious on long `fff` contemplative phrases where the attack-to-peak jump was ~20–30 MIDI ticks inside 200 ms. The performer's request: ramp CC 11 between envelope targets, and let the ramp duration vary by complex and regime.
+
+**Fix**: generic per-CC slew limiter `rampCC(num, target, durMs)` in `max/xk_swam.js`:
+- Cancels any prior ramp on that CC via `cancelCCRamp(num)`.
+- Walks `ccCache[num] → target` in ~15 ms ticks, `steps = max(1, round(durMs / tickMs))`.
+- Each tick is a `Task` wrapping `ccForce(num, interpolated)`; the last tick writes the exact target. Degrades to a single `ccForce` for `durMs ≤ 0` or when start === target.
+
+`scheduleExprEnvelope` rewrites each of the three stage targets through `rampCC(CC.EXPRESSION, …)`; `scheduleRelease` replaces the 5-step fade with a single slewed ramp to 0, then `allNotesOff` scheduled `fadeMs + 20` later. Per-stage durations come from the complex's `exprEnv.{attackRampMs, sustainRampMs, releaseRampMs}`, scaled by `REGIME_EXPR_RAMP_MULT = { contemplative: 1.5, conversational: 1.0, burst: 0.4 }`.
+
+Per-complex ramp shapes (attack / sustain / release ms):
+- C1 pizz — 2 / 40 / 60 (snappy, near-zero slew)
+- C2 arco — 45 / 120 / 140
+- C3 long arco — 80 / 180 / 220
+- C4 harmonics — 30 / 90 / 120
+- C5 porta-short — 35 / 100 / 120
+- C6 porta-mid — 55 / 140 / 160
+- C7 porta-long — 100 / 200 / 260
+- C8 ponticello tremolo — 20 / 80 / 100
+
+`cancelPhrase` calls `cancelCCRamp(CC.EXPRESSION)` so a fresh voice never fights the prior phrase's in-flight slew.
+
+**Verification**: listening test — long `f`/`ff` C3 or C7 phrase in contemplative regime should sound as a smooth crescendo, not a staircase. Rapid burst-regime turns should still feel immediate (attack ramp × 0.4 ≈ 14–40 ms). Panic (`/xk/panic`) and cube pause → all ramps cancel, notes silence cleanly.
+
+### D32 — Tremolo rate is static (Slow/Fast binary only) *(RESOLVED 2026-04-16)*
+
+**Defect**: SWAM v3.10 exposes `Tremolo` via KS G# as a 2-band velocity-select (Slow / Fast) with default Off — no continuous rate control on the KS plane. Bridge wired C8 to FAST via `CC.TREMOLO = 79` (D31), but the rate itself was whatever the SWAM preset had baked into `Tremolo Min Speed`. Result: every C8 voice tremolo'd at the same speed, uncorrelated with complex, intensity, or path.
+
+**Opportunity**: SWAM PDF `v3.10-musicalinterpretation.pdf` p. 106 confirms Tremolo rate is governed by the `Tremolo Min Speed` slider when `Tremolo Mode = Hz`. SWAM KS PDF p. 102: *"All parameters controlled by the Key Switches can be controlled by MIDI Control Change, Aftertouch and NRPN messages as well."* Extends to GUI sliders — right-click → MIDI Learn binds any slider to a CC.
+
+**Fix**: treat Tremolo Min Speed as per-step automation, composed per complex (like Bow Position / Bow Pressure today):
+1. `CC.TREMOLO_RATE = 80` (new MIDI-Learn slot) + `HAS_TREMOLO_RATE` feature flag.
+2. Each `COMPLEX[n]` record carries a `tremoloRate` (0–127) baseline: C1 40, C2 45, C3 35, C4 55, C5 50, C6 50, C7 40, C8 95.
+3. `INTENSITY_MAP` adds a `tremRateMult` column (p 0.85 … fff 1.22) so fff pushes the rate ~22 % faster than p.
+4. Path V2 applies a × 0.85 scalar, matching the softer-palette mood.
+5. `setupComplex(n)` writes the baseline with `ccForce(CC.TREMOLO_RATE, cmx.tremoloRate)`; `handleVoice` rewrites per voice as `clamp(cmx.tremoloRate × tremRateMult × pathTrem, 0, 127)`. `bang()` initialises to 50.
+
+**Setup required in SWAM** (one-time, save preset): Play Modes → Right Hand → right-click `Tremolo Min Speed` → MIDI Learn → send CC 80 → save. Confirm `Tremolo Mode` (KS A) = **Hz** so the slider is the direct rate control (Sync/Sync-Acc bind to host BPM and ignore the slider for the live rate). Flip `HAS_TREMOLO_RATE = false` if the MIDI-Learn step is skipped — the per-voice write becomes a no-op and the slider stays at whatever value was last set by hand.
+
+**Verification**: listening test — C8 voices at intensity p vs fff should tremolo at audibly different rates; path V2 on C8 should slow vs V1. Spells that flip tremolo on for a non-C8 complex should land at that complex's composed rate rather than C8's FAST value.
+
+**Follow-up 2026-04-16** — the per-voice `ccForce` was shipping the same computed value (`95 × intMap.tremRateMult × pathTrem`) on every C8 voice at steady intensity / path, so SWAM had nothing to redraw and the slider *looked* frozen even though the CC was being sent. Added ±8 % per-voice jitter (`0.92 + random() * 0.16`) in `handleVoice` so the slider breathes visibly; the jitter doubles as musical microvariation in the tremolo rate (matches the Xenakian stochastic aesthetic). Added a `log("tremRate CC80 = … (Cn base=…)")` so the Max console shows the per-voice shipped value for next-time diagnostics.
 
 ### D31 — KS F# / KS G# are 2-band with default-Off; Harmonics + Tremolo must route through CC *(RESOLVED 2026-04-15)*
 

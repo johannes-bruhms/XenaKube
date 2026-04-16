@@ -179,6 +179,9 @@ These have no default binding. Pick any unused CC, MIDI-Learn each in SWAM, then
 | **Attack Ramp** | 73 | Bow page | Per-complex + regime scalar |
 | **Attack Control** | 75 | Bow page | Per-complex attack shape (distinct from Attack Ramp) |
 | **Bow Noise** | 74 | Expressivity page | Optional — scramble → noise |
+| **Harmonics selector** | 78 | Main page (right-click selector) | D31 — 4-state, replaces KS F# path |
+| **Tremolo selector** | 79 | Main page (right-click selector) | D31 — 3-state, replaces KS G# path |
+| **Tremolo Min Speed** | 80 | Play Modes → Right Hand | D32 — per-step rate (requires Tremolo Mode = Hz) |
 
 After MIDI-Learning, **save as a SWAM preset** so the mapping persists across sessions.
 
@@ -378,6 +381,7 @@ KS B   (MIDI 35) Page Modifier       hold for B+x combos (advanced)
 
 ### Pre-flight checklist (in SWAM, save as preset)
 - KS page: KS Octave = **C0**, KS Channel noted, Pizz Polyphony = **Poly**, all KS enabled
+- **Play Modes → Left Hand: Bow Polyphony = `Mono`** (D34). Non-Mono splits overlapping notes into chord voices, so gliss phrases (C5/C6/C7) never engage portamento regardless of any other setting.
 - Expressivity page: Vibrato Fade-In = 250 ms; right-click Vibrato Rate → MIDI Learn → CC 19
 - Bow page: right-click each of Bow Position / Bow Pressure / Bow Pressure Accent / Bow Speed / Attack Ramp / Attack Control → MIDI Learn → CCs 16 / 17 / 18 / 20 / 73 / 75
 - **Harmonics + Tremolo selectors (D31)**: right-click each on the main page → MIDI Learn → CC 78 (Harmonics) / CC 79 (Tremolo). Required because KS F#/G# are 2-band with no Off band — the bridge routes these through CC to reach every state cleanly.
