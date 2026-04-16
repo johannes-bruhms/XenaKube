@@ -93,7 +93,7 @@ const kf = {
   initialized: false,
 };
 
-let gyroSmoothing = 0.20;  // 0 = responsive (near-zero lag), 1 = heavy smoothing
+let gyroSmoothing = 0.50;  // 0 = responsive (near-zero lag), 1 = heavy smoothing
 let gyroOutputCount = 0;
 let lastOutputTime = Date.now();
 const GYRO_OUTPUT_HZ = 60;

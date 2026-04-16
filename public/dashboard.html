@@ -49,11 +49,20 @@
   .ovl-tl::-webkit-scrollbar { display: none; }
   .ovl-tc { top: 16px; left: 50%; transform: translateX(-50%); text-align: center; max-width: 60vw; pointer-events: none; }
   .ovl-tr { top: 16px; right: 20px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
+  /* Size tweaks: left-side body shrunk 25%, right-side controls enlarged 50% (title/connect/gizmo untouched) */
+  .ovl-tl .state-rows,
+  .ovl-tl .mode-row,
+  .ovl-tl .active-cards,
+  .ovl-tl .expression-panel { zoom: 0.75; }
+  /* Pin state-rows + Expression to sit directly on top of the piano roll */
+  .ovl-tl .expression-panel { position: fixed; left: 20px; bottom: 120px; width: 480px; z-index: 3; }
+  .ovl-tl .state-rows       { position: fixed; left: 20px; bottom: 420px; width: 480px; z-index: 3; display: flex; flex-direction: column; gap: 4px; }
+  .ovl-tr .cube-rotate-ctrl { zoom: 1.5; }
   .ovl-bottom { position: fixed; bottom: 0; left: 0; right: 0; z-index: 2; padding: 6px 12px 10px; pointer-events: none; }
   .ovl-section { display: flex; flex-direction: column; gap: 6px; }
 
   h1.title {
-    font-size: 50px;
+    font-size: 60px;
     font-weight: 700;
     color: var(--accent);
     letter-spacing: 3px;
@@ -119,7 +128,7 @@
     font-size: 22px;
     font-weight: 700;
     letter-spacing: 1.5px;
-    color: var(--dim);
+    color: var(--accent2);
     text-transform: uppercase;
     margin-bottom: 12px;
   }
@@ -272,6 +281,8 @@
     background: rgba(0, 255, 136, 0.10);
     box-shadow: 0 0 12px var(--active-glow);
     padding: 8px 12px;
+    width: 160px;
+    align-self: flex-start;
   }
   .vertex-card.active .intensity-bar { display: none; }
   .vertex-label {
@@ -540,9 +551,9 @@
   /* Mode badges (left overlay) */
   .mode-row {
     display: flex;
+    flex-direction: column;
     gap: 6px;
     align-items: flex-start;
-    flex-wrap: wrap;
   }
   .mode-badge {
     padding: 7px 16px;
@@ -767,14 +778,11 @@
     <div class="conn-row">
       <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
       <button id="connectBtn">Connect Cube</button>
-      <span id="cube-status"></span>
-      <span class="ws-status-inline">
-        <span class="ws-dot" id="ws-dot"></span><span id="ws-status">disconnected</span>
-      </span>
     </div>
   </div>
 
   <div class="state-rows">
+    <div class="panel-title">State</div>
     <div class="state-row">
       <span class="state-label">active voice</span>
       <span class="state-val accent" id="s-active-vertex">K1</span>
@@ -782,6 +790,18 @@
     <div class="state-row">
       <span class="state-label">S4 element</span>
       <span class="state-val accent" id="s-k-group">0</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">path</span>
+      <span class="state-val" id="s-path">V1</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">step</span>
+      <span class="state-val" id="s-step">0</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">snap</span>
+      <span class="state-val" id="s-snap">--</span>
     </div>
     <div class="state-row">
       <span class="state-label">complex phase</span>
@@ -809,7 +829,6 @@
   <div class="mode-row">
     <span class="mode-badge palette" id="mode-palette">default</span>
     <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
-    <span class="mode-badge frozen" id="mode-frozen" style="display:none">FROZEN</span>
     <span class="mode-badge regime-contemplative" id="mode-regime">CONTEMPLATIVE</span>
     <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
   </div>
@@ -827,8 +846,8 @@
       <button id="zeroBtn">Zero Gyro</button>
       <div class="smooth-row">
         <label>smooth</label>
-        <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.20">
-        <span id="gyroSmoothVal" style="color:var(--accent2);min-width:28px">0.20</span>
+        <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.50">
+        <span id="gyroSmoothVal" style="color:var(--accent2);min-width:28px">0.50</span>
       </div>
     </div>
     <div class="expr-grid">
@@ -868,7 +887,7 @@
 <!-- Top-right: rotate controls + gizmo slot + status -->
 <div class="ovl ovl-tr">
   <div class="cube-rotate-ctrl" id="rotate-ctrl">
-    <span class="cr-label" style="font-size:9px;color:var(--dim);text-transform:uppercase;letter-spacing:1px;margin-right:2px">rotate</span>
+    <span class="cr-label" style="font-size:9px;color:var(--accent2);font-weight:700;text-transform:uppercase;letter-spacing:1.5px;margin-right:2px">rotate</span>
     <button class="cr-btn active" data-target="camera">cam</button>
     <button class="cr-btn" data-target="live">live</button>
     <button class="cr-btn" data-target="ghost">ghost</button>
@@ -876,15 +895,6 @@
   </div>
   <!-- gizmo canvas is injected here by JS at top:56px right:20px -->
   <div style="height:210px"></div>
-  <div class="header-status">
-    <span>step <span class="val" id="h-step">0</span></span>
-    <span>S4 <span class="val" id="h-path">--</span></span>
-  </div>
-  <div id="snap-overlay" style="font-size:10px;font-family:monospace;text-align:right">
-    <span id="snap-label" style="color:var(--accent2);opacity:0.8">snap: --</span>
-    <span id="snap-dev-label" style="color:var(--dim);margin-left:8px">dev: --</span>
-  </div>
-  <div id="snap-bar" style="height:2px;background:var(--accent2);opacity:0.6;transition:width 0.1s;width:0%"></div>
 </div>
 
 <!-- Bottom: sieve strip, full width -->
@@ -1420,15 +1430,9 @@ function updateGhostLabels(complexTypes) {
 }
 
 function updateSnapOverlay(snapElement, deviation) {
-  const snapLabel = document.getElementById('snap-label');
-  const devLabel = document.getElementById('snap-dev-label');
-  const snapBar = document.getElementById('snap-bar');
+  const snapVal = document.getElementById('s-snap');
   if (snapElement != null) {
-    snapLabel.textContent = `snap: S4 #${snapElement}`;
-    const devPct = (deviation * 100).toFixed(0);
-    devLabel.textContent = `dev: ${devPct}%`;
-    const lockPct = ((1 - deviation) * 100).toFixed(0);
-    snapBar.style.width = lockPct + '%';
+    if (snapVal) snapVal.textContent = `S4 #${snapElement}`;
     // Ghost opacity: more opaque when locked, faint when drifting
     const ghostOpacity = 0.15 + 0.55 * (1 - deviation);
     ghostEdgeMat.opacity = ghostOpacity;
@@ -1526,8 +1530,8 @@ function updateState(state, move) {
   const activeIdx = state.activeVertex ?? 0;
   currentActiveVertex = activeIdx;
 
-  document.getElementById('h-step').textContent = state.step;
-  document.getElementById('h-path').textContent = `${state.path} #${state.kGroup}`;
+  document.getElementById('s-step').textContent = state.step;
+  document.getElementById('s-path').textContent = state.path;
 
   document.getElementById('s-k-group').textContent = state.kGroup;
   document.getElementById('s-tetra').textContent = state.tetraIndex === 0 ? 'even' : 'odd';
@@ -1680,8 +1684,6 @@ function updateV2State(state) {
   if (state.performanceMode) {
     const pm = state.performanceMode;
     document.getElementById('mode-palette').textContent = pm.palette;
-    const frozenBadge = document.getElementById('mode-frozen');
-    frozenBadge.style.display = pm.frozen ? 'inline' : 'none';
   }
 
   // Regime + turn rate
@@ -1799,8 +1801,10 @@ function computeLocalExpression(gyro) {
 // WebSocket — receives state broadcasts from relay
 // ============================================================
 
-const dot = document.getElementById('ws-dot');
-const wsStatusEl = document.getElementById('ws-status');
+// ws status indicators were removed from the UI; stub out the refs so the
+// existing onopen/onclose handlers don't need to branch.
+const dot = { classList: { add() {}, remove() {} } };
+const wsStatusEl = { set textContent(_v) {} };
 let ws;
 let gyroThrottleFrame = null;
 let pendingGyroState = null;
@@ -1917,7 +1921,8 @@ gyroSmoothSlider.addEventListener('input', () => {
 // Cube BLE Connection (Web Bluetooth)
 // ============================================================
 
-const cubeStatus = document.getElementById('cube-status');
+// #cube-status span was removed; stub so existing assignments don't crash.
+const cubeStatus = { set textContent(_v) {}, set className(_v) {} };
 const connectBtn = document.getElementById('connectBtn');
 const macInput = document.getElementById('macAddress');
 
@@ -1947,6 +1952,7 @@ connectBtn.addEventListener('click', async () => {
     cubeStatus.textContent = 'connected';
     cubeStatus.className = 'ok';
     connectBtn.textContent = 'Connected';
+    connectBtn.classList.add('connected');
     connectBtn.disabled = true;
 
     cube.events$.subscribe((event) => {
@@ -1958,6 +1964,7 @@ connectBtn.addEventListener('click', async () => {
         cubeStatus.textContent = 'disconnected';
         cubeStatus.className = 'err';
         connectBtn.textContent = 'Connect Cube';
+        connectBtn.classList.remove('connected');
         connectBtn.disabled = false;
       }
     });

@@ -81,7 +81,7 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 
 **relay.js** — BLE-to-OSC bridge. Instantiates `XenaKubeEngine`, serves `public/dashboard.html` on `:3000`, receives cube events via WS from the browser. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
 
-- **Gyro upsampling**: BLE ~10 Hz → 60 Hz via velocity-aware quaternion Kalman filter (smoothing slider 0–1, default 0.2). 60 Hz loop uses `process.hrtime.bigint()` spin timer — `setInterval` drifts to ~40 Hz on Windows.
+- **Gyro upsampling**: BLE ~10 Hz → 60 Hz via velocity-aware quaternion Kalman filter (smoothing slider 0–1, default 0.5). 60 Hz loop uses `process.hrtime.bigint()` spin timer — `setInterval` drifts to ~40 Hz on Windows.
 - **Control messages** (WS → relay): `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`, `set_snap_calibration` (planned, D25).
 - **Lifecycle**: auto-shutdown 5 s after last client disconnects.
 
@@ -121,9 +121,10 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 `dashboard.html` at `http://localhost:3000`. **Full-viewport HUD**: `#cube-canvas` fills the window (100vw × 100vh, z-index 0); all UI floats as transparent overlays on top of it. Three.js 3D cube with per-vertex K#/D/G/U labels, ghost cube showing S4 snap target (opacity = deviation), rotation gizmo (fixed 200×200 at top-right, under the cam/live/ghost toggles).
 
 Overlay layout:
-- **Top-left column** (`.ovl-tl`, 480 px): title + MAC/connect row → state rows (active voice, S4, phase, orbit, scramble, permutation) → mode badges (palette, voice, frozen, regime, turn rate) → active K/C card → Expression panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble readouts).
+- **Top-left column** (`.ovl-tl`, 480 px): XENAKUBE title + MAC/connect row (single "Connected" indicator — the button itself turns green via `.connected` class) → mode badges (palette, voice, frozen, regime, turn rate) → active K/C cards (160 px wide, left-aligned). Section titles (State/Expression) are cyan (`--accent2`).
+- **Fixed bottom-left stack** (above the piano roll): **State** panel (active voice, S4 element, path, step, snap, complex phase, orbit, scramble, permutation) then **Expression** panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble readouts). Both scaled `zoom: 0.75`.
 - **Top-center**: spell buffer + spell notification.
-- **Top-right**: rotate cam/live/ghost toggles → rotation gizmo → step / S4 element / snap dev.
+- **Top-right**: rotate cam/live/ghost toggles (scaled `zoom: 1.5`, cyan "Rotate" label) → rotation gizmo (200×200, unscaled). Step / S4 / snap readouts moved into the left-side State panel; redundant dev% + snap-bar removed (Deviation already in Expression).
 - **Bottom**: full-width sieve piano-roll (white/black keys, octave dividers, C2–C6 labels).
 
 Only the **active** K/C cards render in the HUD (`.vertex-card:not(.active), .complex-card:not(.active) { display:none }`); JS still populates all 8 internally. Legacy elements (full K1–K8 grid, C1–C8 grid, move-log list, voice-sequence selects/reset button) remain in DOM for JS compatibility but are hidden via `.ovl-legacy { display:none }`. WS client to relay.
