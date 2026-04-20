@@ -809,7 +809,25 @@
     0%, 100% { opacity: 0.3; }
     50% { opacity: 1; }
   }
+
+  /* Phase E tier 1 — notation strip (top-center, below spell row).
+   * VexFlow renders an SVG inside #notation; we size the wrapper, not the
+   * SVG itself (VexFlow sets its own width/height per draw). */
+  .notation-strip {
+    margin-top: 10px;
+    background: rgba(10, 10, 15, 0.55);
+    border: 1px solid rgba(0, 204, 255, 0.18);
+    border-radius: 6px;
+    padding: 6px 10px 2px;
+    min-height: 90px;
+    pointer-events: none;
+    backdrop-filter: blur(2px);
+  }
+  .notation-strip svg { display: block; margin: 0 auto; }
+  .notation-strip svg * { stroke: #c8c8d8; fill: #c8c8d8; }
+  .notation-strip.empty { opacity: 0; }
 </style>
+<script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.3/build/cjs/vexflow.js"></script>
 </head>
 <body>
 
@@ -938,13 +956,14 @@
   </div>
 </div>
 
-<!-- Top-center: spell buffer + notification -->
+<!-- Top-center: spell buffer + notification + tier-1 notation -->
 <div class="ovl ovl-tc">
   <div class="spell-row">
     <div class="spell-buffer" id="spell-buffer"></div>
     <div class="spell-notification" id="spell-notification"></div>
     <div class="spell-partials" id="spell-partials" style="display:none"></div>
   </div>
+  <div class="notation-strip empty" id="notation-strip"></div>
 </div>
 
 <!-- Top-right: rotate controls + gizmo slot + status -->
@@ -1036,22 +1055,23 @@ const GHOST_VERT_COLORS_DIM = [
 
 const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.75, 'fff': 0.92 };
 
-// Phase A1 — mirror of FACE_SIGNATURES (envelope/articulation/motion only).
-// Source of truth lives in src/face-gesture.ts; this is for HUD display.
-// Half-turns (L2/R2/...) and non-face moves return null.
+// Phase A1 — mirror of FACE_SIGNATURES (envelope/articulation/motion +
+// registerBias for notation). Source of truth lives in src/face-gesture.ts;
+// this is for HUD + tier-1 notation. Half-turns (L2/R2/...) and non-face
+// moves return null.
 const FACE_SIG = {
-  'U':  { envelope: 'pluck', articulation: 'attack',    motion: 'up' },
-  "U'": { envelope: 'fade',  articulation: 'release',   motion: 'down' },
-  'D':  { envelope: 'stab',  articulation: 'attack',    motion: 'down' },
-  "D'": { envelope: 'drone', articulation: 'sustained', motion: 'static' },
-  'L':  { envelope: 'swell', articulation: 'sustained', motion: 'up' },
-  "L'": { envelope: 'fade',  articulation: 'release',   motion: 'down' },
-  'R':  { envelope: 'stab',  articulation: 'attack',    motion: 'static' },
-  "R'": { envelope: 'burst', articulation: 'iterative', motion: 'oscillate' },
-  'F':  { envelope: 'swell', articulation: 'sustained', motion: 'up' },
-  "F'": { envelope: 'swell', articulation: 'sustained', motion: 'down' },
-  'B':  { envelope: 'pluck', articulation: 'attack',    motion: 'static' },
-  "B'": { envelope: 'drone', articulation: 'sustained', motion: 'oscillate' },
+  'U':  { envelope: 'pluck', articulation: 'attack',    motion: 'up',        registerBias:  0.8 },
+  "U'": { envelope: 'fade',  articulation: 'release',   motion: 'down',      registerBias:  0.8 },
+  'D':  { envelope: 'stab',  articulation: 'attack',    motion: 'down',      registerBias: -0.8 },
+  "D'": { envelope: 'drone', articulation: 'sustained', motion: 'static',    registerBias: -0.8 },
+  'L':  { envelope: 'swell', articulation: 'sustained', motion: 'up',        registerBias:  0.0 },
+  "L'": { envelope: 'fade',  articulation: 'release',   motion: 'down',      registerBias:  0.0 },
+  'R':  { envelope: 'stab',  articulation: 'attack',    motion: 'static',    registerBias:  0.0 },
+  "R'": { envelope: 'burst', articulation: 'iterative', motion: 'oscillate', registerBias:  0.0 },
+  'F':  { envelope: 'swell', articulation: 'sustained', motion: 'up',        registerBias:  0.3 },
+  "F'": { envelope: 'swell', articulation: 'sustained', motion: 'down',      registerBias:  0.3 },
+  'B':  { envelope: 'pluck', articulation: 'attack',    motion: 'static',    registerBias: -0.3 },
+  "B'": { envelope: 'drone', articulation: 'sustained', motion: 'oscillate', registerBias: -0.3 },
 };
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
@@ -2030,6 +2050,12 @@ function updateState(state, move) {
     if (lbl) lbl.className = isActive ? 'active' : '';
   }
 
+  // Stash for the tier-1 notation renderer (voice events arrive separately
+  // from state and need path + sieve context). Copy rather than reference
+  // in case upstream mutates.
+  if (Array.isArray(state.sieve)) latestSieve = state.sieve.slice();
+  if (state.path) latestPath = state.path;
+
   // currentGyro / hasGyro are driven solely by the gyro_tick handler, which
   // ships the SLERP-interpolated visual quat. Writing them here too would
   // superimpose a fresh-but-choppy 10 Hz stream on top of the smooth 60 Hz
@@ -2221,6 +2247,143 @@ function handleSolveEvent() {
   setSolvedBadge(true, true);
 }
 
+// ============================================================
+// Phase E tier 1 — archetypal notation
+//
+// Each `voice` WS event maps to one StaveNote (per active voice in the
+// payload — 1 in sequential, 8 in polyphonic → rendered as a chord).
+// Nothing about this reflects what SWAM actually plays inside its
+// phraseCX generator; it's the *archetype* of the gesture the engine
+// dispatched. Tier-3 will replace this with a deterministic echo of
+// the TS-side note-list, at which point the mapper collapses.
+// ============================================================
+
+let latestSieve = [];
+let latestPath = 'V1';
+const NOTATION_MAX = 8;
+const voiceBuffer = [];       // rolling buffer of { voice, move } entries
+let notationResized = false;  // lazy-init the VexFlow renderer
+
+const NOTE_NAMES_LOWER = ['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
+
+/** Duration in seconds → VexFlow duration code. Tier-1 quantises to four
+ *  buckets; dotted / tied variants are deferred until tier 2. */
+function quantizeDuration(seconds) {
+  if (!Number.isFinite(seconds) || seconds <= 0) return 'q';
+  if (seconds < 1.2) return 'q';
+  if (seconds < 3.5) return 'h';
+  if (seconds < 9)   return 'w';
+  return 'w'; // very long — tier-1 caps at whole. Tier-2 will tie.
+}
+
+/** Face envelope → VexFlow articulation code.
+ *  Codes: a. staccato / a> accent / a^ marcato / ao staccatissimo /
+ *         a- tenuto / a@a fermata above. */
+function articulationForEnvelope(env) {
+  switch (env) {
+    case 'pluck': return 'a.';
+    case 'stab':  return 'a>';
+    case 'burst': return 'ao';
+    case 'drone': return 'a@a';
+    case 'swell': return 'a-';
+    case 'fade':  return 'a-';
+    default:      return null;
+  }
+}
+
+/** Pick a pitch for a VoiceEvent using the face's registerBias + sieve.
+ *  Strategy: pitchClass from (vertexIdx * 7) % 12 (perfect-5th spiral —
+ *  matches engine's `pitchClassMod`). Register: registerBias × 12
+ *  (halved on V2), centred on C3 (MIDI 48). Falls back cleanly when
+ *  face is null (non-face moves skip registerBias entirely).
+ *  Returns a VexFlow key string ("c/3", "f#/4", …). */
+function pickNotationPitch(vertexIdx, face, path) {
+  const pc = ((vertexIdx % 8) * 7) % 12;
+  const sig = face ? FACE_SIG[face] : null;
+  const spread = path === 'V2' ? 6 : 12;
+  const regShift = sig ? Math.round(sig.registerBias * spread) : 0;
+  // C3 (MIDI 48) as bass-clef centre keeps most notes on-staff.
+  const midi = 48 + pc + regShift;
+  const clamped = Math.max(28, Math.min(72, midi)); // stay inside a 4-octave window
+  const pn = NOTE_NAMES_LOWER[clamped % 12];
+  const octave = Math.floor(clamped / 12) - 1;
+  return `${pn}/${octave}`;
+}
+
+/** Build a VexFlow StaveNote for a single WS voice payload. */
+function voiceToStaveNote(VF, payload) {
+  const { active = [], face = null } = payload || {};
+  if (!active.length) return null;
+
+  // Polyphonic: all active voices stacked as a chord. Sequential: one key.
+  const keys = active.map(ev => pickNotationPitch(ev.vertexIndex, face, latestPath));
+  // Duration + intensity from the first active voice — they're all the same
+  // slot in polyphonic mode (voices share the turn's duration/intensity).
+  const first = active[0];
+  const duration = quantizeDuration(first?.params?.duration);
+  const intensity = first?.params?.intensity || 'mf';
+
+  const note = new VF.StaveNote({ keys, duration, clef: 'bass' });
+
+  // Articulation from face envelope. Non-face moves skip the glyph.
+  const artCode = face ? articulationForEnvelope(FACE_SIG[face]?.envelope) : null;
+  if (artCode) {
+    const position = VF.Modifier.Position.ABOVE;
+    for (let k = 0; k < keys.length; k++) {
+      note.addModifier(new VF.Articulation(artCode).setPosition(position), k);
+    }
+  }
+
+  // Dynamic marking as a text annotation below the note.
+  const dyn = new VF.Annotation(intensity)
+    .setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM)
+    .setFont('Times', 11, 'italic');
+  note.addModifier(dyn, 0);
+
+  return note;
+}
+
+/** Rebuild the SVG from the current buffer. */
+function renderNotation() {
+  const host = document.getElementById('notation-strip');
+  if (!host) return;
+
+  // Hide the strip until we have at least one event.
+  host.classList.toggle('empty', voiceBuffer.length === 0);
+  host.innerHTML = '';
+  if (voiceBuffer.length === 0) return;
+
+  // Vex UMD bundle exposes a global — support both flat + .Flow shapes.
+  const VF = window.Vex?.Flow || window.VexFlow;
+  if (!VF) return;
+
+  const width = Math.max(360, Math.min(720, voiceBuffer.length * 70 + 80));
+  const height = 110;
+
+  const renderer = new VF.Renderer(host, VF.Renderer.Backends.SVG);
+  renderer.resize(width, height);
+  const ctx = renderer.getContext();
+
+  const stave = new VF.Stave(10, 10, width - 20)
+    .addClef('bass');
+  stave.setContext(ctx).draw();
+
+  const notes = voiceBuffer
+    .map(entry => voiceToStaveNote(VF, entry))
+    .filter(n => n !== null);
+  if (notes.length === 0) return;
+
+  // One voice, 4/4 nominal — tier-1 doesn't attempt bar-line accuracy,
+  // so we use a soft-fitted Formatter.FormatAndDraw which ignores meter.
+  VF.Formatter.FormatAndDraw(ctx, stave, notes);
+}
+
+function handleVoiceEvent(payload) {
+  voiceBuffer.push(payload);
+  while (voiceBuffer.length > NOTATION_MAX) voiceBuffer.shift();
+  renderNotation();
+}
+
 // Tilt and spin are derived from gyro quaternion client-side
 // (faster than waiting for relay to compute + broadcast at 60Hz)
 let prevGyroQuat = [0, 0, 0, 1];
@@ -2338,6 +2501,8 @@ function wsConnect() {
         spellBook = msg.data;
       } else if (msg.type === 'solve') {
         handleSolveEvent();
+      } else if (msg.type === 'voice') {
+        handleVoiceEvent(msg.data);
       }
     } catch (e) {
       console.error('Parse error:', e);

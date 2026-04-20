@@ -2,6 +2,11 @@
 
 All notable changes to XenaKube are documented here.
 
+## 2026-04-20
+
+### Added
+- **Phase E tier 1 — archetypal notation strip on the dashboard (VexFlow).** Each `voice` WS event renders one StaveNote in a rolling 8-note buffer above the spell buffer. VexFlow 4.2.3 pulled in via CDN; notation lives inside `.ovl-tc` as a new `.notation-strip` host styled with a soft cyan border + blurred dark backing. Pitch derivation: `(vertexIdx * 7) mod 12` perfect-5th spiral (mirrors `pitchClassMod` in `src/face-gesture.ts`) centred on C3 (MIDI 48) + `face.registerBias × 12` (halved on V2), clamped to a 4-octave window so notes stay on-staff in bass clef. Duration quantised to q / h / w from `voice.params.duration` (tier-1 ignores dotted + tied). Polyphonic mode stacks the 8 voices as a chord (one key per vertex). Articulations from `face.envelope`: pluck → staccato, stab → accent, burst → staccatissimo, drone → fermata, swell/fade → tenuto. Intensity (`p`/`mf`/`fff`/…) renders as an italic annotation below each note. `latestSieve` + `latestPath` are stashed from `updateState` so the voice handler has path context (sieve will drive pitch when tier 2 lands — tier 1 uses `pitchClassMod` only). Tier-2 literal-echo and tier-3 deterministic-rebuild remain as roadmap entries in `docs/todo.md` Phase E. The tier-1 notation does NOT reflect what SWAM actually plays inside `phraseCX` — it shows the archetype of the gesture the engine dispatched. Intended audience is observers, not the performer.
+
 ## 2026-04-19
 
 ### Changed

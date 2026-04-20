@@ -80,13 +80,16 @@ Current mapping (see CLAUDE.md "Conceptual mapping") is not Xenakis-faithful: co
 
 Three tiers of fidelity, implemented in order. Tier 1 is cheap and standalone; tier 3 is the long road that also unlocks Phase B.
 
-**Tier 1 — Archetypal notation** *(start here)*. Derive a StaveNote from each `voice` WS event using only what the engine already knows: pitch from sieve + `pitchClassMod(vertexIdx)` + `face.registerBias`, duration from `voice.duration` quantized to the nearest standard value (q / e / h / w), dynamic from `voice.intensity`, articulation glyph from `face.envelope` (pluck → staccato, stab → accent, drone → fermata, etc.). No attempt to match what SWAM's internal phraseCX generator actually plays — just the archetype of the gesture. Rolling buffer of last N=8 notes, re-render on each voice event.
+**Tier 1 — Archetypal notation** *(landed 2026-04-20)*. Derive a StaveNote from each `voice` WS event using only what the engine already knows: pitch from `pitchClassMod(vertexIdx)` + `face.registerBias`, duration from `voice.duration` quantized to the nearest standard value (q / h / w), dynamic from `voice.intensity`, articulation glyph from `face.envelope` (pluck → staccato, stab → accent, drone → fermata, etc.). No attempt to match what SWAM's internal phraseCX generator actually plays — just the archetype of the gesture. Rolling buffer of last N=8 notes, re-render on each voice event.
 
-- [ ] Add VexFlow via CDN to `public/dashboard.html`.
-- [ ] Wire WS `voice` message handler (currently unhandled on the dashboard side).
-- [ ] Build `voiceToStaveNote(voice)` — pure function, single-octave bass clef, one fallback key signature.
-- [ ] Notation strip overlay — top-center, below the spell-buffer HUD. Transparent background, no title, ≤80 px tall.
-- [ ] Render on voice event; fade oldest note at buffer edge.
+- [x] VexFlow 4.2.3 via CDN added to `public/dashboard.html`.
+- [x] WS `voice` message handler wired in `ws.onmessage`.
+- [x] `voiceToStaveNote(voice)` + `pickNotationPitch` pure helpers; one bass-clef staff, no key signature (sieve pitch classes aren't diatonic).
+- [x] `.notation-strip` overlay — top-center inside `.ovl-tc`, below the spell row. Transparent background, `min-height: 90px`, hidden until first voice arrives.
+- [x] Render on voice event; rolling buffer caps at 8 — oldest simply drops when a 9th arrives (no fade yet).
+- [ ] Polish: fade-in on new note + fade-out on dropped note (currently hard swap).
+- [ ] Polish: accidental handling feels jittery with `pitchClassMod` — consider quantising to nearest sieve pitch once tier 2 lands, or leave as the tier-3 rebuild will replace this.
+- [ ] Visibility gate: hide the strip below some viewport width / in Performance mode (Phase C).
 
 **Tier 2 — Literal echo** *(deferred)*. SWAM bridge echoes every `noteon` / `noteoff` / CC burst back to the dashboard (new WS message `midi_echo`). Dashboard transcribes the actual MIDI stream — each rebow in `phraseCX` renders as a separate note. Answers "what did I actually just play?" rather than "what kind of gesture was that?". Cheap on the Max side (one-line echo), moderate on the dashboard (MIDI-to-staff transcription is trickier than tier 1 because timing is real-time rather than nominal).
 

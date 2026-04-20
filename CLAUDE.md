@@ -128,7 +128,7 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 Overlay regions:
 - **Top-left column** (`.ovl-tl`): title + MAC/connect (button turns green via `.connected`), mode badges, active K/C cards.
 - **Bottom-left column** (`.ovl-bl`, sibling of `.ovl-tl`, anchored `bottom: 110px`): **State** panel (face, active voice, S4 element, path, step, snap, complex phase, orbit, scramble, permutation) then **Expression** panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble). `zoom: 0.5` applies per-child, not on the wrapper — keeps the bottom anchor zoom-invariant so the stack never overlaps the sieve strip or the K/C cards regardless of browser zoom.
-- **Top-center**: spell buffer + spell notification.
+- **Top-center**: spell buffer + spell notification + Phase E tier-1 notation strip (VexFlow 4.2.3, CDN) — rolling 8-note bass-clef staff re-rendered on every `voice` WS event. Pitch mirrors `pitchClassMod` from `src/face-gesture.ts` + face registerBias; articulation from face envelope; dynamics from voice intensity. Archetypal only — does not reflect what SWAM plays inside `phraseCX`; tier 3 rebuild is gated on the Max→TS note-generation migration in `docs/todo.md` Phase E.
 - **Top-right**: cam/live/ghost rotate toggles, then rotation gizmo.
 - **Bottom**: full-width sieve piano-roll (C2–C6).
 
