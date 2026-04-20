@@ -28,18 +28,19 @@ Following Xenakis' method, two S4 group cubes operate simultaneously:
 
 ### Spell System
 
-The spell book is the 6 fundamentals of the **CFOP** solving method (Cross, F2L, OLL, PLL). All are orientation-independent (each canonical algorithm × 24 whole-cube rotations), so the same finger pattern is recognized on any face pair.
+The spell book is the 6 **CFOP** fundamentals (Cross, F2L, OLL, PLL) plus Niklas (archetypal 3-cycle commutator). All are orientation-independent (each canonical algorithm × 24 whole-cube rotations), so the same finger pattern is recognized on any face pair.
 
-| Spell | Algorithm | CFOP role | Effect |
-|-------|-----------|-----------|--------|
-| sexy-move | R U R' U' | F2L trigger | Toggle sequential/polyphonic; SWAM bow sweep |
-| oll-cross | F R U R' U' F' | 2-look OLL edges | Variant → drone; SWAM harmonic ping |
-| sune | R U R' U R U2 R' | 2-look OLL corners | Toggle freeze (sustain + ignore turns) |
-| anti-sune | R U2 R' U' R U' R' | 2-look OLL inverse corners | Palette → V1 (bright) |
-| u-perm | R U' R U R U R U' R' U' R2 | 2-look PLL edges | Variant → burst; SWAM staccato burst |
+| Spell | Algorithm | Role | Effect |
+|-------|-----------|------|--------|
+| sexy-move | R U R' U' | CFOP F2L trigger | Toggle sequential/polyphonic |
+| oll-cross | F R U R' U' F' | 2-look OLL edges | Variant → drone |
+| sune | R U R' U R U2 R' | 2-look OLL corners | Harmonic ping → OCT_5TH (perfect 12th) |
+| anti-sune | R U2 R' U' R U' R' | 2-look OLL inverse corners | Palette → V1 |
+| niklas | R U' L' U R' U' L | Commutator (corner 3-cycle) | Toggle path V1 ↔ V2 + CTRL harmonic ping |
+| u-perm | R U' R U R U R U' R' U' R2 | 2-look PLL edges | Variant → burst |
 | t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 2-look PLL corners+edges | Reset palette + variant |
 
-Spells layer — short algorithms fire immediately even if they're the prefix of a longer one in progress.
+Spells layer — short algorithms fire immediately even if they're the prefix of a longer one in progress. The spell book is being extended toward a phrase-library model (see `docs/todo.md` Phase B).
 
 ### Phrase Generation (Max/SWAM)
 
@@ -97,7 +98,7 @@ sc/               SuperCollider synthesis (xenakube.scd)
 max/              Max/MSP SWAM Cello bridge (xk_swam.js for v8 object)
 public/           Browser dashboard (live visualizer + cube connect)
 relay.js          BLE-to-OSC bridge with XenaKubeEngine
-test/             Vitest test suite (67 tests)
+test/             Vitest test suite (68 tests)
 docs/             Xenakis primary source, research notes, roadmap
 ```
 

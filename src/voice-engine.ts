@@ -4,6 +4,7 @@
 // just decides which vertices/complexes are active.
 
 import type { VertexParams, VertexSet, ComplexType } from './types.js';
+import type { FaceMove } from './face-gesture.js';
 
 export type VoiceMode = 'sequential' | 'polyphonic';
 
@@ -16,13 +17,17 @@ export interface VoiceEvent {
 export interface VoiceOutput {
   mode: VoiceMode;
   active: VoiceEvent[];   // 1 event in sequential, 8 in polyphonic
+  /** Face identity of the turn that produced this output, or null on
+   *  non-face triggers (diagram advance, gyro-only path). Downstream
+   *  consumers (Max bridge, SC) dispatch face-gesture shaping from this. */
+  face: FaceMove | null;
 }
 
 export class VoiceEngine {
   mode: VoiceMode = 'sequential';
 
   /** Compute what should sound after a turn */
-  emit(vertices: VertexSet, activeIdx: number, complexes: ComplexType[]): VoiceOutput {
+  emit(vertices: VertexSet, activeIdx: number, complexes: ComplexType[], face: FaceMove | null = null): VoiceOutput {
     if (this.mode === 'sequential') {
       return {
         mode: 'sequential',
@@ -31,6 +36,7 @@ export class VoiceEngine {
           params: vertices[activeIdx],
           complex: complexes[activeIdx],
         }],
+        face,
       };
     } else {
       return {
@@ -40,6 +46,7 @@ export class VoiceEngine {
           params,
           complex: complexes[i],
         })),
+        face,
       };
     }
   }

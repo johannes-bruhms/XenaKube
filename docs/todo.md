@@ -1,138 +1,120 @@
 # XenaKube — Roadmap
 
-## Parallel track: SWAM Cello bridge refactor
-
-Full diagnoses + phased plan in **`docs/revision_roadmap.md`**. Parameter/CC/KS authority: **`docs/swam_cello_reference.md`**.
-
-- **Phases 0–5 — DONE**. Upstream voice firehose fix, panic/watchdog (D16/D17), SWAM KS model with stateful diffing (D1/D2/D12), `COMPLEX` config table (D5/D7), expression envelopes + tilt→bow-position (D4/D8/D15/D18), vibrato on CC 19 with EMA (D3/D6), spell restore via `setupComplex` (D11/D13/D14), Niklas detection (D19 detection only). **Next listening test required before Phases 6+.**
-- **Phase 6 (partial, 2026-04-14)** — Sordino on freeze (CC 68, MIDI-Learn) and Sul Tasto/Pont on scramble thresholds (Bow Position bias via 2 s hysteresis) landed. Still pending: Alt Fingering on tetra, Bow Lift / Bow Start on spell color, Pizz Polyphony init.
-- **Phase 7 (done, 2026-04-14)** — V2 fold window already widened per complex (`max(24, reg.lo − 12)`); CC 75 Attack Control spikes declared obsolete in v3.11 (preset-side mode selector).
-- **Phase 8 (done, 2026-04-14)** — `noteOff(pitch, vel?)` signature extended; `state.noteOffVel` driven by `handleRate` (25 → 120 across turns/sec).
-- **Niklas audio effect** — pick between C-cube 3-cycle / canon echo / commutator latch after first listen.
+Implementation status is tracked here. Design rationale for the current direction lives in `docs/research_notes.md` → "Performer's Frame — Agency vs Chance." Completed SWAM-bridge diagnoses live in `docs/revision_roadmap.md` (D1–D39, refactor complete).
 
 ---
 
-## Three Performance Regimes
+## Current architectural direction: Temporal Identity framework
 
-The core design goal: the instrument should sound and behave differently depending on how fast the performer turns the cube. See `research_notes.md` "Performance Speed Regimes" for background.
+Pivot accepted (2026-04-18). The next block of engine-level work addresses the performer's forward-model gap — the cognitive impossibility of simulating S4 × α/β/γ × tetra × path × turn-rate in real time. Four phases, in order. Xenakis-faithful technique remapping (A vs B) stays deferred until Phase A1 is playing and we can hear which mapping makes the face-signatures most distinguishable.
 
-| Regime | Turn rate | Musical character |
-|--------|-----------|-------------------|
-| **Contemplative** | < 0.3 Hz (~1 turn / 3–10s) | Each event distinct, full voice playback, structure audible |
-| **Conversational** | 0.3–2 Hz (~1–2 turns/sec) | Events overlap, spells are deliberate gestures, texture builds |
-| **Burst** | > 2 Hz (~3+ turns/sec, speedsolve) | Structure collapses into texture, aggregate parameters dominate |
+### Phase A1 — Face-identity gesture framework *(framework landed 2026-04-18; sculpt pass pending)*
 
----
+**Goal**: each of 12 face-moves (L / L' / R / R' / F / F' / B / B' / U / U' / D / D') owns a distinct gesture *type* (short motive, envelope, articulation), fixed to the GAN cube's color-fixed face identity (orientation-invariant in 3D). K_i / C_i permutation modulates the *content* inside that shape (pitch class, register, intensity, timbre modifier). Forward model: performer predicts the *kind* of sound; *detail* still evolves with state.
 
-### Phase 1: Turn-Rate Tracker — DONE
+**Where**: `src/engine.ts`, `src/face-gesture.ts`, OSC emission surface, `max/xk_swam.js` phrase dispatch.
 
-`src/turn-rate.ts` + engine wiring + `/xk/rate` + `/xk/regime` OSC + dashboard badge + 12 tests.
+- [x] **Face-signature table**: first-draft 12 × 6 signatures live in `src/face-gesture.ts` → `FACE_SIGNATURES`. Fields: `envelope` (pluck/swell/stab/drone/fade/burst), `durationBias`, `articulation` (attack/sustained/release/iterative), `panBias` (-1..+1), `registerBias` (-1..+1), `motion` (static/up/down/oscillate). Composition polish pass still to come — the current table is a plausible starting point, not a tuned instrument.
+- [x] **Engine wiring**: `VoiceOutput.face: FaceMove | null` threaded from `engine.onTurn` → `VoiceEngine.emit` → `osc-output.voiceToOsc`. New `/xk/face <face>` OSC message fires BEFORE `/xk/voice` so the bridge has the signature loaded before phrase dispatch reads it.
+- [x] **Modulation rules**: documented and exported as pure functions in `src/face-gesture.ts` — `pitchClassMod(vertexIdx)` (K_i → perfect-5th spiral), `registerMod(path, sig)` (registerBias × 12, halved on V2), `intensityScalar(path)` (V2 = 0.7), `parityInflection(tetraIdx)` (odd orbit → motion flip). C_i complex is a timbre modifier via the existing `phraseCX` dispatch in `max/xk_swam.js`.
+- [x] **Max bridge (first-pass)**: `handleFace(face)` + `FACE_MAP` mirror of durationBias/registerBias; `handleVoice` now scales `duration` by `state.faceDurationBias` before every downstream timer (expression envelope, D39 tremolo ramp, release scheduling) and `pickPitch` adds `state.faceTranspose` to the fold. Phrase-shape sculpting (envelope/articulation/motion actually driving the phraseCX rendering, not just duration+register) is the next pass — land that when composition direction is clear.
+- [x] **Tests**: `test/face-gesture.test.ts` (19 cases) — signature-table completeness, modulation-rule correctness, and engine-integration round-trip (same physical face → same identity regardless of K_i / C_i state; `/xk/face` precedes `/xk/voice`; half-turns → null face).
 
----
+**Next sculpt pass:**
+- [x] **Envelope / articulation / motion render at the bridge level** (2026-04-18). `ENV_PROFILE` (peakMult / attackMult / releaseMult), `ART_OFF_VEL` (per-articulation note-off velocity), and `MOTION_NUDGE` (±2 semitones, oscillate swings by turnCount parity) wire `sig.envelope` / `sig.articulation` / `sig.motion` into `state.peakExpr`, `scheduleExprEnvelope`'s `attackRampMs`, `scheduleRelease`'s ramp, and `noteOff()`'s velocity. Per-phrase shape contour inside `phraseC1..phraseC8` (the next item) is still pending — current pass shapes the *envelope around* each note but not the note-sequence shape inside the phrase.
+- [ ] Phrase-shape rendering (deeper pass): teach `phraseC1..phraseC8` to read `state.faceEnvelope` / `state.faceMotion` and shape their *note sequence* accordingly (pluck = single staccato note; swell = crescendo through the rebow chain; drone = held single note; burst = iterative subdivision; etc.). Current pass only shapes the per-note envelope, not how many notes a phrase fires or in what direction they move.
+- [ ] Pan bias: wire `sig.panBias` into the SC side (SWAM is mono → stereo; pan lives in SC voice routing). SWAM bridge can still stay mono.
+- [ ] Tune the 12 signatures against live playing — adjust durationBias / registerBias / envelope choices so all 12 faces are aurally distinguishable in sequence.
 
-### Phase 2: Contemplative Mode — DONE
+**Dashboard surfacing (split between A1 and C):**
+- [x] **State panel — `face` row** (2026-04-18). Shows last quarter-turn's face + envelope tag (`R · stab`, `U' · fade`); hover tooltip exposes full signature. Self-contained mirror of `FACE_SIGNATURES` in `public/dashboard.html`.
+- [ ] 12-face preview panel — *what each face would sound like right now given current K_i / C_i state* — deferred to Phase C Learning mode.
 
-Voice overlap handling (min 0.5s), sieve metabola chime cue, scramble → SC reverb wet mix.
+### Phase A2 — Solve-anchor *(not started, small change)*
 
----
+**Goal**: physical solved cube = musical zero. Reset engine state on the unsolved→solved edge so every spell's effect starts from a known reference. Solving the cube during performance = returning to silence is both a cognitive anchor and a dramaturgical gesture.
 
-### Phase 3: Conversational Mode
+**Where**: `src/engine.ts` `reportCubeSolved()` / `SolveListener` — already wired to fire on the edge, just not acting on engine state.
 
-**Goal**: Events overlap and blend. Spells are prominent. The performer builds texture through sustained engagement.
+- [ ] On solve, reset: K_i to identity, C_i to α phase, path to V1, turn count to 0, scramble factor to 0, α/β/γ cycle to α, sieve to initial moduli (11, 13).
+- [ ] Emit one final panic-style `/xk/voice` with intensity `p` and short duration, then go quiet until next turn — the "return to silence" moment.
+- [ ] Broadcast full state burst so the dashboard reflects the reset.
+- [ ] Don't reset the physical pose or gyro zero — those are independent.
+- [ ] Test: solve → state reset; next turn fires from identity.
 
-**Where**: `src/voice-engine.ts`, `sc/xenakube.scd`, `src/osc-output.ts`.
+### Phase B — Phrase-library spell book *(not started)*
 
-Done: expression OSC emission at 60Hz, spell → mode-manager wiring + `/xk/spell` OSC, spell book revised to 6 CFOP fundamentals (144 rotation variants), Max/SWAM pitch folding into cello range, Max/SWAM phrase generation + legato portamento + auto-release. SC OSCdef for `/xk/spell` and SC mapping of `/xk/expr/*` still pending.
+**Goal**: grow from 7 mode-toggle spells to ≈20 compositional phrase spells. Each spell is a short (≤6-move) sequence whose effect is a recognizable musical phrase, *replacing* the per-turn face-voices for the duration of the phrase. These are the performer's "sentences" — memorable enough to build muscle memory on, distinct enough to read on one hearing.
 
-- [ ] **Polyphonic voice stacking** (SC)
-  - In conversational regime, switch from "one voice replaces the last" to "voices stack with natural decay."
-  - Voice engine emits the new voice event as usual, but SC doesn't kill the previous synth — instead, previous voices get a release envelope (2–4s fade). Multiple voices coexist.
-  - Cap at 6–8 simultaneous synths to prevent CPU overload. Steal oldest voice when cap hit.
+**Where**: `src/spells.ts` (spell list + effect types), `src/mode-manager.ts` (effect dispatch), `max/xk_swam.js` (phrase playback), eventually a `docs/spell_book.md` listing each spell with its algorithm + audio description.
 
-- [ ] **Dashboard: spell history trail**
-  - Show spell detections as persistent markers on a timeline, not just toasts
-  - At conversational rate, spells are frequent enough to form a visible rhythm
+- [ ] Define the spell-effect model: currently each spell has one of a handful of mode-toggle effect enums; extend to `{ kind: 'phrase', payload: PhraseSpec }` where `PhraseSpec` describes a composed sequence of notes / techniques / expressions over a defined duration.
+- [ ] Design ≈20 phrase spells. Seed set (suggestions to refine later): rising arco arpeggio, descending pizz line, harmonic fanfare, sul pont scratch cluster, col legno tapping pattern, glissando sweep, tremolo crescendo, quiet drone, stuttered attack burst, etc. Composition work, not code — draft on paper, test by hand-firing OSC first.
+- [ ] Reconcile with existing 7 spells: most become phrase spells; a couple (sexy-move as sequential/poly toggle) may stay mode-togglers as deliberate performer-controls.
+- [ ] Suppress face-voice output during spell playback so the phrase is heard clean.
+- [ ] Dashboard: spell-book panel showing algorithm + short audio preview per spell.
 
----
+### Phase C — Dashboard split *(not started)*
 
-### Phase 4: Burst Mode
+**Goal**: performance-mode HUD that shows only what the performer needs to decide their next move; debug/learning mode that exposes the full state machine. Current dashboard is the debug mode, misidentified as performance HUD.
 
-**Goal**: Individual voice events are meaningless at 5+ turns/sec. Switch to aggregate texture synthesis driven by macro parameters.
+**Where**: `public/dashboard.html`.
 
-**Where**: New SC SynthDef(s), `src/osc-output.ts`, `relay.js`, `src/engine.ts`.
+- [ ] Add a mode toggle (Performance / Learning). Persist in `localStorage`.
+- [ ] Performance mode surfaces: active vertex's upcoming voice signature (the *kind* — see Phase A1), spell buffer + which spells are one move from completing, distance-to-solved, regime badge. Nothing else visible.
+- [ ] Learning mode surfaces everything current mode does *plus* a 12-face preview panel: small iconic/glyph-colored previews for L / L' / R / R' / F / F' / B / B' / U / U' / D / D' showing what the *next* move would sound like given current state. Recomputed on every turn so the performer can see *why* a U now differs from a U ten turns ago.
+- [ ] Hover-to-audiate (optional, later): tapping a preview in Learning mode triggers a silent/quiet audition through the bridge. High-agency rehearsal tool.
 
-- [ ] **Aggregate state computation** (`src/engine.ts` or new `src/aggregate.ts`)
-  - Compute per regime tick (not per turn — too fast):
-    - `avgDensity`: mean of all 8 vertex densities
-    - `avgIntensity`: mean intensity mapped to 0–1
-    - `complexDistribution`: histogram of which complex types are currently assigned [count of C1..C8]
-    - `turnRate`: from phase 1
-    - `scrambleFactor`: already exists
-    - `sieveDensity`: how many pitches in current sieve / total range (sparse vs dense field)
-    - `recentSpells`: count of spells in last 2 seconds
-  - Emit as `/xk/agg/*` OSC bundle at a fixed rate (~15 Hz), decoupled from individual turns
+### Phase D — Xenakis technique mapping (A vs B) *(decision deferred)*
 
-- [ ] **Burst SynthDef(s) in SC**
-  - Design 1–2 new SynthDefs that take aggregate parameters as inputs:
-    - `\xk_cloud`: granular texture — grain rate from turnRate, grain pitch from sieve centroid, grain scatter from scramble, density from avgDensity, spectral character from complexDistribution
-    - `\xk_wash`: sustained drone/pad — pitch from sieve, brightness from scramble, movement from expression spin/tilt
-  - These run continuously in burst mode. Individual `/xk/voice` messages are ignored (or fed as grain triggers).
+**Goal**: choose between faithful rebuild (A) and pragmatic layering (B) of Xenakis' C1–C8 playing techniques onto the SWAM bridge. Full diagnosis in `docs/research_notes.md` → "Performer's Frame" and the conversation archive. Decision deferred until Phase A1 is playing and we can tell which mapping makes the 12 face-signatures most aurally distinguishable.
 
-- [ ] **Regime crossfade in SC**
-  - SC needs a regime-aware manager:
-    - Contemplative: individual Routines (current behavior)
-    - Conversational: stacking Routines with release envelopes
-    - Burst: fade out individual voices, fade in `\xk_cloud` / `\xk_wash`
-  - Crossfade over ~0.5s on regime transition. Triggered by `/xk/regime` OSC message.
+Current mapping (see CLAUDE.md "Conceptual mapping") is not Xenakis-faithful: col legno, scratched bow, and cross-technique combinations (tremolo+harmonics, harmonic tremolo) are all missing or simplified. The primary-source technique string from Xenakis' Nomos Alpha is `[pizz. f.c.l. an pizz.gl. a trem. harm. hr trem. asp asp trem. a interf.]` — tremolo appears on 4 of 8 complexes, harmonics on 2.
 
-- [ ] **Scramble arc**
-  - In burst mode, scramble factor becomes the master parameter:
-    - scramble 1.0 (start of solve): dense, loud, chaotic, wide stereo, heavy reverb
-    - scramble 0.0 (solved): sparse, quiet, pure, centered, dry
-  - The solve IS the performance gesture — a 10–15s decrescendo from noise to clarity
-  - Spells detected during solve leave acoustic residue: reverb tail freeze, pitch memory (sustained harmonic at spell's sieve pitch), or rhythmic imprint
-
-- [ ] **Dashboard burst mode**
-  - Switch from individual vertex/complex cards to aggregate visualization:
-    - Waveform/spectrum view
-    - Scramble arc progress bar (1.0 → 0.0)
-    - Spell waypoints on the arc (cross → F2L → OLL → PLL markers)
-    - Turn rate sparkline
+- [ ] Hold decision until 12 face-signatures are in place and auditioned.
+- [ ] When ready: pick A (rebuild COMPLEX table to match Xenakis) or B (add secondary-technique rolls per voice, path/tetra-biased) or hybrid.
 
 ---
 
-### Phase 5: Integration & Polish
+## Prior direction: Three performance regimes
 
-- [ ] **Smooth regime transitions**
-  - Test with actual cube. Tune hysteresis thresholds by feel.
-  - The conversational→burst boundary is the critical one: should feel like "kicking into gear," not an accidental glitch.
-  - Consider: burst mode only activates if turn rate sustains above threshold for 1+ second (it's deliberate, not a double-tap accident)
+Retained as active substrate — regime classification (`turn-rate.ts`) is already used by the Max bridge for attack-ramp / expression-ramp scaling (D33) and by SC for stacking rules. Further buildout of burst-mode aggregates is on hold until Temporal Identity phases land; the regime axis complements the new framework rather than competing with it.
 
-- [ ] **Path B equivalent**
-  - In Nomos Alpha, Path B interludes are sustained, freely composed pauses between formalized sections.
-  - XenaKube equivalent: when the performer stops turning and holds the cube still, a "Path B" mode activates after ~5s of silence.
-  - Gyro expression still active (tilt, spin). Sound sustains/evolves based on last state. The formalized structure pauses but the instrument still breathes.
-  - Turning resumes → back to Path A (whichever regime the turn rate indicates).
+| Regime | Turn rate | Musical character | Status |
+|--------|-----------|-------------------|--------|
+| **Contemplative** | < 0.3 Hz | Each event distinct, full voice playback, structure audible | Done |
+| **Conversational** | 0.3–2 Hz | Events overlap, spells are deliberate gestures, texture builds | Partial |
+| **Burst** | > 2 Hz | Structure collapses into texture, aggregate parameters dominate | Not started |
 
-- [ ] **SC polyphonic voice output**
-  - Required for conversational mode. Currently only sequential is implemented in SC.
-  - Need 8 parallel voice slots, each with its own SynthDef assignment, envelope, and pan position.
+Pending regime work (held until Temporal Identity is in place — some of these items may restructure or merge into the new phases):
 
-- [ ] **Update CLAUDE.md**
-  - Remove speed regime and scramble-driven synthesis from "Not Yet Implemented"
-  - Add regime system to Performance Model section
-  - Document new OSC messages (`/xk/rate`, `/xk/regime`, `/xk/expr/*`, `/xk/agg/*`, `/xk/scramble`, `/xk/spell`)
+- [ ] **SC polyphonic voice stacking** — needed for Conversational mode. Emit release envelope on previous voice instead of hard-stop; cap 6–8 simultaneous synths.
+- [ ] **Dashboard spell-history trail** — persistent markers on a timeline rather than toasts; pairs naturally with Phase C Performance-mode HUD.
+- [ ] **Burst aggregate state** — `/xk/agg/*` bundle (avgDensity, avgIntensity, complexDistribution histogram, sieveDensity, recentSpells) at ~15 Hz; feeds new SC SynthDefs `\xk_cloud` / `\xk_wash` that replace individual-voice playback above the regime threshold.
+- [ ] **Regime crossfade in SC** — ~0.5 s fade between individual-voice and aggregate-texture paths on `/xk/regime`.
+- [ ] **Scramble arc** — in burst mode, scramble factor becomes master parameter; 1.0 (scrambled) = dense/loud/chaotic, 0.0 (solved) = sparse/quiet/pure. Natural 10–15 s solve-decrescendo. Pairs with Phase A2 solve-anchor.
+- [ ] **Path B equivalent** — after ~5 s of silence, activate a sustained gyro-expression drone until turns resume. Formalized structure pauses; instrument still breathes.
 
 ---
 
-## Dependency Graph
+## SWAM Cello bridge refactor — COMPLETE
+
+D1–D39 all resolved. Detailed write-ups in `docs/revision_roadmap.md`. Latest (2026-04-18): D36 V2 reachability, D37 harmonics rotation, D38 CC 80 reachability proof (superseded), D39 per-phrase stochastic tremolo envelope.
+
+No further SWAM-specific refactor work is planned. New bridge changes that become necessary during Phase A1 (face-gesture dispatch) or Phase B (phrase-library playback) get tracked as part of those phases, not as new D-entries.
+
+---
+
+## Dependency graph
 
 ```
-Phase 1 (turn-rate tracker) — DONE
-Phase 2 (contemplative polish) — DONE
-Phase 3 (conversational) — in progress; SC poly stacking + dashboard trail remain
-  │
-  └── Phase 4 (burst) — needs Phase 3 SC poly stacking
-        │
-        └── Phase 5 (integration) — needs all above
+Phase A1 (face gesture framework) ─┬─ Phase A2 (solve anchor)  ─┐
+                                   │                             │
+                                   └─ Phase C (dashboard split) ─┤
+                                                                 │
+Phase B (spell phrase library) ─────────────────────────────────┤
+                                                                 │
+Phase D (Xenakis A vs B) ── decision gated on A1 completion ────┘
 ```
+
+Rough sequencing: A1 first (the new substrate), then A2 in parallel with C's Learning-mode preview panel (they both surface face-signatures), then B once A1 is audible, then D once there's enough of a gestural palette to judge the mapping question against.

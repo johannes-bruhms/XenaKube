@@ -1,6 +1,6 @@
 // XenaKube Engine — public API
-export { XenaKubeEngine, type StateListener, type SpellListener, type VoiceListener } from './engine.js';
-export { stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, type OscMessage } from './osc-output.js';
+export { XenaKubeEngine, type StateListener, type SpellListener, type VoiceListener, type SolveListener } from './engine.js';
+export { stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, type OscMessage } from './osc-output.js';
 export {
   ELEMENTS, CAYLEY, INVERSES, IDENTITY,
   multiply, inverse, getPermutation, tetraOrbit,
@@ -21,6 +21,11 @@ export { VoiceEngine, type VoiceMode, type VoiceEvent, type VoiceOutput } from '
 export { ExpressionProcessor, type ExpressionState } from './expression.js';
 export { ModeManager, type PerformanceMode, type ModeChangeListener } from './mode-manager.js';
 export { TurnRateTracker, type Regime } from './turn-rate.js';
+export {
+  FACE_SIGNATURES, parseFace, getFaceSignature,
+  pitchClassMod, registerMod, intensityScalar, parityInflection,
+  type FaceMove, type FaceSignature, type EnvelopeShape, type Articulation, type Motion,
+} from './face-gesture.js';
 export {
   ComplexType,
   type GroupElement, type Permutation8, type CubeMove, type CubeFace, type MoveString,

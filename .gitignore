@@ -11,3 +11,8 @@ MaxMSP-MCP-Server/
 max/max_mcp*.js
 max/package.json
 max/package-lock.json
+
+# Local TD projects + backup snapshots + screenshots (not part of the committed repo)
+TD/
+backups/
+docs/*.png

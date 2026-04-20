@@ -6,7 +6,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, getBuiltinDiagrams } = require('./src/index.ts');
+const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, getBuiltinDiagrams } = require('./src/index.ts');
 
 /*
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
@@ -84,6 +84,14 @@ function quatExp(v) {
   const s = Math.sin(half) / angle;
   return { x: v.x * s, y: v.y * s, z: v.z * s, w: Math.cos(half) };
 }
+// SLERP on unit quats via log/exp. `a` and `b` must be unit quaternions.
+// Handles shortest-arc automatically (quatLog flips sign when w<0).
+function quatSlerp(a, b, t) {
+  const rel = quatMul(quatConj(a), b);
+  const rv = quatLog(rel);
+  const scaled = quatExp({ x: rv.x * t, y: rv.y * t, z: rv.z * t });
+  return quatNorm(quatMul(a, scaled));
+}
 
 // --- Filter state ---
 const kf = {
@@ -97,6 +105,64 @@ let gyroSmoothing = 0.50;  // 0 = responsive (near-zero lag), 1 = heavy smoothin
 let gyroOutputCount = 0;
 let lastOutputTime = Date.now();
 const GYRO_OUTPUT_HZ = 60;
+
+// Engine-input gyro calibration. When the dashboard zeros the gyro (auto-zero
+// on first BLE sample, or the Zero Gyro button), it also sends a `zero_gyro`
+// WS message that we handle by snapshotting `conj(kf.q)` here. Every
+// `engine.onGyro(...)` then applies `engineGyroZeroInv * kf.q`, so the engine
+// sees an identity-centered quaternion at the moment of zero.
+//
+// Why this matters: `snapToNearest` partitions quaternion space into 24
+// fixed S4 cells. Without calibration the user's rest pose lands at an
+// arbitrary point inside one cell, with boundaries at asymmetric angular
+// distances — tilting the cube right might snap after 15° while tilting
+// left requires 30°+. Calibrating re-centers the "identity" cell on the
+// user's rest pose so small tilts in every direction reach cell edges at
+// roughly the same angular distance. The visual `gyroZeroInv` on the
+// dashboard keeps the live cube in the same frame; both sides now agree.
+let engineGyroZeroInv = { x: 0, y: 0, z: 0, w: 1 };
+
+// Noise gate on measured angular velocity. BLE quaternion readings have
+// sample-to-sample noise even when the cube is perfectly still — the finite
+// difference in kfUpdate reads this as small phantom omega, which the 60 Hz
+// predict step then integrates into visible shimmer. This floor (rad/s)
+// shrinks measured omega toward zero on static holds; real hand motion
+// during turns is well above 1 rad/s so intentional rotation is preserved.
+const OMEGA_NOISE_FLOOR = 0.25;
+
+// === Visual SLERP buffer ===
+// The Kalman predict step extrapolates motion for OSC (low-latency audio
+// path). For dashboard visuals the user is fine trading ~100 ms of delay
+// for zero extrapolation artefacts, so gyro_tick ships a separate quat
+// that SLERPs between buffered BLE samples straddling (now - VISUAL_DELAY_MS).
+// No phantom motion on static holds, no Kalman predict noise.
+const VISUAL_DELAY_MS = 120;        // trailing latency for dashboard cube
+const VISUAL_BUFFER_MS = 1500;      // keep samples at least this long
+const visualSamples = [];           // [{ q, t }], oldest first
+
+function pushVisualSample(q, t) {
+  visualSamples.push({ q, t });
+  const cutoff = t - VISUAL_BUFFER_MS;
+  while (visualSamples.length > 2 && visualSamples[0].t < cutoff) {
+    visualSamples.shift();
+  }
+}
+
+function getVisualQuat(nowMs) {
+  if (visualSamples.length === 0) return kf.q;
+  if (visualSamples.length === 1) return visualSamples[0].q;
+  const target = nowMs - VISUAL_DELAY_MS;
+  // Bracket search: find i such that samples[i].t <= target < samples[i+1].t
+  let i = visualSamples.length - 2;
+  while (i > 0 && visualSamples[i].t > target) i--;
+  const a = visualSamples[i];
+  const b = visualSamples[i + 1];
+  const span = b.t - a.t;
+  let frac = span > 0 ? (target - a.t) / span : 1;
+  if (frac < 0) frac = 0;
+  else if (frac > 1) frac = 1;
+  return quatSlerp(a.q, b.q, frac);
+}
 
 // Slider → Kalman gains.  smoothing=0 → trust sensor, smoothing=1 → trust model
 function kfGains() {
@@ -151,10 +217,17 @@ function kfUpdate(q_meas) {
     if (dt > 0.001 && dt < 1.0) {
       const dMeas = quatMul(quatConj(kf.prevMeas.q), q_meas);
       const rv = quatLog(dMeas);
-      const omega_meas = { x: rv.x / dt, y: rv.y / dt, z: rv.z / dt };
-      kf.omega.x += Kv * (omega_meas.x - kf.omega.x);
-      kf.omega.y += Kv * (omega_meas.y - kf.omega.y);
-      kf.omega.z += Kv * (omega_meas.z - kf.omega.z);
+      let ox = rv.x / dt, oy = rv.y / dt, oz = rv.z / dt;
+      // Soft noise gate: shrink omega by the floor, preserving direction.
+      // speed < floor → omega zero; speed ≫ floor → near full magnitude.
+      const speed = Math.sqrt(ox * ox + oy * oy + oz * oz);
+      if (speed > 0) {
+        const gate = Math.max(0, (speed - OMEGA_NOISE_FLOOR) / speed);
+        ox *= gate; oy *= gate; oz *= gate;
+      }
+      kf.omega.x += Kv * (ox - kf.omega.x);
+      kf.omega.y += Kv * (oy - kf.omega.y);
+      kf.omega.z += Kv * (oz - kf.omega.z);
     }
   }
 
@@ -194,6 +267,22 @@ function gyroLoop() {
       for (const msg of exprMsgs) {
         oscSC.send(msg.address, ...msg.args);
         oscMax.send(msg.address, ...msg.args);
+      }
+
+      // Lightweight 60Hz WS tick for dashboard visuals. Uses the SLERP
+      // buffer (lagged by VISUAL_DELAY_MS), NOT kf.q — so the cube trails
+      // BLE by ~120 ms but has zero extrapolation noise on static holds.
+      // OSC paths above still use kf.q for low-latency audio mapping.
+      if (wss && wss.clients.size > 0) {
+        const vq = getVisualQuat(nowMs);
+        const tick = JSON.stringify({
+          type: 'gyro_tick',
+          data: [vq.x, vq.y, vq.z, vq.w],
+          dev: expr.deviation,
+        });
+        wss.clients.forEach((c) => {
+          if (c.readyState === WebSocket.OPEN) c.send(tick);
+        });
       }
 
       gyroOutputCount++;
@@ -252,6 +341,25 @@ engine.onSpell((match) => {
     }
   });
   console.log(`[SPELL] ${match.spell.name} (${match.spell.algorithm.join(' ')})`);
+});
+
+// Broadcast cube-solved edge — fires once per unsolved→solved transition.
+// Source of truth: the GAN cube's FACELETS report (read by the browser and
+// relayed over WS as {type:'cube_solved'}). The browser owns edge detection.
+// Distinct from /xk/scramble, which is BFS distance in S4 (24 elements).
+engine.onSolve(() => {
+  const msg = solveToOsc();
+  oscSC.send(msg.address, ...msg.args);
+  oscMax.send(msg.address, ...msg.args);
+  oscTD.send(msg.address, ...msg.args);
+
+  const payload = JSON.stringify({ type: 'solve' });
+  wss?.clients?.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(payload);
+    }
+  });
+  console.log('[SOLVE] cube solved');
 });
 
 // Broadcast voice output — and emit /xk/voice over OSC *only here* so it
@@ -401,9 +509,16 @@ wss.on('connection', function connection(ws) {
                 let q = data.data.quaternion;
                 if (q) {
                     kfUpdate(q);
-                    // Feed corrected orientation to engine at BLE rate
-                    // (triggers full state burst: OSC + WS broadcast)
-                    engine.onGyro(kf.q.x, kf.q.y, kf.q.z, kf.q.w);
+                    // Raw normalized sample into visual SLERP buffer. Kalman
+                    // kf.q still drives OSC (low-latency audio); the buffer
+                    // feeds the lagged-but-smooth dashboard cube.
+                    pushVisualSample(quatNorm(q), Date.now());
+                    // Feed calibrated orientation to engine at BLE rate so
+                    // snap cells are centered on the user's zero pose (see
+                    // `engineGyroZeroInv` declaration). Triggers full state
+                    // burst: OSC + WS broadcast.
+                    const cg = quatMul(engineGyroZeroInv, kf.q);
+                    engine.onGyro(cg.x, cg.y, cg.z, cg.w);
                 }
             }
             else if (data.type === 'set_gyro_smoothing') {
@@ -440,6 +555,17 @@ wss.on('connection', function connection(ws) {
             else if (data.type === 'reset') {
                 engine.reset();
                 console.log('[RESET] Engine reset');
+            }
+            else if (data.type === 'cube_solved') {
+                // Browser detected a solved FACELETS on an unsolved→solved edge.
+                // Engine fires /xk/solve listeners (OSC out + WS broadcast).
+                engine.reportCubeSolved();
+            }
+            else if (data.type === 'zero_gyro') {
+                // Dashboard zeroed its visual frame; mirror that here so the
+                // engine's snap computation re-centers on the same rest pose.
+                engineGyroZeroInv = quatConj(quatNorm(kf.q));
+                console.log('[ZERO] engine gyro zero captured');
             }
         } catch (e) {
             console.error("Parse error:", e);

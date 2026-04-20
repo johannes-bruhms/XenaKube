@@ -72,7 +72,14 @@ var CC = {
 	// D32 — Tremolo Min Speed (Play Modes → Right Hand). MIDI-Learn required.
 	// With Tremolo Mode = Hz, this is the continuous rate knob; written per
 	// voice so each walk step lands a pre-composed rate (like automation).
-	TREMOLO_RATE:     80    // MIDI-Learn to Tremolo Min Speed slider
+	TREMOLO_RATE:     80,   // MIDI-Learn to Tremolo Min Speed slider
+	// D35 — Bow Polyphony (Play Modes → Left Hand selector). 5-state:
+	// Mono String Crossing / Mono Poly Release / Double / Double/Hold / Auto.
+	// Default per-complex = Double/Hold so overlapping turns form natural
+	// two-string textures; C5/C6/C7 override to Mono Poly Release so SWAM's
+	// gliss engine has a single monophonic line to slide along.
+	// MIDI-Learn: right-click "Bow Polyphony" selector → MIDI Learn → CC 81.
+	BOW_POLYPHONY:    81
 };
 
 // ================================================================
@@ -106,6 +113,12 @@ var HAS_TREMOLO_CC       = true;
 // When false the per-voice tremolo-rate write is suppressed; the slider keeps
 // whatever value was last set by hand.
 var HAS_TREMOLO_RATE     = true;
+// D35 — flip false until you MIDI-Learn Bow Polyphony to CC 81 in SWAM.
+// When false the bridge skips the write entirely (the KS fallback for this
+// param would require holding KS B + striking a second KS, which the
+// velocity-select path can't express). Leave the SWAM preset on whichever
+// polyphony mode you want as the hard default.
+var HAS_BOW_POLY_CC      = true;
 
 function hasCC(ccNum) {
 	if (ccNum === CC.BOW_SPEED)        return HAS_BOW_SPEED;
@@ -115,6 +128,7 @@ function hasCC(ccNum) {
 	if (ccNum === CC.HARMONICS)        return HAS_HARMONICS_CC;
 	if (ccNum === CC.TREMOLO)          return HAS_TREMOLO_CC;
 	if (ccNum === CC.TREMOLO_RATE)     return HAS_TREMOLO_RATE;
+	if (ccNum === CC.BOW_POLYPHONY)    return HAS_BOW_POLY_CC;
 	return true;
 }
 
@@ -142,6 +156,17 @@ var TREMOLO_CC_VAL = {};
 TREMOLO_CC_VAL[0] = 21;      // OFF   — lowest third
 TREMOLO_CC_VAL[1] = 64;      // SLOW  — middle third
 TREMOLO_CC_VAL[2] = 106;     // FAST  — top third
+
+// D35 — Bow Polyphony CC value map. 5 states → 5 equal-width CC bands of
+// ~25.6 each; values are band centers. See docs/swam_cello_reference.md §2
+// (KS B+C / B+C# / B+D / B+D# / B+E) for the SWAM option order.
+var BOW_POLY = { MONO_STRING_CROSSING:0, MONO_POLY_RELEASE:1, DOUBLE:2, DOUBLE_HOLD:3, AUTO:4 };
+var BOW_POLY_CC_VAL = {};
+BOW_POLY_CC_VAL[0] = 12;     // Mono String Crossing
+BOW_POLY_CC_VAL[1] = 38;     // Mono Poly Release   — gliss complexes (C5/C6/C7)
+BOW_POLY_CC_VAL[2] = 64;     // Double
+BOW_POLY_CC_VAL[3] = 89;     // Double/Hold         — default for non-gliss
+BOW_POLY_CC_VAL[4] = 115;    // Auto
 
 // ================================================================
 // KEY SWITCHES — SWAM Cello 3 v3.10 mapping (KS Octave = C0, KS_CH).
@@ -255,6 +280,7 @@ var COMPLEX = {
 	     vibrato:{ depth:0, rate:64 }, bowPos:null,
 	     bowPressure:64, portamento:{ on:false, time:0 },
 	     attackRamp:10, attackCtrl:110, tremoloRate:40,
+	     bowPoly:BOW_POLY.DOUBLE_HOLD,
 	     register:{ lo:36, hi:72 } },
 	2: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
 	     exprEnv:{ attack:0.6, peak:1.0, sustain:0.85, release:0.4,
@@ -262,6 +288,7 @@ var COMPLEX = {
 	     vibrato:{ depth:35, rate:50 }, bowPos:70,
 	     bowPressure:70, portamento:{ on:false, time:0 },
 	     attackRamp:40, attackCtrl:55, tremoloRate:45,
+	     bowPoly:BOW_POLY.DOUBLE_HOLD,
 	     register:{ lo:40, hi:64 } },
 	3: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
 	     exprEnv:{ attack:0.5, peak:1.1, sustain:0.9, release:0.6,
@@ -269,30 +296,38 @@ var COMPLEX = {
 	     vibrato:{ depth:60, rate:45 }, bowPos:110,
 	     bowPressure:55, portamento:{ on:false, time:0 },
 	     attackRamp:85, attackCtrl:30, tremoloRate:35,
+	     bowPoly:BOW_POLY.DOUBLE_HOLD,
 	     register:{ lo:36, hi:55 } },
-	// C4: now actually fires Harmonics in v3.10 (KS F#, vel-select).
-	// OCT (+1 octave) is the most musically usable — OCT_5TH is brittle
-	// at the cello's high register.
+	// C4: harmonics cloud. The `harmonics` field here is a safe fallback —
+	// the live harmonic mode is chosen per voice by harmonicsForC4()
+	// (D37: path × tetra across OCT / OCT_5TH / CTRL), so this baseline
+	// is only consulted if that function is ever bypassed.
 	4: { playMode:"bow", harmonics:HARMONICS.OCT, tremolo:TREMOLO.OFF,
 	     exprEnv:{ attack:0.7, peak:0.75, sustain:0.6, release:0.3,
 	               attackRampMs:30, sustainRampMs:90,  releaseRampMs:120 },
 	     vibrato:{ depth:10, rate:60 }, bowPos:85,
 	     bowPressure:30, portamento:{ on:false, time:0 },
 	     attackRamp:30, attackCtrl:20, tremoloRate:55,
+	     bowPoly:BOW_POLY.DOUBLE_HOLD,
 	     register:{ lo:60, hi:84 } },
+	// C5/C6/C7: gliss complexes — MONO_POLY_RELEASE so overlapping notes
+	// feed SWAM's portamento engine instead of splitting into chord voices
+	// (D34 root cause). Any other polyphony mode kills the slide.
 	5: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
 	     exprEnv:{ attack:0.9, peak:1.1, sustain:0.7, release:0.3,
 	               attackRampMs:35, sustainRampMs:100, releaseRampMs:120 },
 	     vibrato:{ depth:25, rate:70 }, bowPos:55,
 	     bowPressure:70, portamento:{ on:true, time:50 },
 	     attackRamp:30, attackCtrl:90, tremoloRate:50,
-	     register:{ lo:36, hi:84 } },
+	     bowPoly:BOW_POLY.MONO_POLY_RELEASE,
+	     register:{ lo:36, hi:89 } },
 	6: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
 	     exprEnv:{ attack:0.7, peak:1.0, sustain:0.85, release:0.4,
 	               attackRampMs:55, sustainRampMs:140, releaseRampMs:160 },
 	     vibrato:{ depth:40, rate:50 }, bowPos:64,
 	     bowPressure:70, portamento:{ on:true, time:80 },
 	     attackRamp:50, attackCtrl:50, tremoloRate:50,
+	     bowPoly:BOW_POLY.MONO_POLY_RELEASE,
 	     register:{ lo:43, hi:67 } },
 	7: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
 	     exprEnv:{ attack:0.4, peak:1.05, sustain:0.9, release:0.7,
@@ -300,6 +335,7 @@ var COMPLEX = {
 	     vibrato:{ depth:55, rate:40 }, bowPos:115,
 	     bowPressure:55, portamento:{ on:true, time:115 },
 	     attackRamp:90, attackCtrl:25, tremoloRate:40,
+	     bowPoly:BOW_POLY.MONO_POLY_RELEASE,
 	     register:{ lo:36, hi:52 } },
 	// C8: now actually fires Tremolo in v3.10 (KS G#, vel-select). FAST
 	// is the spectral-aggressive ponticello character we want.
@@ -309,6 +345,7 @@ var COMPLEX = {
 	     vibrato:{ depth:15, rate:80 }, bowPos:5,
 	     bowPressure:100, portamento:{ on:false, time:0 },
 	     attackRamp:20, attackCtrl:100, tremoloRate:95,
+	     bowPoly:BOW_POLY.DOUBLE_HOLD,
 	     register:{ lo:60, hi:81 } }
 };
 
@@ -384,7 +421,19 @@ var state = {
 	// regardless of state.* diff, so SWAM provably aligns with our model
 	// before diff-suppression kicks in (D28).
 	ksForceCount: 0,
-	forceKS: false
+	forceKS: false,
+
+	// Phase A1 — face identity & signature-derived modulators. All reset
+	// to neutral so pre-face-aware turns render exactly as before.
+	face: null,
+	faceDurationBias: 1.0,
+	faceTranspose: 0,
+	faceEnvelope: null,
+	faceArticulation: null,
+	faceMotion: null,
+	faceEnvProfile: null,
+	faceOffVelOverride: null,
+	faceReleaseMult: 1.0
 };
 
 var ccCache = {};
@@ -412,11 +461,16 @@ function noteOn(pitch, vel) {
 
 // Phase 8: velocity default comes from state.noteOffVel (turn-rate driven).
 // Fast turns → higher note-off velocity → shorter natural release in SWAM.
+// Phase A1: state.faceOffVelOverride (from articulation) takes precedence
+// when set, so attack/iterative faces always release crisply while
+// sustained/release faces decay softly regardless of turn rate.
 // Callers that need a specific release character (fades, explicit releases)
 // can still pass their own velocity.
 function noteOff(pitch, vel) {
 	pitch = clamp(pitch, 0, 127);
-	if (vel == null) vel = state.noteOffVel;
+	if (vel == null) {
+		vel = (state.faceOffVelOverride != null) ? state.faceOffVelOverride : state.noteOffVel;
+	}
 	vel = clamp(Math.round(vel), 0, 127);
 	outlet(0, "midievent", statusNoteOff(MIDI_CH), pitch, vel);
 }
@@ -551,6 +605,33 @@ function setHarmonics(target) {
 	state.harmonics = target;
 }
 
+// D37 — per-voice harmonic-mode rotation for C4. C4 is the harmonics
+// complex; previously it hard-coded HARMONICS.OCT so SWAM's OCT_5TH
+// (option 3) and CTRL (option 4) modes never reached the sound path.
+// Now C4's harmonic mode is chosen per voice by the path × tetra-orbit
+// axis pair (both are already composition state, no new inputs):
+//
+//        tetra 0 (even)    tetra 1 (odd)
+//   V1   OCT                OCT_5TH
+//   V2   OCT_5TH            CTRL
+//
+// V1 + even = baseline flageolet (most musically usable).
+// V1 + odd  = third-harmonic ping, brighter/more angular.
+// V2 + even = third-harmonic inside V2's softer palette.
+// V2 + odd  = user-selectable partial (CTRL) — rarest, reached only
+//             when path and orbit are both in their "other" state.
+//
+// OFF is not used here — it's reserved for every non-C4 complex.
+// Relies on the engine's state-burst-before-voice emit order (see
+// src/engine.ts comment in onTurn) so state.path / state.tetra inside
+// this bridge already reflect the turn that is about to fire voice.
+function harmonicsForC4() {
+	if (state.path === "V1") {
+		return state.tetra === 1 ? HARMONICS.OCT_5TH : HARMONICS.OCT;
+	}
+	return state.tetra === 1 ? HARMONICS.CTRL : HARMONICS.OCT_5TH;
+}
+
 function setTremolo(target) {
 	if (state.tremolo === target) return;
 	if (HAS_TREMOLO_CC) {
@@ -559,6 +640,18 @@ function setTremolo(target) {
 		keyswitch(KS.TREMOLO, velForKS(KS.TREMOLO, target, 3));
 	}
 	state.tremolo = target;
+}
+
+// D35 — Bow Polyphony selector. CC-only path: the KS equivalent (B held +
+// another KS struck) can't be expressed by the bridge's velocity-select KS
+// helpers. When HAS_BOW_POLY_CC is false the write is skipped entirely and
+// whatever mode is saved in the SWAM preset stays put.
+function setBowPolyphony(target) {
+	if (state.bowPoly === target) return;
+	if (HAS_BOW_POLY_CC) {
+		ccForce(CC.BOW_POLYPHONY, BOW_POLY_CC_VAL[target]);
+	}
+	state.bowPoly = target;
 }
 
 // Generic velocity-select KS — picks vel via velForKS (overrides → even bands)
@@ -633,7 +726,11 @@ function scheduleRelease(dur) {
 		var cmx = COMPLEX[state.activeComplex];
 		var rampMs = (cmx && cmx.exprEnv && cmx.exprEnv.releaseRampMs) || 120;
 		var rm = REGIME_EXPR_RAMP_MULT[state.regime] || 1.0;
-		var fadeMs = Math.max(20, Math.round(rampMs * rm));
+		// Phase A1: face envelope scales release too — fade/drone stretch
+		// the fade, stab/burst clip it short, so the articulation of the
+		// tail matches the attack's character.
+		var faceRm = state.faceReleaseMult || 1.0;
+		var fadeMs = Math.max(20, Math.round(rampMs * rm * faceRm));
 
 		rampCC(CC.EXPRESSION, 0, fadeMs);
 		var offT = new Task(function() {
@@ -710,8 +807,17 @@ function setupComplex(complexType) {
 	// KS F#/G# were 2-band vel-selects with unreachable-Off; CC gives us
 	// clean access to every state including Off. Falls back to KS if the
 	// MIDI-Learn hasn't been done.
-	setHarmonics(cmx.harmonics);
+	// D37 — C4 rotates across OCT / OCT_5TH / CTRL per voice via
+	// harmonicsForC4(); every other complex reads the table baseline
+	// (always OFF).
+	var harmTarget = (complexType === 4) ? harmonicsForC4() : cmx.harmonics;
+	setHarmonics(harmTarget);
 	setTremolo(cmx.tremolo);
+
+	// D35 — Bow Polyphony per complex. Non-gliss = Double/Hold (rich
+	// two-string textures on overlapping turns); C5/C6/C7 = Mono Poly
+	// Release (single-line portamento for the gliss phrases).
+	if (cmx.bowPoly != null) setBowPolyphony(cmx.bowPoly);
 
 	// D32 — Tremolo Min Speed baseline (CC 80). Only written when this
 	// complex actually tremolos — no point nudging the SWAM slider for C1
@@ -764,7 +870,12 @@ function pickPitch(complexType) {
 		lo = Math.max(24, reg.lo + shift);
 		hi = Math.min(CELLO_MAX, reg.hi);
 	}
-	if (s.length === 0) return foldToRange(36 + state.transpose, lo, hi);
+	// Phase A1 — face's registerBias adds semitone transposition on top
+	// of path transpose. foldToRange then wraps back into the complex's
+	// register window, so the face never forces unreachable pitches — it
+	// just biases which octave of the fold we land in.
+	var faceTr = state.faceTranspose || 0;
+	if (s.length === 0) return foldToRange(36 + state.transpose + faceTr, lo, hi);
 
 	var pitch;
 	switch (complexType) {
@@ -787,7 +898,7 @@ function pickPitch(complexType) {
 		default:
 			pitch = s[0];
 	}
-	return foldToRange(pitch + state.transpose, lo, hi);
+	return foldToRange(pitch + state.transpose + faceTr, lo, hi);
 }
 
 // D9 fix: V2 can reach the cello's lowest octave. Accepts optional per-
@@ -930,20 +1041,21 @@ function phraseC4(vel, dur) {
 	scheduleRelease(dur);
 }
 
-// C5: wild gliss — 2 notes ≥5 semis apart; fff adds compound gliss points.
+// C5: wild gliss — dense salvo of ≥8-semi leaps spanning the full cello range.
 // First note establishes attack (humanVel); every overlap after uses
 // glissNote (low vel) so SWAM engages portamento instead of slurred legato.
 function phraseC5(vel, dur) {
-	var segments = intensityDensity() >= 1.3 ? rrand(2, 3) : 1;
+	var count = phraseCount(4, 9);
+	var MIN_LEAP = 8;
 	var lastPitch = pickPitch(5);
 	legatoNote(humanPitch(lastPitch), humanVel(vel));
-	for (var i = 0; i < segments; i++) {
+	for (var i = 0; i < count; i++) {
 		(function(idx) {
-			var t = Math.round((idx + 1) / (segments + 1) * dur * 1000 * 0.8);
+			var t = Math.round((idx + 1) / (count + 1) * dur * 1000 * 0.92);
 			scheduleAt(t, function() {
 				var p = pickPitch(5);
 				var attempts = 0;
-				while (Math.abs(p - lastPitch) < 5 && attempts < 10) { p = pickPitch(5); attempts++; }
+				while (Math.abs(p - lastPitch) < MIN_LEAP && attempts < 12) { p = pickPitch(5); attempts++; }
 				glissNote(humanPitch(p));
 				lastPitch = p;
 			});
@@ -1011,8 +1123,114 @@ function phraseC8(vel, dur) {
 // ================================================================
 // VOICE EVENT — one per real turn (after D16 upstream fix)
 // ================================================================
+// ================================================================
+// FACE SIGNATURES (Phase A1) — gesture-type mapping per face.
+//
+// Source of truth: src/face-gesture.ts → FACE_SIGNATURES. This bridge
+// mirrors every field (minus panBias — SWAM is mono → stereo; pan lives
+// on the SC side). The ENV_PROFILE / ART_OFF_VEL / MOTION_NUDGE tables
+// below are SWAM-specific rendering placeholders for envelope /
+// articulation / motion. Vocabulary is canonical in TS; rendering
+// multipliers are backend-specific (SC will get its own when it lands).
+// ================================================================
+var FACE_MAP = {
+	"U":  { durationBias: 0.7, registerBias:  0.8, envelope: "pluck", articulation: "attack",    motion: "up" },
+	"U'": { durationBias: 1.4, registerBias:  0.8, envelope: "fade",  articulation: "release",   motion: "down" },
+	"D":  { durationBias: 0.6, registerBias: -0.8, envelope: "stab",  articulation: "attack",    motion: "down" },
+	"D'": { durationBias: 1.8, registerBias: -0.8, envelope: "drone", articulation: "sustained", motion: "static" },
+	"L":  { durationBias: 1.3, registerBias:  0.0, envelope: "swell", articulation: "sustained", motion: "up" },
+	"L'": { durationBias: 1.3, registerBias:  0.0, envelope: "fade",  articulation: "release",   motion: "down" },
+	"R":  { durationBias: 0.5, registerBias:  0.0, envelope: "stab",  articulation: "attack",    motion: "static" },
+	"R'": { durationBias: 0.6, registerBias:  0.0, envelope: "burst", articulation: "iterative", motion: "oscillate" },
+	"F":  { durationBias: 1.2, registerBias:  0.3, envelope: "swell", articulation: "sustained", motion: "up" },
+	"F'": { durationBias: 1.2, registerBias:  0.3, envelope: "swell", articulation: "sustained", motion: "down" },
+	"B":  { durationBias: 0.9, registerBias: -0.3, envelope: "pluck", articulation: "attack",    motion: "static" },
+	"B'": { durationBias: 1.6, registerBias: -0.3, envelope: "drone", articulation: "sustained", motion: "oscillate" }
+};
+
+// Envelope → expression-envelope shaping multipliers.
+//   peakMult     scales state.peakExpr → loudness of the phrase peak
+//   attackMult   scales cmx.exprEnv.attackRampMs → rise speed
+//   releaseMult  scales cmx.exprEnv.releaseRampMs → fade speed
+// First-draft numbers, deliberately modest so no single face gets lost
+// or overpowers its siblings. Retune against the live sound once the
+// twelve are audible in sequence.
+var ENV_PROFILE = {
+	"pluck": { peakMult: 1.00, attackMult: 0.3, releaseMult: 0.7 },  // fast rise, quick decay
+	"stab":  { peakMult: 1.15, attackMult: 0.15, releaseMult: 0.6 }, // immediate punch
+	"swell": { peakMult: 0.90, attackMult: 2.0, releaseMult: 1.3 },  // slow rise
+	"drone": { peakMult: 0.80, attackMult: 1.5, releaseMult: 1.5 },  // sustained, soft
+	"fade":  { peakMult: 1.00, attackMult: 1.0, releaseMult: 2.2 },  // long tail
+	"burst": { peakMult: 1.10, attackMult: 0.25, releaseMult: 0.5 }  // punchy, short
+};
+
+// Articulation → note-off velocity override. SWAM maps note-off vel to
+// natural release character: higher = shorter/harder cutoff. Overrides
+// state.noteOffVel (turn-rate driven) for face-originated phrases;
+// non-face moves fall back to the rate default.
+var ART_OFF_VEL = {
+	"attack":    110,  // short, hard stop
+	"sustained":  45,  // long, natural
+	"release":    30,  // very long tail
+	"iterative":  95   // punchy, subdivided
+};
+
+// Motion → pitch-transposition nudge (semitones, layered on registerBias).
+// "oscillate" alternates per-turn to produce the swing implied by the name;
+// resolved at handleFace time using state.turnCount parity.
+var MOTION_NUDGE = {
+	"static":     0,
+	"up":         2,
+	"down":      -2,
+	"oscillate":  0   // dynamic — computed in handleFace
+};
+
+// Called on /xk/face BEFORE /xk/voice — relay/osc-output.ts enforces that
+// ordering (voiceToOsc emits face first). Non-face moves (e.g. diagram
+// advance) skip the face message entirely; unknown strings also clear to
+// neutral so the bridge stays robust to future engine changes.
+function handleFace(face) {
+	var sig = FACE_MAP[face];
+	if (!sig) {
+		state.face = null;
+		state.faceDurationBias = 1.0;
+		state.faceTranspose = 0;
+		state.faceEnvelope = null;
+		state.faceArticulation = null;
+		state.faceMotion = null;
+		state.faceEnvProfile = null;
+		state.faceOffVelOverride = null;
+		state.faceReleaseMult = 1.0;
+		return;
+	}
+	state.face = face;
+	state.faceDurationBias = sig.durationBias;
+	state.faceEnvelope = sig.envelope;
+	state.faceArticulation = sig.articulation;
+	state.faceMotion = sig.motion;
+
+	var profile = ENV_PROFILE[sig.envelope] || null;
+	state.faceEnvProfile = profile;
+	state.faceReleaseMult = profile ? profile.releaseMult : 1.0;
+
+	var offVel = ART_OFF_VEL[sig.articulation];
+	state.faceOffVelOverride = (offVel != null) ? offVel : null;
+
+	var spread = (state.path === "V2") ? 6 : 12;
+	var nudge = MOTION_NUDGE[sig.motion] || 0;
+	if (sig.motion === "oscillate") {
+		nudge = (state.turnCount % 2 === 0) ? 2 : -2;
+	}
+	state.faceTranspose = Math.round(sig.registerBias * spread) + nudge;
+}
+
 function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	if (state.frozen) return;
+
+	// Phase A1 — face identity scales the phrase's duration uniformly.
+	// All downstream timers (expression envelope, D39 tremolo ramp,
+	// release scheduling, phrase-internal rebows) read the scaled value.
+	duration = duration * (state.faceDurationBias || 1.0);
 
 	state.turnCount++;
 	state.density = density;
@@ -1053,9 +1271,14 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	state.baseExpr = intMap.expr;
 	var baseVel = intMap.vel;
 
-	// Path V2 scales peak Expression by 0.7 (Xenakis V2 = softer palette)
+	// Path V2 scales peak Expression by 0.7 (Xenakis V2 = softer palette).
+	// Phase A1 envelope placeholder: state.faceEnvProfile.peakMult shapes
+	// loudness to the signature's envelope archetype (stab/burst = louder,
+	// swell/drone = softer), so the twelve faces sit at subtly different
+	// dynamic levels even when the intensity label is identical.
 	var pathScale = (state.path === "V2") ? 0.7 : 1.0;
-	state.peakExpr = clamp(intMap.expr * pathScale, 0, 127);
+	var envPeakMult = (state.faceEnvProfile && state.faceEnvProfile.peakMult) || 1.0;
+	state.peakExpr = clamp(intMap.expr * pathScale * envPeakMult, 0, 127);
 
 	// Intensity-driven bow pressure: fff digs, p lightens. Rebases the
 	// deviation modulation in handleExprDev too (via state.bowPressureBase).
@@ -1063,20 +1286,39 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	state.bowPressureBase = bowBase;
 	ccForce(CC.BOW_PRESSURE, Math.round(bowBase));
 
-	// D32 — per-step tremolo rate (CC 80). Pre-composed baseline from the
-	// complex, modulated by intensity (fff faster) and path (V2 × 0.85
-	// slower, matching the softer palette), plus ±8% per-voice jitter so
-	// the slider breathes visibly even when intensity/path hold steady
-	// (without jitter the same value ships every turn and the slider looks
-	// frozen). Gated on tremolo state so the slider only moves on complexes
-	// that actually tremolo.
-	if (cmx.tremoloRate != null && cmx.tremolo !== TREMOLO.OFF) {
+	// D39 — per-phrase stochastic tremolo rate envelope. At voice onset,
+	// roll a die and commit to one of three gestures for the whole phrase:
+	//   1/3 slow → fast ramp  (tremolo accelerates over the phrase)
+	//   1/3 fast → slow ramp  (tremolo decelerates over the phrase)
+	//   1/3 steady at base    (classic fixed rate, intensity×path-scaled)
+	// Ramps use rampCC (same slew limiter as CC 11 Expression, D33) so the
+	// slider walks smoothly at 15 ms ticks. Replaces D38's 60 Hz spin+breath
+	// modulator, which moved the slider too subtly (±12 amplitude) and
+	// jittered on every spin bump without producing a coherent gesture. The
+	// per-voice ±8% jitter (D32) is also dropped — the ramp IS the motion,
+	// jitter only muddied the shape. The ramp runs across the phrase's full
+	// `duration * 1000` ms, so every re-bow inside phraseC8 / phraseC4 etc.
+	// reads whatever rate the ramp is currently walking through.
+	if (cmx.tremoloRate != null && cmx.tremolo !== TREMOLO.OFF && HAS_TREMOLO_RATE) {
+		cancelCCRamp(CC.TREMOLO_RATE);
+		var phraseMs = Math.max(duration * 1000, 250);
 		var pathTrem = (state.path === "V2") ? 0.85 : 1.0;
-		var jitter = 0.92 + Math.random() * 0.16;  // 0.92 – 1.08
-		var tremRate = clamp(cmx.tremoloRate * intMap.tremRateMult * pathTrem * jitter, 0, 127);
-		var tremOut = Math.round(tremRate);
-		ccForce(CC.TREMOLO_RATE, tremOut);
-		log("tremRate CC80 = " + tremOut + " (C" + complexType + " base=" + cmx.tremoloRate + ")");
+		var steadyBase = clamp(Math.round(cmx.tremoloRate * intMap.tremRateMult * pathTrem), 0, 127);
+		var SLOW = 20;
+		var FAST = 118;
+		var roll = Math.random();
+		if (roll < 1/3) {
+			ccForce(CC.TREMOLO_RATE, SLOW);
+			rampCC(CC.TREMOLO_RATE, FAST, phraseMs);
+			log("tremRamp C" + complexType + " slow→fast " + SLOW + "→" + FAST + " / " + phraseMs + "ms");
+		} else if (roll < 2/3) {
+			ccForce(CC.TREMOLO_RATE, FAST);
+			rampCC(CC.TREMOLO_RATE, SLOW, phraseMs);
+			log("tremRamp C" + complexType + " fast→slow " + FAST + "→" + SLOW + " / " + phraseMs + "ms");
+		} else {
+			ccForce(CC.TREMOLO_RATE, steadyBase);
+			log("tremRamp C" + complexType + " steady " + steadyBase);
+		}
 	}
 
 	// Defensive portamento re-assertion — written every voice event, not
@@ -1099,8 +1341,23 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	    " time=" + cmx.portamento.time + " bow=" + Math.round(bowBase) +
 	    " int=" + intensity);
 
-	// Schedule expression envelope for the phrase duration
-	scheduleExprEnvelope(state.peakExpr, cmx.exprEnv, Math.max(duration * 1000, 250));
+	// Schedule expression envelope for the phrase duration.
+	// Phase A1 envelope placeholder: if the face carries an envelope profile,
+	// clone cmx.exprEnv with attackRampMs scaled by profile.attackMult so
+	// pluck/stab/burst get a fast rise while swell/drone/fade rise slowly.
+	// Release scaling happens in scheduleRelease via state.faceReleaseMult.
+	var envForPhrase = cmx.exprEnv;
+	if (state.faceEnvProfile) {
+		envForPhrase = {
+			attack:        cmx.exprEnv.attack,
+			peak:          cmx.exprEnv.peak,
+			sustain:       cmx.exprEnv.sustain,
+			attackRampMs:  (cmx.exprEnv.attackRampMs  || 40)  * state.faceEnvProfile.attackMult,
+			sustainRampMs:  cmx.exprEnv.sustainRampMs,
+			releaseRampMs:  cmx.exprEnv.releaseRampMs
+		};
+	}
+	scheduleExprEnvelope(state.peakExpr, envForPhrase, Math.max(duration * 1000, 250));
 
 	// Dispatch phrase
 	switch (complexType) {
@@ -1338,23 +1595,22 @@ function handleSpell(name) {
 			break;
 
 		case "sune":
-			state.frozen = !state.frozen;
-			// Phase 6: sordino colors the freeze — muted, veiled sustain.
-			// v3.10 removed Sordino from the KS plane; drive via MIDI-Learned
-			// CC (default 68) so the preset routes it to the GUI Sordino
-			// toggle. Paired with the sustain pedal so held notes keep
-			// sounding under the mute.
-			state.sordinoOn = state.frozen;
-			if (state.frozen) {
-				ccForce(CC.SUSTAIN_PEDAL, 127);
-				ccForce(CC.SORDINO, 127);
-				log("FROZEN (sordino on)");
-			} else {
-				ccForce(CC.SUSTAIN_PEDAL, 0);
-				ccForce(CC.SORDINO, 0);
-				allNotesOff();
-				log("UNFROZEN (sordino off)");
-			}
+			// D37 — third-harmonic ping. Switches Harmonics → OCT_5TH
+			// (perfect-12th flageolet), plays one mid-register touch,
+			// then restores via setupComplex diff. Sune is 2-look OLL
+			// corners; the thinner/brighter flageolet gives the spell its
+			// first audible signature without colliding with oll-cross's
+			// OCT ping.
+			setHarmonics(HARMONICS.OCT_5TH);
+			var sunePitch = foldToRange(pickPitch(4));
+			noteOn(sunePitch, 55);
+			state.activeNotes.push(sunePitch);
+			scheduleAt(700, function() {
+				noteOff(sunePitch);
+				var idx = state.activeNotes.indexOf(sunePitch);
+				if (idx >= 0) state.activeNotes.splice(idx, 1);
+				if (state.activeComplex) setupComplex(state.activeComplex);
+			});
 			break;
 
 		case "anti-sune":
@@ -1371,8 +1627,24 @@ function handleSpell(name) {
 			break;
 
 		case "niklas":
-			// Detection stub — audio effect TBD (see revision_roadmap.md D19).
-			log("niklas detected (effect TBD)");
+			// D37 — "4 Control" harmonic ping. Layered on top of the
+			// engine-side path V1↔V2 toggle (see src/engine.ts onTurn).
+			// CTRL is the rarest harmonic state (the user-selectable
+			// partial whose exact pitch is whatever the SWAM preset has
+			// baked into the Harmonics knob), so the spell marks itself
+			// with a single distinct flageolet touch before restoring.
+			// pickPitch(4) - 3 nudges the fingering slightly lower so
+			// the partial lands inside the cello's audible band.
+			setHarmonics(HARMONICS.CTRL);
+			var niklasPitch = foldToRange(pickPitch(4) - 3);
+			noteOn(niklasPitch, 52);
+			state.activeNotes.push(niklasPitch);
+			scheduleAt(900, function() {
+				noteOff(niklasPitch);
+				var idx = state.activeNotes.indexOf(niklasPitch);
+				if (idx >= 0) state.activeNotes.splice(idx, 1);
+				if (state.activeComplex) setupComplex(state.activeComplex);
+			});
 			break;
 	}
 }
@@ -1442,6 +1714,7 @@ function anything() {
 	if (addr === "/xk/voice") {
 		handleVoice(args[0], args[1], args[2], args[3], args[4]);
 	}
+	else if (addr === "/xk/face")     { handleFace(args[0]); }
 	else if (addr === "/xk/expr/tilt")     { handleExprTilt(args[0]); }
 	else if (addr === "/xk/expr/spin")     { handleExprSpin(args[0]); }
 	else if (addr === "/xk/expr/dev")      { handleExprDev(args[0]); }
@@ -1470,6 +1743,7 @@ function bang() {
 	// our model on first voice event after reset (D27).
 	state.harmonics  = null;
 	state.tremolo    = null;
+	state.bowPoly    = null;
 	state.gestureMode = null;
 	state.altFing    = null;
 	state.keepBowDir = false;
@@ -1500,6 +1774,17 @@ function bang() {
 	state.sordinoOn = false;
 	state.turnRate = 0;
 	state.noteOffVel = 64;
+	// Phase A1 — clear face state so the first post-reset voice event
+	// renders from neutral until /xk/face lands.
+	state.face = null;
+	state.faceDurationBias = 1.0;
+	state.faceTranspose = 0;
+	state.faceEnvelope = null;
+	state.faceArticulation = null;
+	state.faceMotion = null;
+	state.faceEnvProfile = null;
+	state.faceOffVelOverride = null;
+	state.faceReleaseMult = 1.0;
 	// KS sync guard: first 3 voice events after reset force-write KS so
 	// SWAM aligns with our selector model even if the preset or a prior
 	// session drifted its state (D28).
@@ -1537,6 +1822,10 @@ function bang() {
 	// reaches Off cleanly; KS fallback cannot (F#/G# 2-band vel-select).
 	setHarmonics(HARMONICS.OFF);
 	setTremolo(TREMOLO.OFF);
+
+	// D35 — Bow Polyphony hard default. setupComplex overrides to
+	// MONO_POLY_RELEASE for gliss complexes.
+	setBowPolyphony(BOW_POLY.DOUBLE_HOLD);
 
 	log("reset");
 }

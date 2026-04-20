@@ -4,6 +4,8 @@ Converged plan for rebuilding `max/xk_swam.js` against SWAM Cello 3's actual con
 
 This document is the single source of truth for the SWAM-bridge refactor. Update it as phases complete or new findings change the plan.
 
+> **Status (2026-04-18): refactor COMPLETE.** Diagnoses D1–D39 are all resolved and shipped. No further SWAM-specific refactor work is planned. Engine-level architectural work continues under the Temporal Identity framework — see `docs/todo.md`. New bridge changes required by Phase A1 (face-gesture dispatch) or Phase B (phrase-library playback) are tracked in those phases, not as new D-entries.
+
 ---
 
 ## Why this refactor
@@ -52,8 +54,8 @@ Nothing in `xk_swam.js` will work until these are set. One-time operations in th
 - Attack Control = `expression` or `mix vel. expr.` (CC 11 envelope drives attack character; see feature-flag note for CC 75)
 - KS MIDI Channel = `2` (matches `KS_CH` in `max/xk_swam.js`)
 
-**Play Modes → Left Hand page** *(confirmed necessary 2026-04-16; see D34)*
-- **Bow Polyphony = `Mono`** — NOT `Poly` / `Auto`. With Poly/Auto, overlapping notes are split into a two-voice chord and portamento is never engaged, no matter how correctly Portamento Mode / Control / Time / velocity are set. The bridge's gliss phrases (C5/C6/C7) depend on low-velocity overlap → slide; in Poly/Auto they are silently reinterpreted as chords.
+**Play Modes → Left Hand page** *(D35 supersedes D34; 2026-04-18)*
+- **Bow Polyphony selector → MIDI Learn → CC 81.** Bridge now drives polyphony per-complex: default `Double/Hold` for C1–C4 and C8 (two-string textures on overlapping turns), `Mono Poly Release` for gliss complexes C5/C6/C7 (single-line portamento). The preset's saved default no longer matters since every `setupComplex` call re-asserts. The D34 rule — that non-Mono modes split overlapping notes into chord voices and kill portamento — still applies and is why the gliss complexes override to Mono Poly Release.
 
 **Sanity check**: send CC 11 → Expression responds; CC 1 → Vibrato Depth responds. If not, MIDI-Learn them.
 
@@ -313,7 +315,7 @@ This is the legitimate home for the performer's "spin threshold" instinct: **it 
 
 **Relationship to D3**: D18 is the **transmission layer** (should this MIDI write go out at all?). D3's dead zone is the **musical mapping layer** (how does spin shape the vibrato curve?). They operate on different thresholds (D18 at 0.02, D3 at 0.15) and must both be applied — deleting either leaves audible artifacts. D18 protects SWAM's smoothers during rest; D3 keeps slow hand movement from producing tiny vibrato modulations.
 
-### D19 — Spell book addition: Niklas (commutator family)
+### D19 — Spell book addition: Niklas (commutator family) *(detection RESOLVED earlier; effect RESOLVED 2026-04-18 — see D36)*
 
 **Defect**: Current spell book is CFOP-only (6 spells). The commutator family is unrepresented. Niklas — `R U' L' U R' U' L` (7 moves) — is the archetypal 3-cycle commutator and the conceptual counterweight to CFOP in the cube-theory space the project draws on.
 
@@ -415,6 +417,166 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 - Stale `setSectionSize` helper deleted; sune freeze still uses `CC.SUSTAIN_PEDAL` (untouched by migration).
 
 **SWAM preset additions** (see Prerequisites): pin Gesture Mode at instantiation; audit that no sample contains a stuck `KS A#` (page-2 unassigned) from the old code path.
+
+### D35 — Bow Polyphony per-complex (default Double/Hold, gliss = Mono Poly Release) *(RESOLVED 2026-04-18)*
+
+**Defect**: After D34, Bow Polyphony was pinned to `Mono` in the SWAM preset so C5–C7 glissandi would engage. Side-effect: C1–C4 and C8 lost the musicality of overlapping turns producing natural two-string textures — every turn becomes a hard monophonic cut even when that isn't what the complex wants. Performer request: let non-gliss complexes do polyphonic overlap, keep the gliss complexes on a strict monophonic line.
+
+**Root cause**: Bow Polyphony was a preset-level constant, not a bridge-driven param. The v3.10 PDF (p. 102) states every KS-controlled param is also addressable via Controller Mapping — right-click → MIDI Learn → CC. The bridge already uses this path for Harmonics (CC 78) and Tremolo (CC 79) where KS was inadequate; Bow Polyphony fits the same pattern (plus its KS form `B + {C / C# / D / D# / E}` is a page-modifier combo the bridge's velocity-select helpers can't express anyway).
+
+**Fix**:
+
+1. **Preset**: right-click Bow Polyphony selector (Play Modes → Left Hand) → MIDI Learn → CC 81 → save preset. Supersedes D34's "pin to Mono" instruction; the saved default no longer matters since the bridge re-asserts on every `setupComplex`.
+2. **Code (`max/xk_swam.js`)**:
+   - New `CC.BOW_POLYPHONY = 81`, feature flag `HAS_BOW_POLY_CC = true` (flip false to skip writes — the KS-held-modifier fallback isn't implemented because velocity-select helpers can't express it).
+   - New `BOW_POLY` enum (`MONO_STRING_CROSSING:0 / MONO_POLY_RELEASE:1 / DOUBLE:2 / DOUBLE_HOLD:3 / AUTO:4`) and `BOW_POLY_CC_VAL` band-center map (5 equal-width CC bands at 12 / 38 / 64 / 89 / 115).
+   - New `setBowPolyphony(target)` helper — diff-fire via `state.bowPoly`, same pattern as `setHarmonics` / `setTremolo`.
+   - `COMPLEX[n].bowPoly` field: `MONO_POLY_RELEASE` for C5 / C6 / C7 (gliss complexes), `DOUBLE_HOLD` for C1–C4 and C8 (rich two-string textures on overlapping turns).
+   - `setupComplex()` calls `setBowPolyphony(cmx.bowPoly)` after `setHarmonics` / `setTremolo`.
+   - `bang()` resets `state.bowPoly = null` and writes `DOUBLE_HOLD` as the hard initial state so setupComplex overrides land cleanly when a gliss complex is selected.
+
+**Why Double/Hold vs Double**: Double/Hold latches the first note's string while the next is struck on a different string — matches how a cellist holds a chord with the bow crossing strings. Double without Hold ends each voice at note-off and cuts the texture short. For overlapping XenaKube turns, Double/Hold produces the smoother lingering-chord feel. Flip the per-complex `bowPoly` field to `BOW_POLY.DOUBLE` if hanging string voices across phrase boundaries become a problem.
+
+**Verification**: land on any non-gliss complex → overlapping turns audibly sustain as a two-string texture rather than each note cutting the previous. Land on C5 / C6 / C7 → gliss phrases still slide (D34 prerequisite preserved via `MONO_POLY_RELEASE` which keeps the single monophonic line the portamento engine needs). The Bow Polyphony selector in the SWAM GUI should visibly jump between option 3 (Double/Hold) and option 1 (Mono Poly Release) as complexes change.
+
+### D39 — Tremolo rate modulation: replace 60 Hz spin+breath with per-phrase stochastic envelope *(RESOLVED 2026-04-18)*
+
+**Defect**: D38 proved CC 80 writes are honoured mid-note (slider visibly walked, rate audibly moved), but the performer reported the result as "extremely jittery and doesn't really do much." Two structural problems in D38's formula `base + spinEMA×30 + 12·sin(0.25Hz·t)`:
+
+1. **Jitter**: `spinEMA × 30` reacts to every spin bump at 60 Hz. The cube almost always has some residual spin > 0.02 (Kalman-filtered sensor noise), so the rate wobbled constantly without coherent shape.
+2. **Shallow excursion**: the 0.25 Hz breath only had ±12 amplitude on a 0–127 scale (≈10%). Not enough to read as a musical *gesture*; it sounded like nervous wobble rather than accelerando/rallentando.
+
+The user's actual want, stated explicitly: "every tremolo [phrase] to result in three different, stochastic ways; 1) tremolo starts slow and speeds up gradually; 2) tremolo starts fast and slows down gradually; 3) tremolo is at some steady rate." A **phrase-level shape**, not a continuous performer-input modulator.
+
+**Root cause**: D38 chose the wrong layer. CC 80 doesn't want a 60 Hz gyro-reactive modulator — it wants a *compositional envelope* scoped to the phrase, just like CC 11 Expression already has via `scheduleExprEnvelope`.
+
+**Fix**: new per-phrase stochastic envelope in `handleVoice`, replacing the D32 onset jitter block *and* removing D38's `updateTremoloRate` entirely (the call from `handleExprSpin` is dropped).
+
+At voice onset on a tremolo-active complex (`cmx.tremolo !== OFF && HAS_TREMOLO_RATE`):
+
+```
+cancelCCRamp(CC.TREMOLO_RATE)           // interrupt any in-flight ramp
+phraseMs = max(duration * 1000, 250)
+roll = Math.random()
+if roll < 1/3:   ccForce(SLOW); rampCC(TREMOLO_RATE, FAST, phraseMs)   // slow → fast
+else if < 2/3:   ccForce(FAST); rampCC(TREMOLO_RATE, SLOW, phraseMs)   // fast → slow
+else:            ccForce(steadyBase)                                   // steady
+```
+
+`SLOW = 20`, `FAST = 118`, `steadyBase = cmx.tremoloRate × intMap.tremRateMult × pathTrem` (clamped). Span is wide on purpose — each tremolo phrase should be recognisable as ascending, descending, or static by ear. `rampCC` reuses the D33 slew limiter (15 ms ticks), the same code that handles CC 11 between envelope stages.
+
+**Why this works where D38 didn't**:
+
+- **Coherent gesture per phrase**: every C8 (or other tremolo-active) voice commits to one of three shapes at onset. The re-bow strokes inside `phraseC8` all read the same walking rate, so the bowing sounds like one continuous accelerando/rallentando/steady line.
+- **Stochastic but legible**: three outcomes equally weighted → audibly variable across the performance but each instance is internally coherent.
+- **Reuses proven machinery**: `rampCC` already powers the D33 expression stair-step fix; no new task plumbing or scheduling edge-cases.
+
+**Dropped mechanisms**:
+
+- **D32 ±8% per-voice jitter**: removed. The ramp IS the motion; jitter only muddied the shape.
+- **D38 `updateTremoloRate`**: removed (function deleted, call from `handleExprSpin` removed). Gyro (`spinEMA`) no longer influences tremolo rate at all. If we want performer input on rate later, it should layer on top of the ramp, not replace it.
+
+**Verification**:
+
+- Trigger several C8 voices in a row on a still cube: roughly 1/3 should audibly accelerate, 1/3 decelerate, 1/3 hold steady. The SWAM `Tremolo Min Speed` slider visibly walks for the ramp cases, stays put on steady.
+- Rapid turn → new voice mid-phrase → previous ramp cancels cleanly (via `cancelCCRamp`) and the new phrase starts its own roll. No stuck ramp tasks.
+- Non-tremolo complexes (C1–C7): no CC 80 traffic at all, cache untouched. Confirm with `ks_logger` pass-through.
+
+**What's left**: no gyro coupling at all on CC 80 for now. If the performer wants to bias the roll (e.g. burst regime always picks fast→slow, contemplative regime always picks slow→fast), that's an easy follow-up — roll weights become regime-dependent. Similarly, the SLOW/FAST endpoints could be intensity-scaled so `fff` gets wider excursions than `p`. Scope left open until the user has lived with the uniform 1/3 roll for a session.
+
+### D38 — Tremolo rate frozen during sustained note (CC 80 only written at voice onset) *(SUPERSEDED by D39, 2026-04-18)*
+
+**Note 2026-04-18**: D38's continuous 60 Hz modulator is removed. The performer-facing problem (CC 80 static during held notes) is better solved by D39's per-phrase envelope than by gyro-driven continuous modulation. D38's reachability finding — CC 80 *can* be written mid-note and SWAM responds in real-time — is the foundation D39 builds on. Original D38 entry preserved below for historical context.
+
+**Defect**: Performer report — "I have still yet to hear a tremolo changing its speed DURING the tremolo, which we have confirmed works when performed manually (dragging the slider for `Tremolo Min Speed` under Play Modes → Right Hand)." Manual slider drag proves SWAM honours CC 80 mid-note; the bridge just never sends it after the voice event.
+
+**Root cause**: D32 introduced per-voice Tremolo Min Speed modulation (intensity × path × ±8 % jitter) via `ccForce(CC.TREMOLO_RATE, …)` inside `handleVoice` — a **one-shot at voice onset**. For a C8 phrase that sustains 2–4 s across multiple bow re-strokes, the slider latches at the onset value and stays there for the whole note. None of the four continuous-expression handlers (`handleExprTilt/Spin/Dev/Scramble`) touches CC 80, so there is no 60 Hz writer. Additionally, `shouldTransmit`'s spin deadband (<0.02 for ≥200 ms → suppress) would have blocked anything placed naively inside `handleExprSpin`, which is the exact held-cube scenario where a performer sustains a tremolo note.
+
+**Fix**: new continuous `updateTremoloRate(now)` modulator in `max/xk_swam.js`, called from `handleExprSpin` **before** `shouldTransmit` so the spin deadband doesn't freeze it.
+
+Formula (clamped 0–127, written via cached `cc()` so unchanged rounded ints collapse at the MIDI level):
+
+```
+base   = cmx.tremoloRate × intMap.tremRateMult × (path === "V2" ? 0.85 : 1.0)
+spin   = state.spinEMA × 30
+breath = 12 · sin(2π · 0.25 Hz · now_ms/1000)
+CC 80 = clamp(base + spin + breath, 0, 127)
+```
+
+Gated on `cmx.tremoloRate != null && cmx.tremolo !== TREMOLO.OFF && HAS_TREMOLO_RATE`, so only complexes with tremolo actually move the slider. Spin drives rapid, gesture-coupled speed-ups; the 0.25 Hz sine breath keeps the rate audibly alive even when the cube is held perfectly still — the core failure mode the user described.
+
+The D32 per-voice jitter is preserved as an immediate onset perturbation before the first 60 Hz tick arrives, even though the continuous modulator subsumes its "slider never looks frozen" intent.
+
+**Verification**:
+- Trigger a sustained C8 voice on a still cube → listen for the shiver pulse speeding up and slowing down at ~4 s period (the 0.25 Hz breath). Slider should visibly walk in the SWAM GUI, not freeze.
+- Fast-rotate the cube during a C8 note → shiver speeds up proportionally to spin, decays back on release (spinEMA α = 0.08, ~400 ms settle).
+- Switch to a non-tremolo complex (C1–C3, C5–C7) → CC 80 writes stop cold, no traffic. Cross-check with `ks_logger` if needed.
+- With `HAS_TREMOLO_RATE = false` (preset without CC 80 MIDI-Learn) → `cc()` no-ops via `hasCC`, zero regression.
+
+**What's left**: tilt-driven rate was considered but rejected (conflicts with D4 Bow Position timbral sweep — we'd double-book tilt). A future expansion could modulate via the Expression envelope position (e.g. tremolo accelerates into the release stage) but that's additive, not needed for the user's ask.
+
+### D37 — SWAM Harmonics: only 2 of 4 modes reached the sound path *(RESOLVED 2026-04-18)*
+
+**Defect**: Performer report — "only works with harmonics option 2 or off; 3 and 4 (`4 Control`) all sound different and should be utilized." `COMPLEX[4].harmonics` was hard-coded to `HARMONICS.OCT` (option 2, 2nd-harmonic flageolet), every other complex was `HARMONICS.OFF`, and the sole harmonic-writing spell (`oll-cross`) also used `OCT`. So SWAM's `OCT_5TH` (option 3, perfect-12th) and `CTRL` (option 4, user-selectable partial) were dead state — the bridge's `setHarmonics()` + `HARMONICS_CC_VAL` + `HARMONICS` enum had all 4 codes wired, nothing called them.
+
+**Root cause**: D31 resolved "Harmonics/Tremolo KS never reach all states" by routing through CC 78 (SWAM's documented CC path, reaches every state including `4 Control` that KS cannot per the SWAM v3.10 manual), but the COMPLEX table wasn't updated to exercise the new reachability. The field was intentionally left at `OCT` because of an earlier note on OCT_5TH being "brittle at the cello's high register" — a conservative default from a time when OCT_5TH silently mis-fired into 2nd-harmonic via the old KS F# 2-band vel-select.
+
+**Fix**: per-voice rotation for C4, using composition state that's already flowing through the bridge.
+
+1. **`max/xk_swam.js`** — new `harmonicsForC4()` keyed on `state.path` × `state.tetra`:
+
+        tetra 0 (even)    tetra 1 (odd)
+   V1   OCT                OCT_5TH
+   V2   OCT_5TH            CTRL
+
+   V1 + even = baseline flageolet; V1 + odd = third-harmonic (brighter); V2 + even = third-harmonic in V2's softer palette; V2 + odd = CTRL (the user-selectable partial — rarest, reached only when both axes are in their "other" state). `setupComplex` calls it for `complexType === 4`, every other complex reads `cmx.harmonics` (always OFF). The `COMPLEX[4].harmonics` field is preserved as a safe fallback but unused on the live path.
+
+2. **Spell pings** — two new `handleSpell` cases showcase the previously-silent modes as standalone moments, each following the `oll-cross` pattern (setHarmonics → single noteOn → scheduleAt → restore via setupComplex diff, idempotent):
+   - `sune` → `HARMONICS.OCT_5TH` ping (perfect-12th flageolet). Replaces the post-freeze-removal "effect TBD" stub; sune (2-look OLL corners) now has its first audible signature.
+   - `niklas` → `HARMONICS.CTRL` ping, layered on top of D36's engine-side V1↔V2 path toggle. Two concurrent effects on one spell: structural path flip + timbral flash. `pickPitch(4) - 3` nudges the fingering lower so the user-selectable partial lands inside the cello's audible band (the exact pitch depends on whatever partial the SWAM preset has baked into the Harmonics knob).
+
+3. **Engine ordering fix (`src/engine.ts`)** — required side-effect: `onTurn` now emits the state burst BEFORE `/xk/voice`, not after. Previous order let the voice listener fire first, so downstream consumers received `/xk/voice` before the corresponding `/xk/path` / `/xk/tetra` state burst — `handleVoice` in `xk_swam.js` read `state.path` and `state.tetra` reflecting turn N-1, and the rotation would have fired one turn behind live state. Swap is safe: voice output is still computed in the same place (line 209-211), emission just comes after emitState. No behavior change for any consumer that doesn't cross-reference post-turn state with the voice event.
+
+**Verification**:
+- Cube connected + on C4 cloud (trigger C4 by routing a vertex into it): toggling the dashboard's `path` row between V1 and V2 should swap the audible harmonic flavour. Moves that flip the tetra orbit should likewise swap flavour on subsequent C4 voices. All three non-OFF states should be reachable by running through the 4 path×tetra combinations.
+- Fire `sune` (`R U R' U R U2 R'`) on a silent cube → single flageolet touch with an audibly different pitch character than the `oll-cross` ping (OCT_5TH sounds as a perfect-12th rather than an octave above the played pitch).
+- Fire `niklas` (`R U' L' U R' U' L`) → single CTRL-mode touch, and the subsequent voices audibly shift (Expression × 0.7 on V2) because path also flipped.
+- With `ks_logger` pass-through active: each C4 voice on a different path/tetra combo should produce one CC 78 write per unique harmonic target (value 48 / 80 / 112 for OCT / OCT_5TH / CTRL), diffed out on repeats.
+
+**What's left on CTRL**: the exact partial that `4 Control` mode plays is whatever the SWAM preset's Harmonics knob is baked to. A follow-up option is to MIDI-Learn the Harmonics knob itself to a new CC and modulate the partial continuously (would supersede the KS-equivalent selector entirely, per the v3.10 manual's note that Key Switches cannot reach the 4th harmonic). Out of scope for D37 — the user's ask was "utilize all four modes," which rotating into CTRL at all achieves.
+
+### D36 — Path V1 ↔ V2 axis wired but unreachable *(RESOLVED 2026-04-18)*
+
+**Defect**: Performer observation — "I don't think I've ever seen path become V2." `EngineMode.path` is read by `getTransformedVertices` (V1/V2 have different D×G×U balances per Xenakis), broadcast as `/xk/path`, and honoured by `max/xk_swam.js` (V2 scales Expression ×0.7, tremolo rate ×0.85, widens the pitch-fold window). End-to-end wired, three consumers, zero triggers.
+
+**Root cause**: three-way gap.
+1. `src/engine.ts` initializes `mode: { path: 'V1' }` and never reassigns it outside `setMode`.
+2. `src/mode-manager.ts` handles spells but only mutates `PerformanceMode.{voiceMode,palette,variant,frozen}` — `EngineMode` lives on the engine, not the mode manager, so no spell effect could reach `path` even if one wanted to.
+3. `public/dashboard.html` does have a V1/V2 `<select id="path-select">` with a working change handler that posts `{ type: 'set_mode', path }` over WS, and `relay.js:528-535` forwards it to `engine.setMode` correctly — but the `<select>` lives inside the `<div class="ovl-legacy">` block, which is hidden per the dashboard's HUD redesign. The code path worked; the control was just invisible.
+
+Net effect: the path axis was dead state from the performer's view, and V2's softer-palette branches in `xk_swam.js` (`INTENSITY_MAP` × 0.7, V2 register shift, tremolo-rate multiplier) never ran in live performance.
+
+**Fix**: dashboard + engine, both halves.
+
+1. **Dashboard (`public/dashboard.html`)** — make the bottom-left State panel's `path` row clickable:
+   - CSS: new `.state-val.clickable { cursor:pointer; user-select:none; }` with an accent-colour hover glow.
+   - HTML: `<span class="state-val clickable" id="s-path" title="click to toggle V1 / V2 (also toggled by niklas spell)">V1</span>`.
+   - JS: click handler reads current `textContent`, sends `wsSend({ type:'set_mode', path: other })`. Matches the idiom the hidden `pathSelect` already used.
+   - `updateState` mirrors `state.path` back into both the visible toggle and the hidden legacy `<select>` (using `document.getElementById('path-select')` to dodge TDZ if updateState ever runs before the module-scope `const`). Engine remains the source of truth for path value regardless of which UI flipped it.
+
+2. **Engine (`src/engine.ts`)** — wire `niklas` to toggle path. Inline in `onTurn` right after `modeManager.applySpell(match)`:
+   ```ts
+   if (match.spell.effect === 'niklas') {
+     this.mode.path = this.mode.path === 'V1' ? 'V2' : 'V1';
+   }
+   ```
+   Kept in the engine (not ModeManager) because `EngineMode` is the engine's owned state; adding a shim on ModeManager just to mutate engine state would break the separation. `src/mode-manager.ts` niklas case becomes a comment-only stub pointing to the engine.
+
+**Why niklas**: D19 left the spell with "effect TBD — three candidates: C-cube 3-cycle / canon echo / commutator latch." Path toggle is a cleaner fit than any of those: (a) niklas is the archetypal corner 3-cycle, and path selection literally rotates the D×G×U assignment across vertices — a structural axis change matches a structural spell. (b) Zero state dependencies beyond engine.mode, no new CC traffic, no bridge changes. (c) Makes the D19 detection wiring pay off in sound.
+
+**Verification**: with the cube connected, (a) click the `path` row in the State panel — value flips V1 ↔ V2, confirmed by the Expression peak audibly dropping ≈30% on V2 and the pitch floor widening an octave down. (b) Execute niklas (`R U' L' U R' U' L`) — same audible shift, plus the on-screen `path` value flips. (c) Rapid re-niklas toggles should see the value bounce; the engine's `/xk/path` broadcast should flip each time and `max/xk_swam.js` V2 path-scalars should take effect on the following voice.
+
+**Scope left open**: the still-unused `PerformanceMode.palette` / `.variant` fields (mode-manager state that no consumer reads). Either wire them to downstream behavior or prune them — tracked separately from D36.
 
 ### D34 — C5 / C6 / C7 legato phrases never engage glissando *(RESOLVED 2026-04-16)*
 

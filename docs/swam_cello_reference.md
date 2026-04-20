@@ -7,7 +7,7 @@ Consolidated from `SWAM-Solo-Strings-v3.8.0-UserManual.pdf`. Scoped to what Xena
 > - **No Bow Speed** knob. `max/xk_swam.js` gates writes via `HAS_BOW_SPEED = false` (CC 20 no-ops).
 > - **No Attack Ramp** knob. Gated via `HAS_ATTACK_RAMP = false` (CC 73 no-ops).
 > - **Attack Control exists but as a discrete 4-mode selector**, not a continuous ramp: `vel.soft / vel.hard / expression / mix vel. expr.`. The bridge's old semantics (sending a 0–127 slope) don't map onto a mode switch, so `HAS_ATTACK_CONTROL = false` remains. **Preset recommendation: set Attack Control = `expression` or `mix vel. expr.`** — our `scheduleExprEnvelope` already shapes CC 11 per phrase, which then drives attack character automatically. No runtime writes needed.
-> - Params present but **not yet wired from the bridge**: **Harmonics** (off / 2 / 3 / 4control) + **Harmonics 4 Control** (continuous partial select — supersedes KS A latch for C4), **Bow Polyphony** (recommend `mono poly release`), **Double Hold String Selection**, **Mono Cross String Muting**.
+> - Params present but **not yet wired from the bridge**: **Double Hold String Selection**, **Mono Cross String Muting**. The **Harmonics `4 Control`** mode-selector IS now reached (D37 path × tetra rotation for C4, plus niklas CTRL ping); the underlying Harmonics *knob* that picks which partial `4 Control` plays is still preset-baked — a future follow-up could MIDI-Learn it to a dedicated CC for continuous partial modulation. (Harmonics selector wired via CC 78 in D31; Bow Polyphony wired via CC 81 in D35; per-voice harmonic-mode rotation in D37.)
 > - Auto-assigned CCs in the current preset: Vibrato Depth = CC 1, Panpot = CC 10, Main Volume = CC 7 (harmless, overlap our intended mappings).
 
 ---
@@ -181,7 +181,8 @@ These have no default binding. Pick any unused CC, MIDI-Learn each in SWAM, then
 | **Bow Noise** | 74 | Expressivity page | Optional — scramble → noise |
 | **Harmonics selector** | 78 | Main page (right-click selector) | D31 — 4-state, replaces KS F# path |
 | **Tremolo selector** | 79 | Main page (right-click selector) | D31 — 3-state, replaces KS G# path |
-| **Tremolo Min Speed** | 80 | Play Modes → Right Hand | D32 — per-step rate (requires Tremolo Mode = Hz) |
+| **Tremolo Min Speed** | 80 | Play Modes → Right Hand | D39 — per-phrase stochastic envelope (1/3 slow→fast / 1/3 fast→slow / 1/3 steady), driven by `rampCC`; requires Tremolo Mode = Hz |
+| **Bow Polyphony** | 81 | Play Modes → Left Hand | D35 — per-complex polyphony; default Double/Hold, gliss complexes MONO_POLY_RELEASE |
 
 After MIDI-Learning, **save as a SWAM preset** so the mapping persists across sessions.
 
@@ -381,7 +382,7 @@ KS B   (MIDI 35) Page Modifier       hold for B+x combos (advanced)
 
 ### Pre-flight checklist (in SWAM, save as preset)
 - KS page: KS Octave = **C0**, KS Channel noted, Pizz Polyphony = **Poly**, all KS enabled
-- **Play Modes → Left Hand: Bow Polyphony = `Mono`** (D34). Non-Mono splits overlapping notes into chord voices, so gliss phrases (C5/C6/C7) never engage portamento regardless of any other setting.
+- **Play Modes → Left Hand: Bow Polyphony selector → MIDI Learn → CC 81** (D35). The bridge drives polyphony per-complex: Double/Hold as the default (rich two-string textures on overlapping turns), Mono Poly Release for C5/C6/C7 (single-line portamento — SWAM's gliss engine needs one monophonic line to slide along; any non-Mono mode splits overlaps into chord voices and kills the slide). Supersedes D34's "set Mono and save" instruction.
 - Expressivity page: Vibrato Fade-In = 250 ms; right-click Vibrato Rate → MIDI Learn → CC 19
 - Bow page: right-click each of Bow Position / Bow Pressure / Bow Pressure Accent / Bow Speed / Attack Ramp / Attack Control → MIDI Learn → CCs 16 / 17 / 18 / 20 / 73 / 75
 - **Harmonics + Tremolo selectors (D31)**: right-click each on the main page → MIDI Learn → CC 78 (Harmonics) / CC 79 (Tremolo). Required because KS F#/G# are 2-band with no Off band — the bridge routes these through CC to reach every state cleanly.

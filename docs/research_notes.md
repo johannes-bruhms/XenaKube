@@ -40,7 +40,7 @@ Nomos Alpha was the first composition to use group theory (specifically the rota
 | Physical Rubik's cube as input device | Xenakis composed a fixed score; we make it a live instrument. The cube's S4 symmetry is the same group Xenakis used. |
 | Spell detection (Rubik's algorithm recognition) | Known algorithms (sexy-move, sune, T-perm, etc.) serve as gestural "words" the performer can deliberately execute. Maps finger-pattern vocabulary onto mode changes. |
 | Orientation-independent spell matching | A cuber's muscle memory is face-relative. Expanding each algorithm to all 24 rotations means a sexy-move pattern works on any face pair. |
-| CFOP-minimal spell book (6 spells) | The spell book is restricted to the fundamentals needed to solve any state under CFOP (2-look OLL + 2-look PLL): sexy-move as F2L trigger, oll-cross / sune / anti-sune for OLL, u-perm / t-perm for PLL. Keeps the vocabulary tight so each spell is memorable and distinct under rotation expansion. The 4-move sledgehammer was intentionally dropped — too easy to hit accidentally; the freeze-toggle effect it carried moved to the 7-turn sune, which requires deliberate finger commitment. |
+| CFOP-core spell book (7 spells) | Current vocabulary: 6 CFOP fundamentals (sexy-move, oll-cross, sune, anti-sune, u-perm, t-perm) + Niklas (archetypal commutator). Orientation-independent via 24-rotation expansion. The 4-move sledgehammer was intentionally dropped — too easy to hit accidentally. See `docs/todo.md` Phase B: pivoting to a ~20-spell phrase library where most spells become composed musical phrases rather than mode-toggles. |
 | Gyro → S4 snap (continuous → discrete) | The cube's physical orientation in 3D maps to the nearest of the 24 S4 rotations via quaternion dot product. This bridges continuous gesture and discrete group math. |
 | Expression parameters (tilt, spin, deviation, scramble) | Continuous gyro-derived values for real-time sound control. Deviation = how far from the nearest S4 snap; scramble = BFS distance from identity. |
 | Scramble factor as meta-parameter | BFS distance from identity in the S4 Cayley graph. Diameter is ≤6 (small group). Normalized 0–1. "How far from solved" as a musical parameter. |
@@ -95,6 +95,8 @@ From Xenakis' original descriptions (p. 222), mapped to cello-inspired SuperColl
 
 The α/β/γ mappings shuffle which complex type sits at which vertex position. For example, vertex 1 gets C7 in α, C2 in β, and C5 in γ. Some vertices are stable across phases (vertex 0 always gets C1; vertex 6 always gets C8).
 
+**SWAM bridge note.** The mapping above is the SC side. The Max/SWAM bridge implements a parallel but not-yet-Xenakis-faithful mapping (see `CLAUDE.md` → "Conceptual mapping"). Xenakis' primary-source technique string for *Nomos Alpha* is `[pizz. f.c.l. an pizz.gl. a trem. harm. hr trem. asp asp trem. a interf.]` — tremolo appears on 4 of 8 complexes, harmonics on 2, and several complexes are combinatorial (tremolo+harmonics, harmonic tremolo). Decision on rebuild (A) vs pragmatic layering (B) is deferred until the face-identity gesture framework is playing — see `docs/todo.md` Phase D.
+
 ## Hardware
 
 **GAN i4 Smart Cube**: Bluetooth Low Energy Rubik's cube with built-in gyroscope. Detected via Chrome's Web Bluetooth API using the `gan-web-bluetooth` npm package.
@@ -145,6 +147,32 @@ The 24 cube rotation quaternions fall into three geometric types (see `quaternio
 | Identity | 1 | [0, 0, 0, 1] | No rotation |
 
 Snap-to-nearest uses `|dot product|` because q and -q represent the same rotation. Maximum angular distance between adjacent S4 elements is ~π/4 (45°). The deviation factor normalizes this to 0–1.
+
+## Performer's Frame — Agency vs Chance
+
+### The reframing question
+
+Not "which playing techniques go on which vertex" — that's downstream. Upstream: **where on the chance ↔ agency spectrum should the instrument sit, and what vocabulary of intentional move-sequences should exist alongside the stochastic generation?** Sharper: what's the *forward model* — the internal prediction a performer runs in their head before turning the cube — and is it simple enough to run in real time?
+
+### Diagnosis of the discomfort
+
+Xenakis composed chance music and handed cellists a *fixed score*. The performer never experienced the chance, only the result — they rendered what had already been chosen. XenaKube inverts this: it puts the performer *inside* the stochastic machine and asks them to both run it and play it. The cognitive load of simulating S4 × α/β/γ × tetra parity × path × turn-rate → intended voice is, correctly, impossible in real time. That's not a skill gap; the forward model is too wide to fit in working memory.
+
+Speedcubers solve the equivalent problem by **chunking** — `R U R' U'` isn't four moves, it's one gesture with one known effect. The existing spell book gestures at this solution but stops short at seven mode-toggles. A Rubik's analogy only pays off at *vocabulary scale* — on the order of twenty memorable short sequences, not seven.
+
+### Design principles that follow
+
+1. **Anchor to solve.** The physical cube's solved state should be a musical zero — identity K_i, α phase, V1 path, silent. Every spell's effect becomes legible because it always starts from the same reference. Solving the cube = returning to silence is a dramaturgical arc as well as a cognitive one.
+
+2. **Vocabulary, not modes.** Grow the spell book from seven mode-toggles into ≈20 short (≤6-move) *musical phrase* spells — "rising arco arpeggio," "pizz cluster," "harmonic fanfare," "descending sul pont line." These are the performer's sentences.
+
+3. **Forward-model audibility.** Each individual face-turn should produce a sound the performer can predict before committing to the turn. One way: fix each of the 12 face-moves (L / L' / R / R' / F / F' / B / B' / U / U' / D / D') to its own gesture-type, using the GAN cube's color-fixed face identity (not the hand frame). Then K_i / C_i permutation modulates the *content* inside that known shape, rather than choosing the shape.
+
+4. **Dashboard diet.** The full-state HUD is a debug view. Performance mode should surface only what the performer needs to decide their next move: the active vertex's upcoming voice, which spells are one move from completing, distance-to-solved. More information at all times, paradoxically, means less comprehension.
+
+### Program-notes one-liner
+
+> XenaKube is Xenakis' *Nomos Alpha* machinery, but the machine sits inside the performer. Each cube turn runs a group-theoretic transformation that determines the next sound, so the performer composes by permuting. Agency comes back through two doors: a vocabulary of known move-sequences (like a speedcuber's algorithms), and a physically-anchored zero state (the solved cube = silence). Between the two, chance and intention share the same instrument.
 
 ## Performance Speed Regimes
 

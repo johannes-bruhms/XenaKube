@@ -28,10 +28,12 @@ import { VoiceEngine, type VoiceOutput } from './voice-engine.js';
 import { ExpressionProcessor, type ExpressionState } from './expression.js';
 import { ModeManager, type PerformanceMode } from './mode-manager.js';
 import { TurnRateTracker, type Regime } from './turn-rate.js';
+import { parseFace } from './face-gesture.js';
 
 export type StateListener = (state: XenaKubeState) => void;
 export type SpellListener = (match: SpellMatch) => void;
 export type VoiceListener = (output: VoiceOutput) => void;
+export type SolveListener = () => void;
 
 export class XenaKubeEngine {
   // === K_i cube state ===
@@ -73,6 +75,7 @@ export class XenaKubeEngine {
   private listeners: StateListener[] = [];
   private spellListeners: SpellListener[] = [];
   private voiceListeners: VoiceListener[] = [];
+  private solveListeners: SolveListener[] = [];
 
   constructor(mode?: Partial<EngineMode>) {
     if (mode) this.setMode(mode);
@@ -100,6 +103,24 @@ export class XenaKubeEngine {
     return () => {
       this.voiceListeners = this.voiceListeners.filter(l => l !== listener);
     };
+  }
+
+  /**
+   * Subscribe to cube-solved transitions. Fires each time `reportCubeSolved()`
+   * is called — edge detection is the caller's responsibility. The browser
+   * owns the FACELETS stream from the cube and detects solved→unsolved→solved
+   * cycles before telling the relay, which calls `reportCubeSolved()`.
+   */
+  onSolve(listener: SolveListener): () => void {
+    this.solveListeners.push(listener);
+    return () => {
+      this.solveListeners = this.solveListeners.filter(l => l !== listener);
+    };
+  }
+
+  /** External report: cube is physically solved. Fires all solve listeners. */
+  reportCubeSolved(): void {
+    for (const listener of this.solveListeners) listener();
   }
 
   /** Set engine mode */
@@ -134,6 +155,11 @@ export class XenaKubeEngine {
       const match = spellMatches[i];
       this.modeManager.applySpell(match);
       this.voiceEngine.setMode(this.modeManager.mode.voiceMode);
+      // niklas — V1 ↔ V2 path toggle. EngineMode lives on the engine, not
+      // on ModeManager, so the flip happens here. See docs/revision_roadmap.md D19.
+      if (match.spell.effect === 'niklas') {
+        this.mode.path = this.mode.path === 'V1' ? 'V2' : 'V1';
+      }
       for (const listener of this.spellListeners) listener(match);
     }
 
@@ -185,14 +211,25 @@ export class XenaKubeEngine {
       this.sieve.advance();
     }
 
-    // Voice output
+    // Voice output — computed first, emitted LAST so that downstream
+    // consumers (max/xk_swam.js, SC) see the post-turn state burst
+    // (/xk/path, /xk/tetra, …) BEFORE the /xk/voice trigger. Reversing
+    // that order caused a 1-turn lag in any bridge-side logic keyed on
+    // path or tetra (e.g. D37's path × tetra harmonic rotation for C4):
+    // handleVoice would read state.path/state.tetra reflecting turn N-1
+    // because the state burst from turn N hadn't arrived yet.
     const vertices = getTransformedVertices(this.mode.path, this.kGroup);
     const complexes = this.complexCube.getAssignments();
-    const voiceOutput = this.voiceEngine.emit(vertices, this.activeVertex, complexes);
-    for (const listener of this.voiceListeners) listener(voiceOutput);
+    // Face identity is the Phase A1 gesture-type selector. parseFace returns
+    // null for half-turns and invalid strings, so the voice output carries
+    // a well-formed FaceMove or null (downstream bridges skip face dispatch
+    // on null — e.g. diagram-driven turns, future silent synthesis).
+    const face = parseFace(move);
+    const voiceOutput = this.voiceEngine.emit(vertices, this.activeVertex, complexes, face);
 
     const state = this.getState();
     this.emitState(state);
+    for (const listener of this.voiceListeners) listener(voiceOutput);
     return state;
   }
 

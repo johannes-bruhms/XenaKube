@@ -49,14 +49,39 @@
   .ovl-tl::-webkit-scrollbar { display: none; }
   .ovl-tc { top: 16px; left: 50%; transform: translateX(-50%); text-align: center; max-width: 60vw; pointer-events: none; }
   .ovl-tr { top: 16px; right: 20px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-  /* Size tweaks: left-side body shrunk 25%, right-side controls enlarged 50% (title/connect/gizmo untouched) */
-  .ovl-tl .state-rows,
+  /* Size tweaks: top-left column children shrunk to 50%; right-side controls enlarged 50% */
+  .ovl-tl .ovl-section,
   .ovl-tl .mode-row,
-  .ovl-tl .active-cards,
-  .ovl-tl .expression-panel { zoom: 0.75; }
-  /* Pin state-rows + Expression to sit directly on top of the piano roll */
-  .ovl-tl .expression-panel { position: fixed; left: 20px; bottom: 120px; width: 480px; z-index: 3; }
-  .ovl-tl .state-rows       { position: fixed; left: 20px; bottom: 420px; width: 480px; z-index: 3; display: flex; flex-direction: column; gap: 4px; }
+  .ovl-tl .active-cards { zoom: 0.5; }
+
+  /* Bottom-left overlay — state + expression panels stacked naturally
+   * above the piano-roll. Key decisions:
+   *   • Wrapper is position: fixed (bottom-anchored above sieve strip),
+   *     NO zoom — Chrome's `zoom` scales `bottom` on fixed elements,
+   *     which would pull the wrapper into the sieve strip.
+   *   • Each child carries its own `zoom: 0.5` while sitting in natural
+   *     flex flow (not position: fixed). This sidesteps the
+   *     zoom+position:fixed containing-block quirk that caused the
+   *     earlier "title overlaps top row" bug.
+   *   • Adding/removing state rows just grows the wrapper upward — no
+   *     magic-number bottom anchors. */
+  .ovl-bl {
+    position: fixed;
+    left: 20px;
+    bottom: 110px;            /* clears the piano-roll strip (~90px) with padding */
+    width: 480px;
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    max-height: calc(100vh - 240px);
+    overflow-y: auto;
+    scrollbar-width: none;
+  }
+  .ovl-bl::-webkit-scrollbar { display: none; }
+  .ovl-bl .state-rows,
+  .ovl-bl .expression-panel { zoom: 0.5; }
+  .ovl-bl .state-rows { display: flex; flex-direction: column; gap: 4px; }
   .ovl-tr .cube-rotate-ctrl { zoom: 1.5; }
   .ovl-bottom { position: fixed; bottom: 0; left: 0; right: 0; z-index: 2; padding: 6px 12px 10px; pointer-events: none; }
   .ovl-section { display: flex; flex-direction: column; gap: 6px; }
@@ -184,6 +209,8 @@
   .state-val.accent2 { color: var(--accent2); }
   .state-val.warm { color: var(--warm); }
   .state-val.gold { color: var(--gold); }
+  .state-val.clickable { cursor: pointer; user-select: none; transition: color .12s, text-shadow .12s; }
+  .state-val.clickable:hover { color: var(--accent); text-shadow: 0 0 6px var(--accent); }
 
   .sub-heading {
     font-size: 11px;
@@ -599,6 +626,24 @@
     border: 1px solid var(--warm);
     color: var(--warm);
   }
+  .mode-badge.solved {
+    background: rgba(255, 204, 0, 0.12);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+  }
+  .mode-badge.solved.dim {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+  }
+  .mode-badge.solved.pulse {
+    animation: solved-pulse 2.4s ease-out;
+  }
+  @keyframes solved-pulse {
+    0%   { color: #fff; background: rgba(255, 204, 0, 0.35); border-color: #fff;       box-shadow: 0 0 16px var(--gold), 0 0 32px var(--gold); }
+    40%  { color: var(--gold); background: rgba(255, 204, 0, 0.20); border-color: var(--gold); box-shadow: 0 0 6px var(--gold); }
+    100% { color: var(--gold); background: rgba(255, 204, 0, 0.12); border-color: var(--gold); box-shadow: none; }
+  }
   .turn-rate-val {
     font-size: 22px;
     color: var(--dim);
@@ -693,6 +738,7 @@
     flex-direction: column;
     gap: 6px;
     margin-bottom: 10px;
+    max-width: 480px;
   }
   .expr-controls button {
     padding: 9px 20px;
@@ -777,15 +823,54 @@
     <h1 class="title">XENAKUBE</h1>
     <div class="conn-row">
       <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
-      <button id="connectBtn">Connect Cube</button>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button id="connectBtn">Connect Cube</button>
+        <button id="resetBtnVisible" class="ctrl-btn" title="Re-sync cube (tell it 'you are solved') + reset S4 engine state. Use after physically solving.">Reset</button>
+      </div>
+    </div>
+    <div class="expr-controls">
+      <button id="zeroBtn">Zero Gyro</button>
+      <div class="smooth-row">
+        <label>smooth</label>
+        <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.50">
+        <span id="gyroSmoothVal" style="color:var(--accent2);min-width:28px">0.50</span>
+      </div>
+      <div class="smooth-row">
+        <label>ghost</label>
+        <input type="range" id="ghostSize" min="0.2" max="2.5" step="0.05" value="1.00">
+        <span id="ghostSizeVal" style="color:var(--accent2);min-width:28px">1.00</span>
+      </div>
     </div>
   </div>
 
+  <div class="mode-row">
+    <span class="mode-badge palette" id="mode-palette">default</span>
+    <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
+    <span class="mode-badge regime-contemplative" id="mode-regime">CONTEMPLATIVE</span>
+    <span class="mode-badge solved dim" id="mode-solved">SOLVED</span>
+    <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
+  </div>
+
+  <!-- Active vertex + complex card (moved from bottom-left) -->
+  <div class="active-cards">
+    <div class="vertex-grid" id="vertex-grid"></div>
+    <div class="complex-grid" id="complex-grid"></div>
+  </div>
+</div>
+
+<!-- Bottom-left overlay — state + expression panels stacked above the
+     piano-roll. Sibling of .ovl-tl (NOT a child) so the layout doesn't
+     fight position:fixed + zoom interactions inside the top column. -->
+<div class="ovl ovl-bl">
   <div class="state-rows">
     <div class="panel-title">State</div>
     <div class="state-row">
       <span class="state-label">active voice</span>
       <span class="state-val accent" id="s-active-vertex">K1</span>
+    </div>
+    <div class="state-row" title="Phase A1 face identity — last quarter-turn's gesture type. Half-turns produce no face.">
+      <span class="state-label">face</span>
+      <span class="state-val accent2" id="s-face">—</span>
     </div>
     <div class="state-row">
       <span class="state-label">S4 element</span>
@@ -793,7 +878,7 @@
     </div>
     <div class="state-row">
       <span class="state-label">path</span>
-      <span class="state-val" id="s-path">V1</span>
+      <span class="state-val clickable" id="s-path" title="click to toggle V1 / V2 (also toggled by niklas spell)">V1</span>
     </div>
     <div class="state-row">
       <span class="state-label">step</span>
@@ -826,30 +911,8 @@
     </div>
   </div>
 
-  <div class="mode-row">
-    <span class="mode-badge palette" id="mode-palette">default</span>
-    <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
-    <span class="mode-badge regime-contemplative" id="mode-regime">CONTEMPLATIVE</span>
-    <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
-  </div>
-
-  <!-- Active vertex + complex card (moved from bottom-left) -->
-  <div class="active-cards">
-    <div class="vertex-grid" id="vertex-grid"></div>
-    <div class="complex-grid" id="complex-grid"></div>
-  </div>
-
-  <!-- Expression (moved from right) -->
   <div class="expression-panel">
     <div class="panel-title">Expression</div>
-    <div class="expr-controls">
-      <button id="zeroBtn">Zero Gyro</button>
-      <div class="smooth-row">
-        <label>smooth</label>
-        <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.50">
-        <span id="gyroSmoothVal" style="color:var(--accent2);min-width:28px">0.50</span>
-      </div>
-    </div>
     <div class="expr-grid">
       <div class="expr-item">
         <div class="expr-label">Tilt</div>
@@ -942,7 +1005,54 @@ const COMPLEX_SHORT = {
   8: 'ponticello',
 };
 
+const COMPLEX_ABBR = {
+  1: 'pizz', 2: 'bow', 3: 'sust', 4: 'harm',
+  5: 'glsW', 6: 'glsM', 7: 'glsS', 8: 'pont'
+};
+
+// Ghost-cube dot palette. Cool-spectrum hue sweep from cyan → violet → pink
+// so each C-identity has a distinct dot color while staying in the ghost's
+// "cool landmark" aesthetic. Ghost wireframe stays 0x00ccff (edges are
+// structure, dots are identity). Paired dim colours for the abbreviation
+// line on labels are ~60% luminance of the main hue.
+const GHOST_VERT_COLORS = [
+  0x00ccff, // C1 cyan (reference)
+  0x00ffdd, // C2 teal
+  0x55bbff, // C3 sky blue
+  0x8899ff, // C4 periwinkle
+  0xbb88ff, // C5 lavender
+  0xdd77ff, // C6 violet
+  0xff66ee, // C7 orchid
+  0xff5599, // C8 hot pink
+];
+const GHOST_VERT_COLORS_HEX = [
+  '#00ccff', '#00ffdd', '#55bbff', '#8899ff',
+  '#bb88ff', '#dd77ff', '#ff66ee', '#ff5599',
+];
+const GHOST_VERT_COLORS_DIM = [
+  '#0099cc', '#00ccaa', '#4488cc', '#6677cc',
+  '#8866cc', '#aa55cc', '#cc5599', '#cc4477',
+];
+
 const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.75, 'fff': 0.92 };
+
+// Phase A1 — mirror of FACE_SIGNATURES (envelope/articulation/motion only).
+// Source of truth lives in src/face-gesture.ts; this is for HUD display.
+// Half-turns (L2/R2/...) and non-face moves return null.
+const FACE_SIG = {
+  'U':  { envelope: 'pluck', articulation: 'attack',    motion: 'up' },
+  "U'": { envelope: 'fade',  articulation: 'release',   motion: 'down' },
+  'D':  { envelope: 'stab',  articulation: 'attack',    motion: 'down' },
+  "D'": { envelope: 'drone', articulation: 'sustained', motion: 'static' },
+  'L':  { envelope: 'swell', articulation: 'sustained', motion: 'up' },
+  "L'": { envelope: 'fade',  articulation: 'release',   motion: 'down' },
+  'R':  { envelope: 'stab',  articulation: 'attack',    motion: 'static' },
+  "R'": { envelope: 'burst', articulation: 'iterative', motion: 'oscillate' },
+  'F':  { envelope: 'swell', articulation: 'sustained', motion: 'up' },
+  "F'": { envelope: 'swell', articulation: 'sustained', motion: 'down' },
+  'B':  { envelope: 'pluck', articulation: 'attack',    motion: 'static' },
+  "B'": { envelope: 'drone', articulation: 'sustained', motion: 'oscillate' },
+};
 
 const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
 
@@ -985,6 +1095,35 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
 camera.position.set(4, 3, 4);
 camera.lookAt(0, 0, 0);
+
+// On cube connect, orbit the camera by this azimuth (around world Y) so the
+// on-screen cube matches the performer's physical perspective. Empirically
+// -135° = the user's "drag left 135°" gesture. Flip sign if the world Y
+// convention in your Three.js build rotates the other way.
+const CUBE_VIEW_AZIMUTH_RAD = -135 * Math.PI / 180;
+const _pristineCameraPos = camera.position.clone();
+let _cubeViewApplied = false;
+function applyCubeConnectView() {
+  if (_cubeViewApplied) return;
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), CUBE_VIEW_AZIMUTH_RAD);
+  const offset = camera.position.clone().sub(controls.target);
+  offset.applyQuaternion(q);
+  camera.position.copy(controls.target).add(offset);
+  camera.lookAt(controls.target);
+  controls.update();
+  _cubeViewApplied = true;
+  // Adopt the first BLE quaternion as the zero reference, so the
+  // camera angle is a pure viewing preference — independent of how
+  // the cube happens to be held at the moment of connect.
+  autoZeroPending = true;
+}
+function revertCubeConnectView() {
+  if (!_cubeViewApplied) return;
+  camera.position.copy(_pristineCameraPos);
+  camera.lookAt(controls.target);
+  controls.update();
+  _cubeViewApplied = false;
+}
 
 // Wireframe cube
 const edgeGeo = new THREE.BufferGeometry();
@@ -1081,22 +1220,68 @@ const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent:
 const ghostEdges = new THREE.LineSegments(edgeGeo.clone(), ghostEdgeMat);
 ghostGroup.add(ghostEdges);
 
+// Ghost dots + labels are identity-bound: mesh/label k represents C_{k+1}.
+// Per-C color from GHOST_VERT_COLORS; each mesh gets its own cloned material
+// so updateSnapOverlay can modulate opacity per mesh without cross-talk.
+// Text on the label (`C{n}` + abbreviation) never changes — only the label's
+// position animates as the complex's slot shifts on each turn.
 const ghostVertGeo = new THREE.SphereGeometry(0.05, 6, 6);
-const ghostVertMat = new THREE.MeshBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.55 });
 const ghostVertMeshes = [];
 const ghostLabels = [];
 for (let i = 0; i < 8; i++) {
-  const m = new THREE.Mesh(ghostVertGeo.clone(), ghostVertMat.clone());
+  const mat = new THREE.MeshBasicMaterial({
+    color: GHOST_VERT_COLORS[i], transparent: true, opacity: 0.55,
+  });
+  const m = new THREE.Mesh(ghostVertGeo.clone(), mat);
   m.position.copy(CUBE_VERTS[i]);
   ghostGroup.add(m);
   ghostVertMeshes.push(m);
 
-  const label = makeLabel(`C?`, '#00ccff');
+  // Two-line identity label: C# on top, playing-mode abbreviation below.
+  // Bypasses makeLabel's single-line default by overwriting the canvas.
+  const label = makeLabel(`C${i + 1}`, GHOST_VERT_COLORS_HEX[i]);
+  const ctx = label.ctx;
+  ctx.clearRect(0, 0, 128, 80);
+  ctx.font = 'bold 16px monospace';
+  ctx.fillStyle = GHOST_VERT_COLORS_HEX[i];
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`C${i + 1}`, 64, 2);
+  ctx.font = '12px monospace';
+  ctx.fillStyle = GHOST_VERT_COLORS_DIM[i];
+  ctx.fillText(COMPLEX_ABBR[i + 1] || '', 64, 22);
+  label.tex.needsUpdate = true;
   label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.45);
   label.sprite.scale.set(0.7, 0.44, 1);
   ghostGroup.add(label.sprite);
   ghostLabels.push(label);
 }
+
+// K↔C connection line. Active K-dot (live cube, scaled-up sphere) connected
+// to its geometrically nearest C-dot (ghost cube) with a thin white line —
+// one visible "performance pair" across the two cubes. Added directly to
+// scene (not cubeGroup / ghostGroup) so the vertices live in world space;
+// animate loop computes both endpoints via getWorldPosition. depthTest off
+// + renderOrder 1 so the line draws over both cubes instead of being
+// clipped by intervening geometry. At deviation≈0 the nearest-C is the
+// same-slot C and the line collapses to zero length (invisible naturally).
+const kcLineGeo = new THREE.BufferGeometry();
+const kcLinePositions = new Float32Array(6);
+kcLineGeo.setAttribute('position', new THREE.BufferAttribute(kcLinePositions, 3));
+const kcLineMat = new THREE.LineBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.7,
+  depthTest: false,
+});
+const kcLine = new THREE.Line(kcLineGeo, kcLineMat);
+kcLine.renderOrder = 1;
+kcLine.visible = false;
+kcLine.frustumCulled = false;
+scene.add(kcLine);
+const _kcKWorld = new THREE.Vector3();
+const _kcCWorld = new THREE.Vector3();
+const _kcTmpWorld = new THREE.Vector3();
 
 // OrbitControls for camera mode
 const controls = new OrbitControls(camera, canvas);
@@ -1104,7 +1289,7 @@ controls.enableDamping = true;
 controls.dampingFactor = 0.1;
 controls.enablePan = false;
 controls.minDistance = 3;
-controls.maxDistance = 12;
+controls.maxDistance = 24;
 
 // Per-cube view offsets (premultiplied onto the live/ghost rotation).
 const liveViewOffset = new THREE.Quaternion(0, 0, 0, 1);
@@ -1297,11 +1482,84 @@ let hasGyro = false;
 let hasSnap = false;
 let currentActiveVertex = 0;
 
+// Ghost snap animation. When the S4 snap element changes, we SLERP the
+// displayed ghost from its current pose to the new target over
+// GHOST_SNAP_MS. Interrupt-safe: if a new snap lands mid-flight, we
+// recapture the currently-displayed `ghostAnimated` as the new `ghostFrom`
+// so the ghost keeps flowing toward the latest target without jumping.
+// `ghostTarget` is always the latest authoritative snap, so rapid turns
+// can never lose track — worst case the ghost chases behind and catches
+// up once turns stop.
+const ghostFrom = new THREE.Quaternion(0, 0, 0, 1);
+const ghostTarget = new THREE.Quaternion(0, 0, 0, 1);
+const ghostAnimated = new THREE.Quaternion(0, 0, 0, 1);
+let ghostAnimStart = 0;
+let ghostAnimReady = false;
+let lastSnapElement = -1;
+const GHOST_SNAP_MS = 100;
+
+// Active-vertex step animation. Same interrupt-safe pattern as the ghost
+// snap: on active-vertex change, capture the currently displayed sphere
+// scales and ring position as the animation start, then LERP them toward
+// the new target over ACTIVE_STEP_MS. Rapid stepping just keeps rewriting
+// the start pose from whatever the animate loop last painted.
+const ACTIVE_STEP_MS = 100;
+const sphereScaleFrom = new Float32Array(8).fill(1.0);
+const activeRingFrom = new THREE.Vector3();
+const activeRingAnimated = new THREE.Vector3();
+let activeAnimStart = 0;
+let activeAnimReady = false;
+let currentActiveK = 0;
+
+// Vertex-position animation. `vertexMeshes[k]` and `vertexLabels[k]` are
+// identity-bound (mesh k represents K_{k+1}); each S4 permutation moves the
+// identity to a new slot, and we LERP the dot + label from old slot to new
+// slot over VERTEX_STEP_MS instead of teleporting the label text in place.
+// LABEL_OFFSET_FACTOR places the sprite 0.55 along the outward normal of a
+// unit cube corner — scalar because |CUBE_VERTS| = sqrt(3) is constant, so
+// label.position = sphere.position * factor throughout the animation.
+// Interrupt-safe: a new perm mid-flight captures the currently painted
+// positions as the new `from`.
+const VERTEX_STEP_MS = 100;
+const LABEL_OFFSET_FACTOR = 1 + 0.55 / Math.sqrt(3);
+const vertexPosFrom     = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const vertexPosTarget   = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const vertexPosAnimated = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+let vertexAnimStart = 0;
+let vertexAnimReady = false;
+let lastPermKey = '';
+
+// Ghost-vertex position animation. Mirrors the K-vertex pattern but for the
+// C-cube: `ghostVertMeshes[k]` / `ghostLabels[k]` represent C_{k+1}, and
+// each turn moves that C-type to a new slot per `state.cAssignments`. On a
+// pure S4 turn the dots slide coherently; on an α↔β↔γ phase boundary the
+// baseMapping changes so multiple dots may reshuffle simultaneously — the
+// LERP makes that reshuffle legible instead of instant. Offset factor uses
+// the ghost label's 0.45 distance (vs K's 0.55).
+const GHOST_VERT_STEP_MS = 100;
+const GHOST_LABEL_OFFSET_FACTOR = 1 + 0.45 / Math.sqrt(3);
+const ghostVertPosFrom     = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const ghostVertPosTarget   = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const ghostVertPosAnimated = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+let ghostVertAnimStart = 0;
+let ghostVertAnimReady = false;
+let lastCAssignKey = '';
+
 // Gyro zero calibration
 let gyroZeroInv = new THREE.Quaternion(0, 0, 0, 1);
 
+// Decouples on-screen orientation from however the cube is physically
+// held at connect time. Set by applyCubeConnectView; consumed by the
+// gyro_tick handler on the first sample, which adopts it as the zero.
+let autoZeroPending = false;
+
 document.getElementById('zeroBtn').addEventListener('click', () => {
   gyroZeroInv.copy(currentGyro).invert();
+  // Mirror the zero over to the relay so the engine's snap cells re-center
+  // on the user's rest pose — without this, snap thresholds stay anchored
+  // to the raw sensor frame and feel asymmetric (see relay.js's
+  // `engineGyroZeroInv` comment).
+  wsSend({ type: 'zero_gyro' });
 });
 
 function resizeCube() {
@@ -1314,7 +1572,6 @@ resizeCube();
 window.addEventListener('resize', resizeCube);
 
 const calibratedGyro = new THREE.Quaternion();
-const calibratedSnap = new THREE.Quaternion();
 
 // Pulse animation for active ring
 let ringPulse = 0;
@@ -1330,13 +1587,61 @@ function animateCube() {
   }
   cubeGroup.quaternion.copy(liveViewOffset).multiply(calibratedGyro);
 
-  // Ghost cube — same calibration as live cube so they share a frame
+  // Ghost cube — stays in world frame (no gyroZeroInv) so Zero Gyro only
+  // recenters the live cube. The ghost remains a fixed S4-snap reference.
+  // SLERP from ghostFrom to ghostTarget over GHOST_SNAP_MS so the ghost
+  // glides between S4 elements instead of teleporting.
   if (hasSnap) {
     ghostGroup.visible = true;
-    calibratedSnap.copy(gyroZeroInv).multiply(currentSnap);
-    ghostGroup.quaternion.copy(ghostViewOffset).multiply(calibratedSnap);
+    const elapsed = performance.now() - ghostAnimStart;
+    const t = elapsed >= GHOST_SNAP_MS ? 1 : elapsed / GHOST_SNAP_MS;
+    ghostAnimated.copy(ghostFrom).slerp(ghostTarget, t);
+    ghostGroup.quaternion.copy(ghostViewOffset).multiply(ghostAnimated);
   } else {
     ghostGroup.visible = false;
+  }
+
+  // Active-vertex step animation — scales the active sphere up (2.5×) and
+  // all others down (1×), plus slides the glow ring to the active slot,
+  // over ACTIVE_STEP_MS. Sphere scaling is identity-bound (currentActiveK =
+  // perm[slot]); the ring stays slot-bound. See updateActiveVertexIn3D.
+  if (activeAnimReady) {
+    const elapsed = performance.now() - activeAnimStart;
+    const t = elapsed >= ACTIVE_STEP_MS ? 1 : elapsed / ACTIVE_STEP_MS;
+    for (let k = 0; k < 8; k++) {
+      const target = (k === currentActiveK) ? 2.5 : 1.0;
+      const s = sphereScaleFrom[k] + (target - sphereScaleFrom[k]) * t;
+      vertexMeshes[k].scale.setScalar(s);
+    }
+    activeRingAnimated.copy(activeRingFrom).lerp(CUBE_VERTS[currentActiveVertex], t);
+    activeRing.position.copy(activeRingAnimated);
+    activeRing.lookAt(camera.position);
+  }
+
+  // Vertex-position animation — each K-identity slides from its previous
+  // slot to its new slot on each turn. See updateState for perm-change
+  // capture. Label position follows the sphere via LABEL_OFFSET_FACTOR.
+  if (vertexAnimReady) {
+    const elapsed = performance.now() - vertexAnimStart;
+    const t = elapsed >= VERTEX_STEP_MS ? 1 : elapsed / VERTEX_STEP_MS;
+    for (let k = 0; k < 8; k++) {
+      vertexPosAnimated[k].copy(vertexPosFrom[k]).lerp(vertexPosTarget[k], t);
+      vertexMeshes[k].position.copy(vertexPosAnimated[k]);
+      vertexLabels[k].sprite.position.copy(vertexPosAnimated[k]).multiplyScalar(LABEL_OFFSET_FACTOR);
+    }
+  }
+
+  // Ghost-vertex position animation — each C-identity slides to its new
+  // slot per state.cAssignments. Runs in ghostGroup's local frame, so the
+  // dots compose naturally with the ghost's SLERP'd orientation.
+  if (ghostVertAnimReady) {
+    const elapsed = performance.now() - ghostVertAnimStart;
+    const t = elapsed >= GHOST_VERT_STEP_MS ? 1 : elapsed / GHOST_VERT_STEP_MS;
+    for (let k = 0; k < 8; k++) {
+      ghostVertPosAnimated[k].copy(ghostVertPosFrom[k]).lerp(ghostVertPosTarget[k], t);
+      ghostVertMeshes[k].position.copy(ghostVertPosAnimated[k]);
+      ghostLabels[k].sprite.position.copy(ghostVertPosAnimated[k]).multiplyScalar(GHOST_LABEL_OFFSET_FACTOR);
+    }
   }
 
   // Pulse active ring
@@ -1345,36 +1650,84 @@ function animateCube() {
     activeRingMat.opacity = 0.4 + 0.3 * Math.sin(ringPulse);
   }
 
+  // K↔C connection line. Compute world positions of active K-dot and each
+  // ghost C-dot, find the nearest, update the line's 2 vertices. Requires
+  // explicit updateMatrixWorld since rAF renders after this block — without
+  // it, getWorldPosition reads stale matrices from the previous frame.
+  if (hasGyro && hasSnap) {
+    cubeGroup.updateMatrixWorld(true);
+    ghostGroup.updateMatrixWorld(true);
+    vertexMeshes[currentActiveK].getWorldPosition(_kcKWorld);
+    let bestDist2 = Infinity;
+    for (let c = 0; c < 8; c++) {
+      ghostVertMeshes[c].getWorldPosition(_kcTmpWorld);
+      const d2 = _kcKWorld.distanceToSquared(_kcTmpWorld);
+      if (d2 < bestDist2) {
+        bestDist2 = d2;
+        _kcCWorld.copy(_kcTmpWorld);
+      }
+    }
+    kcLinePositions[0] = _kcKWorld.x;
+    kcLinePositions[1] = _kcKWorld.y;
+    kcLinePositions[2] = _kcKWorld.z;
+    kcLinePositions[3] = _kcCWorld.x;
+    kcLinePositions[4] = _kcCWorld.y;
+    kcLinePositions[5] = _kcCWorld.z;
+    kcLineGeo.attributes.position.needsUpdate = true;
+    kcLine.visible = true;
+  } else {
+    kcLine.visible = false;
+  }
+
   renderer.render(scene, camera);
   gizmoRenderer.render(gizmoScene, gizmoCamera);
 }
 animateCube();
 
-function updateActiveVertexIn3D(idx) {
-  // Enlarge active vertex sphere, shrink others
-  for (let i = 0; i < 8; i++) {
-    const scale = (i === idx) ? 2.5 : 1.0;
-    vertexMeshes[i].scale.setScalar(scale);
+function updateActiveVertexIn3D(slot, activeK) {
+  if (!activeAnimReady) {
+    // First call — skip the animation so the active highlight doesn't
+    // sweep in from origin on connect.
+    for (let k = 0; k < 8; k++) {
+      const s = (k === activeK) ? 2.5 : 1.0;
+      sphereScaleFrom[k] = s;
+      vertexMeshes[k].scale.setScalar(s);
+    }
+    activeRingFrom.copy(CUBE_VERTS[slot]);
+    activeRingAnimated.copy(CUBE_VERTS[slot]);
+    activeAnimStart = performance.now() - ACTIVE_STEP_MS;
+    activeAnimReady = true;
+    activeRing.visible = true;
+    currentActiveVertex = slot;
+    currentActiveK = activeK;
+  } else if (slot !== currentActiveVertex || activeK !== currentActiveK) {
+    // Capture the actually-displayed scales and ring pos as the animation
+    // start, so interrupted animations flow smoothly into the new step.
+    for (let k = 0; k < 8; k++) {
+      sphereScaleFrom[k] = vertexMeshes[k].scale.x;
+    }
+    activeRingFrom.copy(activeRingAnimated);
+    activeAnimStart = performance.now();
+    currentActiveVertex = slot;
+    currentActiveK = activeK;
   }
-  // Position glow ring at active vertex
-  activeRing.visible = true;
-  activeRing.position.copy(CUBE_VERTS[idx]);
-  activeRing.lookAt(camera.position);
+  // Same slot+activeK → no-op; the animate loop keeps painting from the
+  // current `sphereScaleFrom` / `activeRingFrom` toward the (unchanged) target.
 }
 
-const COMPLEX_ABBR = {
-  1: 'pizz', 2: 'bow', 3: 'sust', 4: 'harm',
-  5: 'glsW', 6: 'glsM', 7: 'glsS', 8: 'pont'
-};
-
 function updateVertexLabels(perm, vertices, complexTypes, activeIdx) {
-  for (let i = 0; i < 8; i++) {
-    const kIndex = perm ? perm[i] : i;
-    const isTetraA = TETRA_A.includes(i);
-    const isActive = i === activeIdx;
+  // Labels are identity-bound: label k always reads "K{k+1}". Its D/G/U
+  // values come from the slot currently occupied by identity k — state.
+  // kVertices is slot-indexed (`kVertices[slot] = basevertices[perm[slot]]`),
+  // so looking up by `perm.indexOf(k)` yields identity k's own values.
+  const activeK = perm ? perm[activeIdx] : activeIdx;
+  for (let k = 0; k < 8; k++) {
+    const slot = perm ? perm.indexOf(k) : k;
+    const isTetraA = TETRA_A.includes(k);
+    const isActive = k === activeK;
     const color = isActive ? '#ffffff' : (isTetraA ? '#00ff88' : '#ff6644');
     const dimColor = isActive ? '#cccccc' : (isTetraA ? '#00cc66' : '#cc5533');
-    const label = vertexLabels[i];
+    const label = vertexLabels[k];
     const ctx = label.ctx;
     const W = 128, H = 80;
     ctx.clearRect(0, 0, W, H);
@@ -1391,11 +1744,11 @@ function updateVertexLabels(perm, vertices, complexTypes, activeIdx) {
     ctx.fillStyle = color;
     ctx.textAlign = 'center';
     ctx.textBaseline = 'top';
-    ctx.fillText(`K${kIndex + 1}`, W / 2, 2);
+    ctx.fillText(`K${k + 1}`, W / 2, 2);
 
     // Line 2: intensity + density
     if (vertices) {
-      const v = vertices[i];
+      const v = vertices[slot];
       ctx.font = '14px monospace';
       ctx.fillStyle = dimColor;
       ctx.fillText(`${v.intensity} d${v.density.toFixed(1)}`, W / 2, 24);
@@ -1408,26 +1761,10 @@ function updateVertexLabels(perm, vertices, complexTypes, activeIdx) {
   }
 }
 
-function updateGhostLabels(complexTypes) {
-  for (let i = 0; i < 8; i++) {
-    const label = ghostLabels[i];
-    const ctx = label.ctx;
-    const W = 128, H = 80;
-    ctx.clearRect(0, 0, W, H);
-    const ct = complexTypes ? complexTypes[i] : null;
-    ctx.font = 'bold 16px monospace';
-    ctx.fillStyle = '#00ccff';
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(ct ? `C${ct}` : '?', W / 2, 2);
-    if (ct) {
-      ctx.font = '12px monospace';
-      ctx.fillStyle = '#0099bb';
-      ctx.fillText(COMPLEX_ABBR[ct] || '', W / 2, 22);
-    }
-    label.tex.needsUpdate = true;
-  }
-}
+// Ghost labels are identity-bound and painted once at setup
+// (see the per-C-type `makeLabel` loop); the label text never changes.
+// Only the label position animates as the complex slides between slots,
+// and opacity is modulated by updateSnapOverlay from gyro deviation.
 
 function updateSnapOverlay(snapElement, deviation) {
   const snapVal = document.getElementById('s-snap');
@@ -1528,10 +1865,16 @@ let moveCount = 0;
 
 function updateState(state, move) {
   const activeIdx = state.activeVertex ?? 0;
-  currentActiveVertex = activeIdx;
+  // currentActiveVertex is written by updateActiveVertexIn3D below — doing
+  // it here too would pre-equalize the idx check and defeat the animation.
 
   document.getElementById('s-step').textContent = state.step;
   document.getElementById('s-path').textContent = state.path;
+  // Mirror into the hidden legacy pathSelect so it stays coherent if ever unhidden.
+  // getElementById avoids a TDZ reference if updateState ever fires before
+  // the module-scope `const pathSelect` initializer.
+  const pathSel = document.getElementById('path-select');
+  if (pathSel && pathSel.value !== state.path) pathSel.value = state.path;
 
   document.getElementById('s-k-group').textContent = state.kGroup;
   document.getElementById('s-tetra').textContent = state.tetraIndex === 0 ? 'even' : 'odd';
@@ -1539,6 +1882,25 @@ function updateState(state, move) {
   document.getElementById('s-cycle').textContent = state.cyclicPhase;
   const activeKIdx = state.kPermutation ? state.kPermutation[activeIdx] : activeIdx;
   document.getElementById('s-active-vertex').textContent = `K${activeKIdx + 1}`;
+
+  // Phase A1 — face identity. Only refresh on a real turn (gyro_state passes
+  // move=null and would otherwise blank the display between turns). Half-turn
+  // moves still trigger a turn but produce no face signature → show "—".
+  if (move) {
+    const faceEl = document.getElementById('s-face');
+    if (faceEl) {
+      const sig = FACE_SIG[move];
+      if (sig) {
+        faceEl.textContent = `${move} · ${sig.envelope}`;
+        faceEl.title = `envelope: ${sig.envelope} · articulation: ${sig.articulation} · motion: ${sig.motion}`;
+        faceEl.className = 'state-val accent2';
+      } else {
+        faceEl.textContent = `${move} · —`;
+        faceEl.title = 'half-turn or non-face move — no face signature';
+        faceEl.className = 'state-val';
+      }
+    }
+  }
 
   if (state.kPermutation) {
     for (let i = 0; i < 8; i++) {
@@ -1592,6 +1954,64 @@ function updateState(state, move) {
     }
   }
 
+  // Vertex-position animation: meshes/labels are identity-bound, so on a
+  // perm change each K-identity needs a new target slot position. Capture
+  // the currently-painted positions as the new `from` for interrupt safety.
+  if (state.kPermutation) {
+    const permKey = state.kPermutation.join(',');
+    if (permKey !== lastPermKey) {
+      const slotOfK = new Array(8);
+      for (let i = 0; i < 8; i++) slotOfK[state.kPermutation[i]] = i;
+      if (!vertexAnimReady) {
+        // First perm — teleport to avoid sweeping in from identity perm on connect.
+        for (let k = 0; k < 8; k++) {
+          vertexPosFrom[k].copy(CUBE_VERTS[slotOfK[k]]);
+          vertexPosTarget[k].copy(CUBE_VERTS[slotOfK[k]]);
+          vertexPosAnimated[k].copy(CUBE_VERTS[slotOfK[k]]);
+        }
+        vertexAnimStart = performance.now() - VERTEX_STEP_MS;
+        vertexAnimReady = true;
+      } else {
+        for (let k = 0; k < 8; k++) {
+          vertexPosFrom[k].copy(vertexPosAnimated[k]);
+          vertexPosTarget[k].copy(CUBE_VERTS[slotOfK[k]]);
+        }
+        vertexAnimStart = performance.now();
+      }
+      lastPermKey = permKey;
+    }
+  }
+
+  // Ghost-vertex animation: mirror the K-perm pattern for C-identities.
+  // `cAssignments[slot]` = C-type (1..8) at that slot; always a full
+  // permutation of {1..8}, so each C-type has exactly one slot every turn.
+  // slotOfC[c-1] = state.cAssignments.indexOf(c).
+  if (state.cAssignments) {
+    const cKey = state.cAssignments.join(',');
+    if (cKey !== lastCAssignKey) {
+      const slotOfC = new Array(8);
+      for (let slot = 0; slot < 8; slot++) {
+        slotOfC[state.cAssignments[slot] - 1] = slot;
+      }
+      if (!ghostVertAnimReady) {
+        for (let k = 0; k < 8; k++) {
+          ghostVertPosFrom[k].copy(CUBE_VERTS[slotOfC[k]]);
+          ghostVertPosTarget[k].copy(CUBE_VERTS[slotOfC[k]]);
+          ghostVertPosAnimated[k].copy(CUBE_VERTS[slotOfC[k]]);
+        }
+        ghostVertAnimStart = performance.now() - GHOST_VERT_STEP_MS;
+        ghostVertAnimReady = true;
+      } else {
+        for (let k = 0; k < 8; k++) {
+          ghostVertPosFrom[k].copy(ghostVertPosAnimated[k]);
+          ghostVertPosTarget[k].copy(CUBE_VERTS[slotOfC[k]]);
+        }
+        ghostVertAnimStart = performance.now();
+      }
+      lastCAssignKey = cKey;
+    }
+  }
+
   // Update 3D cube labels with full vertex params
   updateVertexLabels(
     state.kPermutation,
@@ -1599,7 +2019,7 @@ function updateState(state, move) {
     state.cAssignments || null,
     activeIdx
   );
-  updateActiveVertexIn3D(activeIdx);
+  updateActiveVertexIn3D(activeIdx, activeKIdx);
 
   const activeSet = new Set(state.sieve);
   for (let i = 0; i < SIEVE_RANGE; i++) {
@@ -1610,17 +2030,36 @@ function updateState(state, move) {
     if (lbl) lbl.className = isActive ? 'active' : '';
   }
 
-  if (state.gyro) {
-    const [x, y, z, w] = state.gyro;
-    currentGyro.set(-x, z, y, w);
-    hasGyro = true;
-  }
+  // currentGyro / hasGyro are driven solely by the gyro_tick handler, which
+  // ships the SLERP-interpolated visual quat. Writing them here too would
+  // superimpose a fresh-but-choppy 10 Hz stream on top of the smooth 60 Hz
+  // lagged stream — visible as the cube strobing between two poses once per
+  // BLE packet. Only non-gyro HUD state (snap, sieve, active vertex, etc.)
+  // belongs in updateState.
 
   if (state.snapQuat) {
     const [sx, sy, sz, sw] = state.snapQuat;
+    const snapEl = state.snapElement;
     currentSnap.set(-sx, sz, sy, sw);
+    ghostTarget.copy(currentSnap);
+    if (!ghostAnimReady) {
+      // First snap — skip the animation so the ghost doesn't sweep from
+      // identity on connect. Mark the animation already-finished by
+      // backdating the start by GHOST_SNAP_MS.
+      ghostFrom.copy(currentSnap);
+      ghostAnimated.copy(currentSnap);
+      ghostAnimStart = performance.now() - GHOST_SNAP_MS;
+      ghostAnimReady = true;
+    } else if (snapEl !== lastSnapElement) {
+      // New snap element — start a fresh animation from whatever the
+      // ghost is currently displaying, so interrupted animations never
+      // jump. `ghostAnimated` is written by the animate loop on every
+      // rAF tick, so it reflects the last painted pose.
+      ghostFrom.copy(ghostAnimated);
+      ghostAnimStart = performance.now();
+    }
+    lastSnapElement = snapEl;
     hasSnap = true;
-    updateGhostLabels(state.cAssignments);
     updateSnapOverlay(state.snapElement, state.gyroDeviation ?? 0);
   }
 
@@ -1738,11 +2177,8 @@ function updateV2State(state) {
     }
   }
 
-  // Expression: deviation is already in gyroDeviation
-  if (typeof state.gyroDeviation === 'number') {
-    document.getElementById('expr-dev').textContent = state.gyroDeviation.toFixed(2);
-    document.getElementById('expr-dev-bar').style.width = (state.gyroDeviation * 100) + '%';
-  }
+  // expr-dev is driven by the gyro_tick handler (60 Hz). Writing it here
+  // would duplicate at BLE rate and beat visibly against the tick stream.
 }
 
 function handleSpellEvent(data) {
@@ -1762,6 +2198,27 @@ function handleSpellEvent(data) {
   spellNotificationTimeout = setTimeout(() => {
     notifEl.className = 'spell-notification';
   }, 1500);
+}
+
+// The SOLVED badge tracks live physical-cube state:
+//   - solved (gold + pulse animation on the unsolved→solved edge)
+//   - solved (gold, steady) while the cube stays solved
+//   - dim (grey) once the first turn after solved lands
+let solveBadgePulseTimeout = null;
+function setSolvedBadge(solved, pulse) {
+  const el = document.getElementById('mode-solved');
+  if (!el) return;
+  el.classList.toggle('dim', !solved);
+  if (pulse) {
+    el.classList.remove('pulse');
+    void el.offsetWidth;
+    el.classList.add('pulse');
+    if (solveBadgePulseTimeout) clearTimeout(solveBadgePulseTimeout);
+    solveBadgePulseTimeout = setTimeout(() => el.classList.remove('pulse'), 2400);
+  }
+}
+function handleSolveEvent() {
+  setSolvedBadge(true, true);
 }
 
 // Tilt and spin are derived from gyro quaternion client-side
@@ -1839,7 +2296,7 @@ function wsConnect() {
       if (msg.type === 'state') {
         updateState(msg.data, msg.move);
         updateV2State(msg.data);
-        computeLocalExpression(msg.data.gyro);
+        // computeLocalExpression runs off gyro_tick only (see its handler).
       } else if (msg.type === 'gyro_state') {
         pendingGyroState = msg.data;
         if (!gyroThrottleFrame) {
@@ -1847,18 +2304,40 @@ function wsConnect() {
             if (pendingGyroState) {
               updateState(pendingGyroState, null);
               updateV2State(pendingGyroState);
-              computeLocalExpression(pendingGyroState.gyro);
               pendingGyroState = null;
             }
             gyroThrottleFrame = null;
           });
         }
+      } else if (msg.type === 'gyro_tick') {
+        // 60 Hz lightweight pose update from relay's Kalman loop.
+        // Skip full state recompute — only refresh gyro-driven visuals.
+        const [x, y, z, w] = msg.data;
+        currentGyro.set(-x, z, y, w);
+        hasGyro = true;
+        if (autoZeroPending) {
+          gyroZeroInv.copy(currentGyro).invert();
+          autoZeroPending = false;
+          // Mirror the zero to the relay so the engine's snap cells centre
+          // on this rest pose too — otherwise snap thresholds are anchored
+          // in the raw sensor frame and feel asymmetric after auto-zero.
+          wsSend({ type: 'zero_gyro' });
+        }
+        if (typeof msg.dev === 'number') {
+          const devEl = document.getElementById('expr-dev');
+          const devBar = document.getElementById('expr-dev-bar');
+          if (devEl) devEl.textContent = msg.dev.toFixed(2);
+          if (devBar) devBar.style.width = (msg.dev * 100) + '%';
+        }
+        computeLocalExpression(msg.data);
       } else if (msg.type === 'diagrams') {
         populateDiagramSelect(msg.data);
       } else if (msg.type === 'spell') {
         handleSpellEvent(msg.data);
       } else if (msg.type === 'spell_book') {
         spellBook = msg.data;
+      } else if (msg.type === 'solve') {
+        handleSolveEvent();
       }
     } catch (e) {
       console.error('Parse error:', e);
@@ -1901,11 +2380,37 @@ pathSelect.addEventListener('change', () => {
   wsSend({ type: 'set_mode', path: pathSelect.value });
 });
 
+// Visible path toggle in the State panel. Click flips V1 ↔ V2 via the same
+// WS message the hidden pathSelect uses. State updates mirror the new value
+// back into #s-path and pathSelect in updateState() so the engine is the
+// source of truth (niklas spell can also flip path — see engine.ts).
+document.getElementById('s-path').addEventListener('click', () => {
+  const cur = document.getElementById('s-path').textContent.trim();
+  const next = cur === 'V2' ? 'V1' : 'V2';
+  wsSend({ type: 'set_mode', path: next });
+});
+
 cmodeSelect.addEventListener('change', () => {
   wsSend({ type: 'set_mode', cCube: cmodeSelect.value });
 });
 
 resetBtn.addEventListener('click', () => {
+  wsSend({ type: 'reset' });
+});
+document.getElementById('resetBtnVisible')?.addEventListener('click', async () => {
+  // Tell the cube itself "you are now solved" so its internal facelet
+  // report re-anchors to reality. Same action as GAN CubeStation's reset.
+  // Without this, the FACELETS stream can stay out of phase with the
+  // physical cube (e.g. if the cube was moved while disconnected).
+  if (activeCube) {
+    try {
+      await activeCube.sendCubeCommand({ type: 'REQUEST_RESET' });
+      lastSolvedReport = true;
+      setSolvedBadge(true, false);
+    } catch (e) {
+      console.warn('Cube REQUEST_RESET failed:', e);
+    }
+  }
   wsSend({ type: 'reset' });
 });
 
@@ -1917,6 +2422,28 @@ gyroSmoothSlider.addEventListener('input', () => {
   wsSend({ type: 'set_gyro_smoothing', value: val });
 });
 
+// Ghost cube size — uniform scale around origin (cube's center), so the
+// ghost can read as "inside" the live cube (<1) or "surrounding" it (>1).
+// Persisted in localStorage so the user's chosen size survives reloads.
+const ghostSizeSlider = document.getElementById('ghostSize');
+const ghostSizeValEl = document.getElementById('ghostSizeVal');
+function applyGhostSize(val) {
+  ghostGroup.scale.setScalar(val);
+  ghostSizeValEl.textContent = val.toFixed(2);
+}
+const savedGhostSize = parseFloat(localStorage.getItem('ghostSize'));
+if (isFinite(savedGhostSize) && savedGhostSize >= 0.2 && savedGhostSize <= 2.5) {
+  ghostSizeSlider.value = savedGhostSize.toFixed(2);
+  applyGhostSize(savedGhostSize);
+} else {
+  applyGhostSize(1.0);
+}
+ghostSizeSlider.addEventListener('input', () => {
+  const val = parseFloat(ghostSizeSlider.value);
+  applyGhostSize(val);
+  localStorage.setItem('ghostSize', val.toFixed(2));
+});
+
 // ============================================================
 // Cube BLE Connection (Web Bluetooth)
 // ============================================================
@@ -1925,6 +2452,12 @@ gyroSmoothSlider.addEventListener('input', () => {
 const cubeStatus = { set textContent(_v) {}, set className(_v) {} };
 const connectBtn = document.getElementById('connectBtn');
 const macInput = document.getElementById('macAddress');
+
+// Canonical solved facelets (Kociemba notation: U9 R9 F9 D9 L9 B9).
+const SOLVED_FACELETS = 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB';
+// Module-scope handle so the Reset button can reach the connected cube.
+let activeCube = null;
+let lastSolvedReport = true; // assume connect-time cube is solved
 
 if (localStorage.getItem('ganMacAddress')) {
   macInput.value = localStorage.getItem('ganMacAddress');
@@ -1948,24 +2481,41 @@ connectBtn.addEventListener('click', async () => {
     const cube = await connectGanCube(async (device, isFallbackCall) => {
       return macAddress;
     });
+    activeCube = cube;
 
     cubeStatus.textContent = 'connected';
     cubeStatus.className = 'ok';
     connectBtn.textContent = 'Connected';
     connectBtn.classList.add('connected');
     connectBtn.disabled = true;
+    applyCubeConnectView();
 
+    // The GAN library emits FACELETS events with `event.facelets` on every
+    // move — the authoritative physical cube state, no client-side tracker.
     cube.events$.subscribe((event) => {
       if (event.type === 'MOVE') {
         wsSend({ type: 'move', value: event.move });
+      } else if (event.type === 'FACELETS') {
+        const solved = event.facelets === SOLVED_FACELETS;
+        if (solved && !lastSolvedReport) {
+          // Edge fires only through the relay → WS solve message → handleSolveEvent,
+          // so the pulse stays in sync with the OSC /xk/solve emit.
+          wsSend({ type: 'cube_solved' });
+        } else if (!solved && lastSolvedReport) {
+          // Unsolved edge — dim badge immediately, no relay round-trip needed.
+          setSolvedBadge(false, false);
+        }
+        lastSolvedReport = solved;
       } else if (event.type === 'GYRO' || event.type === 'GYROSCOPE' || event.gyro) {
         wsSend({ type: 'gyro', data: event.gyro || event });
       } else if (event.type === 'DISCONNECT') {
+        activeCube = null;
         cubeStatus.textContent = 'disconnected';
         cubeStatus.className = 'err';
         connectBtn.textContent = 'Connect Cube';
         connectBtn.classList.remove('connected');
         connectBtn.disabled = false;
+        revertCubeConnectView();
       }
     });
 

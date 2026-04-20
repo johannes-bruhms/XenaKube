@@ -108,20 +108,39 @@ export function spellToOsc(match: SpellMatch): OscMessage {
   return { address: '/xk/spell', args: [match.spell.name] };
 }
 
+/** Cube solved (unsolved → solved edge) → single OSC message with no args */
+export function solveToOsc(): OscMessage {
+  return { address: '/xk/solve', args: [] };
+}
+
 /**
- * Voice output → OSC message(s). One /xk/voice per active voice event.
+ * Voice output → OSC message(s). Emits `/xk/face <face>` FIRST (so the
+ * bridge has the face-signature loaded when phrase dispatch reads it),
+ * then one `/xk/voice` per active voice event.
+ *
  * Called from relay's engine.onVoice listener — fires only on real turns,
  * not per gyro packet.
+ *
+ * When `output.face` is null (diagram-driven advance, future silent paths),
+ * the `/xk/face` line is skipped and the bridge falls back to complex-only
+ * dispatch — same behaviour as before Phase A1.
  */
 export function voiceToOsc(output: import('./voice-engine.js').VoiceOutput): OscMessage[] {
-  return output.active.map(ev => ({
-    address: '/xk/voice',
-    args: [
-      ev.vertexIndex,
-      ev.complex,
-      ev.params.density,
-      ev.params.intensity,
-      ev.params.duration,
-    ],
-  }));
+  const msgs: OscMessage[] = [];
+  if (output.face !== null) {
+    msgs.push({ address: '/xk/face', args: [output.face] });
+  }
+  for (const ev of output.active) {
+    msgs.push({
+      address: '/xk/voice',
+      args: [
+        ev.vertexIndex,
+        ev.complex,
+        ev.params.density,
+        ev.params.intensity,
+        ev.params.duration,
+      ],
+    });
+  }
+  return msgs;
 }
