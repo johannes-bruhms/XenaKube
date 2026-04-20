@@ -174,6 +174,38 @@ Speedcubers solve the equivalent problem by **chunking** — `R U R' U'` isn't f
 
 > XenaKube is Xenakis' *Nomos Alpha* machinery, but the machine sits inside the performer. Each cube turn runs a group-theoretic transformation that determines the next sound, so the performer composes by permuting. Agency comes back through two doors: a vocabulary of known move-sequences (like a speedcuber's algorithms), and a physically-anchored zero state (the solved cube = silence). Between the two, chance and intention share the same instrument.
 
+## Two-Brain Architecture — Compositional vs Performance Layers
+
+### The current split (circa Phase A1)
+
+Engine-side (`src/*`) computes *structural* decisions: which S4 element, which complex, which vertex, which face identity, what duration, what intensity. Max-side (`max/xk_swam.js`) computes *phrase-level* note-generation: which pitches inside the `foldToRange` window, how many rebows, stochastic timing, the per-complex phrase contour. Both layers make composition-relevant decisions; only the engine side is reachable from the dashboard.
+
+This worked fine as long as the only consumer of the bridge's output was the cellist's ear. It stops working cleanly the moment we want a second consumer — real-time notation, a recording log, a training tool — because the dashboard can't know what Max is doing without re-implementing the Max RNG and sieve logic in JavaScript.
+
+### The migration
+
+**Compositional brain → TypeScript, performance brain → Max.** Over Phase B + Phase E tier 3, relocate every stochastic / musical-decision function in `xk_swam.js` (`phraseC1`..`phraseC8`, `pickPitch`, `foldToRange`, the per-complex count/spacing randomizers) into `src/`. Max becomes a dumb-MIDI renderer that accepts a note-list + CC schedule and plays it. The dashboard consumes the exact same note-list for notation.
+
+### Why this doesn't change the sound
+
+The migration is a transposition of *where* the math runs, not *which* math runs. Same RNG (use the same seeded PRNG on both sides during A/B), same sieve, same fold function, same timings. The cellist's instrument — the SWAM physical model, bowing, KS + CC — lives on the Max side and is untouched. In pilot we run both layers under a `USE_TS_PHRASES` flag and A/B them until they sound indistinguishable; then we retire the Max `phraseCX` and commit.
+
+### Why this is worth doing
+
+- **Notation correctness is free.** Dashboard renders from the same data Max plays.
+- **The phrase library (Phase B) becomes pleasant to author.** Phrase spells are short TS functions returning a note-list — versionable, testable, dashboard-previewable. Writing them inside Max is currently the main friction against growing the spell vocabulary.
+- **Recording / replay is trivial.** A performance is just a sequence of TS-generated note-lists; re-rendering through a new bridge (e.g. a different VST) is one function away.
+- **Max-side code shrinks.** The bridge becomes ≤100 lines of MIDI + CC routing. Everything else moves to tested TypeScript.
+
+### What stays in Max
+
+- `vst~` hosting SWAM and `dac~` output.
+- KS / CC translation (note-list → `midievent`).
+- Real-time expression envelope slewing (CC 11 / CC 80 ramps). These ARE performance-layer concerns — they run inside the SWAM note lifecycle, not the compositional timeline.
+- Panic / cleanup / inactivity watchdog.
+
+Decision gate: start the pilot when Phase A1 sculpt-pass is complete (phrase-shape rendering would be the first thing to port, so it's cheaper to write it in TS from the start once we commit). Track as Phase B + Phase E tier 3 in `docs/todo.md`.
+
 ## Performance Speed Regimes
 
 A Rubik's cube introduces a performance dimension Xenakis never dealt with: the rate of group transformations is controlled by the performer in real time, and varies by orders of magnitude.

@@ -68,7 +68,7 @@ npx tsc --noEmit      # type-check only
 
 ## Architecture
 
-All composition math in TypeScript (`src/`). SuperCollider = sound only (built-in SynthDefs). Max/MSP + SWAM Cello 3 = alternate synthesis via MIDI (physical-modeling cello VST). TouchDesigner/browser = visuals only.
+*Structural* composition math in TypeScript (`src/`) — S4, K_i, C_i, sieve, face-identity, voice / duration / intensity decisions. *Phrase-level* note-generation (pitches inside `foldToRange`, rebow counts, per-complex stochastic contours) currently lives in `max/xk_swam.js`; planned migration to TS is tracked as Phase B + Phase E tier 3 (`docs/research_notes.md` → "Two-Brain Architecture"). SuperCollider = sound only (built-in SynthDefs). Max/MSP + SWAM Cello 3 = alternate synthesis via MIDI (physical-modeling cello VST). TouchDesigner/browser = visuals only.
 
 ```
 GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
@@ -127,7 +127,7 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
 
 Overlay regions:
 - **Top-left column** (`.ovl-tl`): title + MAC/connect (button turns green via `.connected`), mode badges, active K/C cards.
-- **Bottom-left stack** (above piano roll): **State** panel (active voice, S4 element, path, step, snap, complex phase, orbit, scramble, permutation) then **Expression** panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble).
+- **Bottom-left column** (`.ovl-bl`, sibling of `.ovl-tl`, anchored `bottom: 110px`): **State** panel (face, active voice, S4 element, path, step, snap, complex phase, orbit, scramble, permutation) then **Expression** panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble). `zoom: 0.5` applies per-child, not on the wrapper — keeps the bottom anchor zoom-invariant so the stack never overlaps the sieve strip or the K/C cards regardless of browser zoom.
 - **Top-center**: spell buffer + spell notification.
 - **Top-right**: cam/live/ghost rotate toggles, then rotation gizmo.
 - **Bottom**: full-width sieve piano-roll (C2–C6).

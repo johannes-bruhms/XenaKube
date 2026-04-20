@@ -74,6 +74,33 @@ Current mapping (see CLAUDE.md "Conceptual mapping") is not Xenakis-faithful: co
 - [ ] Hold decision until 12 face-signatures are in place and auditioned.
 - [ ] When ready: pick A (rebuild COMPLEX table to match Xenakis) or B (add secondary-technique rolls per voice, path/tetra-biased) or hybrid.
 
+### Phase E — Real-time notation display *(tier 1 starting 2026-04-19)*
+
+**Goal**: render the generated material as live staff notation on the dashboard. Audience-facing first (read the instrument's output), performer-facing second (post-hoc review). Not a performance aid — the cube and the ear are.
+
+Three tiers of fidelity, implemented in order. Tier 1 is cheap and standalone; tier 3 is the long road that also unlocks Phase B.
+
+**Tier 1 — Archetypal notation** *(start here)*. Derive a StaveNote from each `voice` WS event using only what the engine already knows: pitch from sieve + `pitchClassMod(vertexIdx)` + `face.registerBias`, duration from `voice.duration` quantized to the nearest standard value (q / e / h / w), dynamic from `voice.intensity`, articulation glyph from `face.envelope` (pluck → staccato, stab → accent, drone → fermata, etc.). No attempt to match what SWAM's internal phraseCX generator actually plays — just the archetype of the gesture. Rolling buffer of last N=8 notes, re-render on each voice event.
+
+- [ ] Add VexFlow via CDN to `public/dashboard.html`.
+- [ ] Wire WS `voice` message handler (currently unhandled on the dashboard side).
+- [ ] Build `voiceToStaveNote(voice)` — pure function, single-octave bass clef, one fallback key signature.
+- [ ] Notation strip overlay — top-center, below the spell-buffer HUD. Transparent background, no title, ≤80 px tall.
+- [ ] Render on voice event; fade oldest note at buffer edge.
+
+**Tier 2 — Literal echo** *(deferred)*. SWAM bridge echoes every `noteon` / `noteoff` / CC burst back to the dashboard (new WS message `midi_echo`). Dashboard transcribes the actual MIDI stream — each rebow in `phraseCX` renders as a separate note. Answers "what did I actually just play?" rather than "what kind of gesture was that?". Cheap on the Max side (one-line echo), moderate on the dashboard (MIDI-to-staff transcription is trickier than tier 1 because timing is real-time rather than nominal).
+
+- [ ] Post-tier-1. Evaluate if tier 1's archetypal view already reads as "what the cube is playing" well enough that tier 2's granularity adds noise rather than signal.
+
+**Tier 3 — Deterministic rebuild via two-brain split** *(gated on Phase B — see below)*. Move note-generation from `max/xk_swam.js` (`phraseCX`, `pickPitch`, `foldToRange`, stochastic counts) into TS. Max becomes a pure performance / MIDI-rendering layer that receives a note-list and plays it. Notation then renders from the same data the bridge plays — zero drift, guaranteed correct, trivial code.
+
+This IS Phase B's dependency. Building a TS-side phrase library is what gives us tier-3-grade notation for free; inversely, committing to tier 3 is what makes the phrase library pleasant to author. Sound does not change — the compositional decisions happen in the same RNG and sieve math, just relocated.
+
+- [ ] Pilot: port `phraseC1` (pizzicato) from Max to TS behind a `USE_TS_PHRASES` flag. A/B against the Max version until they sound indistinguishable.
+- [ ] Port C2–C8 one complex at a time; retire each Max `phraseCX` function as its TS counterpart lands.
+- [ ] Add `voice_stream` WS / OSC channel carrying the TS-generated note list so the dashboard renders exactly what the bridge plays.
+- [ ] Revisit tier 1 / tier 2 codepaths — collapse into tier 3 once stable.
+
 ---
 
 ## Prior direction: Three performance regimes
@@ -112,9 +139,11 @@ Phase A1 (face gesture framework) ─┬─ Phase A2 (solve anchor)  ─┐
                                    │                             │
                                    └─ Phase C (dashboard split) ─┤
                                                                  │
-Phase B (spell phrase library) ─────────────────────────────────┤
+Phase B (spell phrase library) ──── shares two-brain work with ──┤
+                                                                 │    Phase E tier 3
+Phase D (Xenakis A vs B) ── decision gated on A1 completion ────┤
                                                                  │
-Phase D (Xenakis A vs B) ── decision gated on A1 completion ────┘
+Phase E (notation) ─ tier 1 standalone ─ tier 3 ⇔ Phase B ──────┘
 ```
 
-Rough sequencing: A1 first (the new substrate), then A2 in parallel with C's Learning-mode preview panel (they both surface face-signatures), then B once A1 is audible, then D once there's enough of a gestural palette to judge the mapping question against.
+Rough sequencing: A1 first (the new substrate), then A2 in parallel with C's Learning-mode preview panel (they both surface face-signatures). Phase E tier 1 can slot in anytime — it only consumes `voice` events — so we start it in parallel with any other work. Phase B and Phase E tier 3 share the Max→TS note-generation migration and should land together; D follows once the gestural palette is rich enough to judge against.
