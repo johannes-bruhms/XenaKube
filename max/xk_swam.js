@@ -962,6 +962,24 @@ function intensityDensity() {
 	return intMap.density;
 }
 
+// Commit the shared sieve walker (state.sieveIdx / state.sieveDir — used
+// by pickPitch cases 2 & 6) to a single direction for a phrase of `count`
+// notes. If the current position can't fit `count` monotone reads, flip
+// direction and teleport to the opposite extreme. Prevents C2 / C6
+// phrases from turning mid-phrase at a sieve boundary, so each
+// "ordered ascending/descending" gesture reads unambiguously.
+function commitSieveWalk(count) {
+	var s = state.sieve;
+	if (s.length === 0) return;
+	if (state.sieveDir > 0 && state.sieveIdx + count - 1 >= s.length) {
+		state.sieveDir = -1;
+		state.sieveIdx = s.length - 1;
+	} else if (state.sieveDir < 0 && state.sieveIdx - (count - 1) < 0) {
+		state.sieveDir = 1;
+		state.sieveIdx = 0;
+	}
+}
+
 // C1: Pizzicato cloud — short plucked notes, no legato
 function phraseC1(vel, dur) {
 	var count = phraseCount(2, 5);
@@ -986,10 +1004,15 @@ function phraseC1(vel, dur) {
 	scheduleRelease(dur);
 }
 
-// C2: bowed legato run — 2–4 notes (burst regime + fff goes wider)
+// C2: OrderedCloudAscDesc — bowed legato cloud of 3–5 notes (6 in burst)
+// walking the sieve in a single committed direction. Direction flips
+// between phrases via `commitSieveWalk` when the walker would cross a
+// boundary; within a phrase the walk is monotone so each cloud reads
+// unambiguously ascending OR descending.
 function phraseC2(vel, dur) {
-	var hi = state.regime === "burst" ? 5 : 4;
-	var count = phraseCount(2, hi);
+	var hi = state.regime === "burst" ? 6 : 5;
+	var count = Math.max(3, phraseCount(3, hi));
+	commitSieveWalk(count);
 	var spacing = Math.max(90, Math.round(dur * 1000 / (count + 1)));
 	for (var i = 0; i < count; i++) {
 		(function(idx) {
@@ -1001,34 +1024,53 @@ function phraseC2(vel, dur) {
 	scheduleRelease(dur * 1.2);
 }
 
-// C3: sustained — 1 main legato note, optional soft grace notes on f+
+// C3: OrderedCloudFlat — 3–5 legato rebows hovering at constant register
+// (±1 semitone jitter around the sieve centroid). Non-directional: pitches
+// are drawn from a narrow band, not walked like C2. "Ordered" = narrow
+// window; "flat" = no trajectory.
 function phraseC3(vel, dur) {
-	var graceCount = intensityDensity() >= 1.15 ? rrand(1, 2) : 0;
-	var graceSpacing = 120;
-	for (var i = 0; i < graceCount; i++) {
+	var count = phraseCount(3, 5);
+	var durMs = Math.max(400, dur * 1000);
+	var spacing = Math.max(110, Math.round(durMs / (count + 1)));
+	var center = pickPitch(3);
+	for (var i = 0; i < count; i++) {
 		(function(idx) {
-			scheduleAt(idx * graceSpacing + humanDelay(), function() {
-				legatoNote(humanPitch(pickPitch(3)), Math.max(30, humanVel(vel) - 20));
+			scheduleAt(idx * spacing + humanDelay(), function() {
+				var jitter = (Math.random() < 0.5) ? 0 : (Math.random() < 0.5 ? -1 : 1);
+				var p = clamp(center + jitter, CELLO_MIN, CELLO_MAX);
+				legatoNote(humanPitch(p), humanVel(vel));
 			});
 		})(i);
 	}
-	scheduleAt(graceCount * graceSpacing, function() {
-		legatoNote(humanPitch(pickPitch(3)), humanVel(vel));
-	});
-	scheduleRelease(dur * 1.5);
+	scheduleRelease(dur * 1.3);
 }
 
-// C4: harmonics cloud — 2–5 airy flageolet touches across duration
+// C4: IonizedAtom — 2–5 harmonic attacks clustered near a central pitch
+// (sieve centroid ±2 semi jitter) with RANDOM-TIMED arrival across the
+// phrase. "Atom" = localized pitch nucleus (not scattered like C1); the
+// "ionization" is in the timing — each flageolet hit arrives at an
+// unpredictable moment (cf. C1 pizz cloud's rrand delays). Xenakis
+// describes C4 as "interferences with pizzicati"; the SWAM bridge
+// renders it with harmonics (D37) instead, but the structural "atom
+// with ionized timing" character is preserved regardless of technique.
 function phraseC4(vel, dur) {
 	var count = phraseCount(2, 5);
 	var spread = Math.max(300, dur * 1000);
+	var s = state.sieve;
+	var cmx = COMPLEX[4];
+	var base = (s.length > 0) ? s[Math.floor(s.length / 2)] : 60;
+	var faceTr = state.faceTranspose || 0;
+	var loReg = Math.max(24, cmx.register.lo + (state.path === "V2" ? -12 : 0));
+	var hiReg = Math.min(CELLO_MAX, cmx.register.hi);
 	for (var i = 0; i < count; i++) {
 		(function(idx) {
-			var delay = idx === 0 ? 0 : Math.round((idx / count) * spread) + humanDelay();
+			// Ionized timing — random delay across the spread, not progressive.
+			var delay = idx === 0 ? 0 : rrand(40, Math.round(spread));
 			scheduleAt(delay, function() {
-				var p = humanPitch(pickPitch(4));
+				var jitter = rrand(-2, 2);
+				var p = foldToRange(base + state.transpose + faceTr + jitter, loReg, hiReg);
 				var v = clamp(humanVel(vel) - 15, 25, 100);
-				noteOn(p, v);
+				noteOn(humanPitch(p), v);
 				state.activeNotes.push(p);
 				scheduleAt(rrand(180, 400), function() {
 					noteOff(p);
@@ -1064,10 +1106,14 @@ function phraseC5(vel, dur) {
 	scheduleRelease(dur * 1.4);
 }
 
-// C6: ordered stepwise walk — 3–6 notes along the sieve with portamento.
-// First note attacks; walk-step overlaps glide at low vel.
+// C6: OrderedSlidingAscDesc — 3–6 portamento steps along the sieve in a
+// single committed direction. `commitSieveWalk` pre-flips the shared
+// walker so each phrase reads unambiguously ascending OR descending;
+// within the phrase the walk is monotone. First note attacks; subsequent
+// steps overlap as gliss for continuous sliding motion.
 function phraseC6(vel, dur) {
 	var count = phraseCount(3, 6);
+	commitSieveWalk(count);
 	var spacing = Math.max(100, Math.round(dur * 1000 / (count + 1)));
 	for (var i = 0; i < count; i++) {
 		(function(idx) {
