@@ -80,22 +80,22 @@ The resulting pitch sets are irregular — they don't repeat at the octave, don'
 
 ## Sound Complex Types (C1–C8)
 
-From Xenakis' original descriptions (p. 222), mapped to cello-inspired SuperCollider synthesis:
+From Xenakis' original descriptions (p. 222), mapped to the SWAM Cello bridge (`max/xk_swam.js`; see `CLAUDE.md` → "Conceptual mapping"):
 
-| Type | Xenakis Description | SC SynthDef | Design Notes |
-|------|-------------------|-------------|--------------|
-| C1 | Ataxic cloud of sound-points | `\xk_pizz` | Noise burst → Ringz harmonics + Pluck. Random-ish attacks. |
-| C2 | Ordered ascending/descending cloud | `\xk_bowed` | LFSaw + BrownNoise bow, BPeakEQ body. Sweeping contour. |
-| C3 | Ordered flat cloud | `\xk_bowed` | Same synth as C2 but used for sustained, non-directional texture. |
-| C4 | Ionized atom (interferences + pizzicati) | `\xk_harmonic` / `\xk_colLegno` | Sine partials (flageolet) interrupted by col legno clicks. |
-| C5 | Ataxic field of sliding sounds | `\xk_gliss` | LFSaw + FM + PinkNoise bow, lagged freq. Wild slides. |
-| C6 | Ordered ascending/descending sliding | `\xk_gliss` | Same synth, controlled contour. |
-| C7 | Ordered flat sliding | `\xk_gliss` | Same synth, subtle movement. |
-| C8 | Atom (quasi-unison interferences) | `\xk_ponticello` | Two detuned Pulse + HPF + metallic BPF ring + tremolo. |
+| Type | Xenakis Description | SWAM Technique |
+|------|---------------------|----------------|
+| C1 | Ataxic cloud of sound-points | Pizzicato cloud |
+| C2 | Ordered ascending/descending cloud | Arco with directional sieve walk |
+| C3 | Ordered flat cloud | Arco legato, narrow pitch window |
+| C4 | Ionized atom (interferences + pizzicati) | Harmonics clustered at sieve centroid (path × tetra selects OCT / OCT_5TH / CTRL) |
+| C5 | Ataxic field of sliding sounds | Portamento, ataxic |
+| C6 | Ordered ascending/descending sliding | Portamento with directional sieve walk |
+| C7 | Ordered flat sliding | Portamento, narrow register |
+| C8 | Atom (quasi-unison interferences) | Near-bridge + tremolo |
 
 The α/β/γ mappings shuffle which complex type sits at which vertex position. For example, vertex 1 gets C7 in α, C2 in β, and C5 in γ. Some vertices are stable across phases (vertex 0 always gets C1; vertex 6 always gets C8).
 
-**SWAM bridge note.** The mapping above is the SC side. The Max/SWAM bridge implements a parallel but not-yet-Xenakis-faithful mapping (see `CLAUDE.md` → "Conceptual mapping"). Xenakis' primary-source technique string for *Nomos Alpha* is `[pizz. f.c.l. an pizz.gl. a trem. harm. hr trem. asp asp trem. a interf.]` — tremolo appears on 4 of 8 complexes, harmonics on 2, and several complexes are combinatorial (tremolo+harmonics, harmonic tremolo). Decision on rebuild (A) vs pragmatic layering (B) is deferred until the face-identity gesture framework is playing — see `docs/todo.md` Phase D.
+**Xenakis primary-source technique string.** `[pizz. f.c.l. an pizz.gl. a trem. harm. hr trem. asp asp trem. a interf.]` — tremolo appears on 4 of 8 complexes, harmonics on 2, and several complexes are combinatorial (tremolo+harmonics, harmonic tremolo). The SWAM bridge above is a cello-idiomatic approximation; decision on a Xenakis-faithful rebuild (A) vs pragmatic layering (B) is deferred until the face-identity gesture framework is playing — see `docs/todo.md` Phase D.
 
 ## Hardware
 

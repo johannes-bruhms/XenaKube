@@ -281,8 +281,7 @@ Reference: `swam_cello_reference.md` §2 core KS table and §2 Bow Polyphony Pag
 
 **Fix** (relay / engine, not the Max bridge):
 - Remove the `/xk/voice` message from `stateToOsc()` in `src/osc-output.ts`.
-- In `relay.js`, extend the existing `engine.onVoice(output)` listener (currently WS-broadcast only, around line 258) to also `oscMax.send('/xk/voice', ...)` and `oscSC.send('/xk/voice', ...)`. Voice events now fire once, on actual voice transitions, as intended.
-- SC's `/xk/voice` OSCdef needs no change — it already handles single-emission voice events.
+- In `relay.js`, extend the existing `engine.onVoice(output)` listener (currently WS-broadcast only, around line 258) to also `oscMax.send('/xk/voice', ...)`. Voice events now fire once, on actual voice transitions, as intended.
 
 **Fallback inside `xk_swam.js`** (if the upstream fix is delayed): in `handleVoice`, dedupe when `(vtxIdx, complexType, intensity)` equals the last call and the gap is < 500 ms. Cheaper to ship but masks the real bug.
 
@@ -752,10 +751,9 @@ Highest-leverage first. Stop-test-listen between phases.
 ### Phase 0 — Upstream voice firehose & panic (D16, D17)
 *Prerequisite for everything else. Until Phase 0 is complete, no listening test is valid — the 10 Hz voice storm and stuck notes mask every other symptom.*
 - [x] Remove `/xk/voice` from `stateToOsc()` in `src/osc-output.ts`
-- [x] Extend `engine.onVoice` listener in `relay.js` to send `/xk/voice` over OSC to SC (57120) and Max (57121)
+- [x] Extend `engine.onVoice` listener in `relay.js` to send `/xk/voice` over OSC to Max (57121)
 - [x] `cancelPhrase()` calls `allNotesOff()` before cancelling scheduled Tasks
 - [x] Inactivity watchdog in `xk_swam.js` with the four-way guard from D17 (active notes AND no release task AND no pending phrase tasks AND no `/xk/voice` for 3 s) → `allNotesOff()` + CC reset. Safety net only; must not truncate sustained C3/C7 notes.
-- [ ] **SC cross-check**: after the `/xk/voice` relocation, run SC + cube and confirm (a) each turn produces exactly one voice event, (b) holding still produces no retrigger, (c) no silence gap appears where SC previously relied on the 10 Hz re-assertion. If (c) fails, add a re-emit inside SC's OSCdef rather than restoring the state-burst `/xk/voice`.
 - [x] (Optional, preferred over watchdog alone) `/xk/panic` OSC from relay's WS-disconnect handler → `bang()` in v8. Deterministic cleanup on disconnect.
 
 **Parallel task (independent; can land alongside Phase 0)**: Niklas *detection only* per D19 — `src/spells.ts` entry, `mode-manager.ts` stub, `/xk/spell niklas` on the wire, dashboard visibility. Audio effect deferred to Phase 5.
@@ -871,7 +869,7 @@ Highest-leverage first. Stop-test-listen between phases.
 
 ## Verification plan (per phase)
 
-**Phase 0** — Hold cube still, relay running: VST should be silent (no notes firing at 10 Hz). Turn once: exactly one phrase plays and ends cleanly. Unplug OSC cable mid-phrase: within 3 s, all notes released. Reconnect: next turn plays normally. Start a long C3 or C7 phrase (duration ≥ 5 s): full envelope plays to completion, watchdog does **not** cut it. Run the same test with SC as the target synth: one voice per turn, no silence gap relative to prior behavior — if SC goes quiet where it used to re-trigger, fix inside SC's OSCdef, not by restoring the burst.
+**Phase 0** — Hold cube still, relay running: VST should be silent (no notes firing at 10 Hz). Turn once: exactly one phrase plays and ends cleanly. Unplug OSC cable mid-phrase: within 3 s, all notes released. Reconnect: next turn plays normally. Start a long C3 or C7 phrase (duration ≥ 5 s): full envelope plays to completion, watchdog does **not** cut it.
 
 **Phase 1** — Send `midievent 144 24 80` on `KS_CH`. Next turn should sound **pizzicato**. Send `144 24 40` → back to bow. Send `144 33 100` twice → harmonics toggle on then off.
 

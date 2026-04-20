@@ -34,7 +34,6 @@ setInterval(() => {
 const engine = new XenaKubeEngine();
 
 // === OSC Clients ===
-const oscSC  = new Client('127.0.0.1', 57120);  // SuperCollider — receives /xk/* engine state
 const oscTD  = new Client('127.0.0.1', 8000);   // TouchDesigner — receives raw /gan/* + /xk/gyro
 const oscMax = new Client('127.0.0.1', 57121);  // Max/MSP — receives /xk/* for SWAM Cello bridge
 
@@ -257,7 +256,6 @@ function gyroLoop() {
 
       kfPredict(dt);
 
-      oscSC.send('/xk/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
       oscTD.send('/gan/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
       oscMax.send('/xk/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
 
@@ -265,7 +263,6 @@ function gyroLoop() {
       const expr = engine.getExpressionFor([kf.q.x, kf.q.y, kf.q.z, kf.q.w], nowMs);
       const exprMsgs = expressionToOsc(expr);
       for (const msg of exprMsgs) {
-        oscSC.send(msg.address, ...msg.args);
         oscMax.send(msg.address, ...msg.args);
       }
 
@@ -298,7 +295,6 @@ gyroLoop();
 engine.onState((state) => {
   const msgs = stateToOsc(state);
   for (const msg of msgs) {
-    oscSC.send(msg.address, ...msg.args);
     oscMax.send(msg.address, ...msg.args);
   }
 
@@ -321,9 +317,8 @@ engine.onState((state) => {
 
 // Broadcast spell events
 engine.onSpell((match) => {
-  // OSC spell message to SC + Max
+  // OSC spell message to Max
   const spellMsg = spellToOsc(match);
-  oscSC.send(spellMsg.address, ...spellMsg.args);
   oscMax.send(spellMsg.address, ...spellMsg.args);
 
   const payload = JSON.stringify({
@@ -349,7 +344,6 @@ engine.onSpell((match) => {
 // Distinct from /xk/scramble, which is BFS distance in S4 (24 elements).
 engine.onSolve(() => {
   const msg = solveToOsc();
-  oscSC.send(msg.address, ...msg.args);
   oscMax.send(msg.address, ...msg.args);
   oscTD.send(msg.address, ...msg.args);
 
@@ -367,7 +361,6 @@ engine.onSolve(() => {
 engine.onVoice((output) => {
   const voiceMsgs = voiceToOsc(output);
   for (const msg of voiceMsgs) {
-    oscSC.send(msg.address, ...msg.args);
     oscMax.send(msg.address, ...msg.args);
   }
 
@@ -382,10 +375,9 @@ engine.onVoice((output) => {
   });
 });
 
-/** Send /xk/panic to SC + Max (used on WS disconnect). Bridges/synth flush state. */
+/** Send /xk/panic to Max (used on WS disconnect). Bridges/synth flush state. */
 function sendPanic() {
   try {
-    oscSC.send('/xk/panic');
     oscMax.send('/xk/panic');
   } catch (e) { /* OSC may be closed; safe to ignore */ }
 }
@@ -427,7 +419,7 @@ server.listen(3000, () => {
 });
 
 // 2. OSC status
-console.log("2. OSC → SuperCollider:57120, TouchDesigner:8000, Max/MSP:57121");
+console.log("2. OSC → Max/MSP:57121, TouchDesigner:8000");
 
 // 3. WebSocket Server
 const wss = new WebSocket.Server({ server });
@@ -444,7 +436,6 @@ function scheduleShutdown() {
       if (wss.clients.size === 0) {
         console.log("No clients reconnected. Shutting down.");
         gyroLoopRunning = false;
-        oscSC.close();
         oscTD.close();
         oscMax.close();
         wss.close();

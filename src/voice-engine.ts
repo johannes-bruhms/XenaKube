@@ -19,7 +19,7 @@ export interface VoiceOutput {
   active: VoiceEvent[];   // 1 event in sequential, 8 in polyphonic
   /** Face identity of the turn that produced this output, or null on
    *  non-face triggers (diagram advance, gyro-only path). Downstream
-   *  consumers (Max bridge, SC) dispatch face-gesture shaping from this. */
+   *  consumers (Max bridge) dispatch face-gesture shaping from this. */
   face: FaceMove | null;
 }
 

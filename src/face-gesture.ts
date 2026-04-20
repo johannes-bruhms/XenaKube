@@ -37,7 +37,7 @@ export interface FaceSignature {
   durationBias: number;
   /** Where the gesture's energy sits in time. */
   articulation: Articulation;
-  /** Stereo bias [-1..+1]. SWAM is mono → stereo; SC side uses this directly. */
+  /** Stereo bias [-1..+1]. Reserved for future stereo routing; SWAM is mono. */
   panBias: number;
   /** Register shift [-1..+1] → up to ±12 semitones. */
   registerBias: number;

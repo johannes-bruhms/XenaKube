@@ -23,7 +23,7 @@ Pivot accepted (2026-04-18). The next block of engine-level work addresses the p
 **Next sculpt pass:**
 - [x] **Envelope / articulation / motion render at the bridge level** (2026-04-18). `ENV_PROFILE` (peakMult / attackMult / releaseMult), `ART_OFF_VEL` (per-articulation note-off velocity), and `MOTION_NUDGE` (±2 semitones, oscillate swings by turnCount parity) wire `sig.envelope` / `sig.articulation` / `sig.motion` into `state.peakExpr`, `scheduleExprEnvelope`'s `attackRampMs`, `scheduleRelease`'s ramp, and `noteOff()`'s velocity. Per-phrase shape contour inside `phraseC1..phraseC8` (the next item) is still pending — current pass shapes the *envelope around* each note but not the note-sequence shape inside the phrase.
 - [ ] Phrase-shape rendering (deeper pass): teach `phraseC1..phraseC8` to read `state.faceEnvelope` / `state.faceMotion` and shape their *note sequence* accordingly (pluck = single staccato note; swell = crescendo through the rebow chain; drone = held single note; burst = iterative subdivision; etc.). Current pass only shapes the per-note envelope, not how many notes a phrase fires or in what direction they move.
-- [ ] Pan bias: wire `sig.panBias` into the SC side (SWAM is mono → stereo; pan lives in SC voice routing). SWAM bridge can still stay mono.
+- [ ] Pan bias: the `sig.panBias` field is currently unused (SWAM is mono). Deferred until a stereo routing path exists.
 - [ ] Tune the 12 signatures against live playing — adjust durationBias / registerBias / envelope choices so all 12 faces are aurally distinguishable in sequence.
 
 **Dashboard surfacing (split between A1 and C):**
@@ -108,7 +108,7 @@ This IS Phase B's dependency. Building a TS-side phrase library is what gives us
 
 ## Prior direction: Three performance regimes
 
-Retained as active substrate — regime classification (`turn-rate.ts`) is already used by the Max bridge for attack-ramp / expression-ramp scaling (D33) and by SC for stacking rules. Further buildout of burst-mode aggregates is on hold until Temporal Identity phases land; the regime axis complements the new framework rather than competing with it.
+Retained as active substrate — regime classification (`turn-rate.ts`) is already used by the Max bridge for attack-ramp / expression-ramp scaling (D33). Further buildout of burst-mode aggregates is on hold until Temporal Identity phases land; the regime axis complements the new framework rather than competing with it.
 
 | Regime | Turn rate | Musical character | Status |
 |--------|-----------|-------------------|--------|
@@ -118,10 +118,10 @@ Retained as active substrate — regime classification (`turn-rate.ts`) is alrea
 
 Pending regime work (held until Temporal Identity is in place — some of these items may restructure or merge into the new phases):
 
-- [ ] **SC polyphonic voice stacking** — needed for Conversational mode. Emit release envelope on previous voice instead of hard-stop; cap 6–8 simultaneous synths.
+- [ ] **Polyphonic voice stacking (SWAM side)** — needed for Conversational mode. Layer voices via multiple SWAM instances or the bridge's Bow Polyphony CC; emit release envelope on previous voice instead of hard-stop.
 - [ ] **Dashboard spell-history trail** — persistent markers on a timeline rather than toasts; pairs naturally with Phase C Performance-mode HUD.
-- [ ] **Burst aggregate state** — `/xk/agg/*` bundle (avgDensity, avgIntensity, complexDistribution histogram, sieveDensity, recentSpells) at ~15 Hz; feeds new SC SynthDefs `\xk_cloud` / `\xk_wash` that replace individual-voice playback above the regime threshold.
-- [ ] **Regime crossfade in SC** — ~0.5 s fade between individual-voice and aggregate-texture paths on `/xk/regime`.
+- [ ] **Burst aggregate state** — `/xk/agg/*` bundle (avgDensity, avgIntensity, complexDistribution histogram, sieveDensity, recentSpells) at ~15 Hz; drives a dedicated "cloud/wash" texture path in the bridge that replaces individual-voice playback above the regime threshold.
+- [ ] **Regime crossfade** — ~0.5 s fade between individual-voice and aggregate-texture paths in the bridge on `/xk/regime`.
 - [ ] **Scramble arc** — in burst mode, scramble factor becomes master parameter; 1.0 (scrambled) = dense/loud/chaotic, 0.0 (solved) = sparse/quiet/pure. Natural 10–15 s solve-decrescendo. Pairs with Phase A2 solve-anchor.
 - [ ] **Path B equivalent** — after ~5 s of silence, activate a sustained gyro-expression drone until turns resume. Formalized structure pauses; instrument still breathes.
 

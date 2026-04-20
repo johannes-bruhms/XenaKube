@@ -7,7 +7,7 @@ When you change code, update the affected section of these docs in the same comm
 - **`CLAUDE.md`** (this file) — architecture, file roles, OSC reference, commands.
 - **`CHANGELOG.md`** — dated entry per user-visible change (Added/Changed/Fixed).
 - **`docs/todo.md`** — tick off done items; add new todos as they emerge.
-- **`docs/research_notes.md`** — design-rationale changes, new mappings, SWAM/SC divergences.
+- **`docs/research_notes.md`** — design-rationale changes, new mappings, primary-source mapping notes.
 - **`docs/revision_roadmap.md`** — SWAM-bridge diagnoses (D*) and phase progress.
 - **`docs/swam_cello_reference.md`** — authoritative SWAM parameter/CC/KS reference.
 - **`README.md`** — only user-facing setup / top-level description changes.
@@ -35,7 +35,7 @@ npx tsc --noEmit      # type-check only
 
 ## OSC Reference
 
-`/xk/*` → SC (57120) and Max (57121). `/gan/*` → TD (8000). Multi-message state burst on every cube turn and at BLE gyro rate (~10 Hz). `/xk/gyro`, `/gan/gyro`, `/xk/expr/*` at 60 Hz from the relay's Kalman loop. `/xk/voice` fires only on real voice transitions (from `engine.onVoice`, not per gyro packet). `/xk/spell` on algorithm detection. Full `XenaKubeState` JSON broadcast to all WS clients on every state change.
+`/xk/*` → Max (57121). `/gan/*` → TD (8000). Multi-message state burst on every cube turn and at BLE gyro rate (~10 Hz). `/xk/gyro`, `/gan/gyro`, `/xk/expr/*` at 60 Hz from the relay's Kalman loop. `/xk/voice` fires only on real voice transitions (from `engine.onVoice`, not per gyro packet). `/xk/spell` on algorithm detection. Full `XenaKubeState` JSON broadcast to all WS clients on every state change.
 
 | Address | Args | Meaning |
 |---------|------|---------|
@@ -68,7 +68,7 @@ npx tsc --noEmit      # type-check only
 
 ## Architecture
 
-*Structural* composition math in TypeScript (`src/`) — S4, K_i, C_i, sieve, face-identity, voice / duration / intensity decisions. *Phrase-level* note-generation (pitches inside `foldToRange`, rebow counts, per-complex stochastic contours) currently lives in `max/xk_swam.js`; planned migration to TS is tracked as Phase B + Phase E tier 3 (`docs/research_notes.md` → "Two-Brain Architecture"). SuperCollider = sound only (built-in SynthDefs). Max/MSP + SWAM Cello 3 = alternate synthesis via MIDI (physical-modeling cello VST). TouchDesigner/browser = visuals only.
+*Structural* composition math in TypeScript (`src/`) — S4, K_i, C_i, sieve, face-identity, voice / duration / intensity decisions. *Phrase-level* note-generation (pitches inside `foldToRange`, rebow counts, per-complex stochastic contours) currently lives in `max/xk_swam.js`; planned migration to TS is tracked as Phase B + Phase E tier 3 (`docs/research_notes.md` → "Two-Brain Architecture"). Max/MSP + SWAM Cello 3 = synthesis via MIDI (physical-modeling cello VST). TouchDesigner/browser = visuals only.
 
 ```
 GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
@@ -79,13 +79,13 @@ GAN i4 (BLE) → Chrome Web Bluetooth → relay.js (Node)
                               SpellDetector  VoiceEngine  ExpressionProcessor
                                     │     │              │
                                     ▼     ▼              ▼
-                              ModeManager  OSC:57120    OSC:57121   OSC:8000  WS
-                              (state machine) SuperCollider  Max/SWAM  TD    Dashboard
+                              ModeManager  OSC:57121    OSC:8000  WS
+                              (state machine) Max/SWAM    TD     Dashboard
 ```
 
 **relay.js** — BLE-to-OSC bridge. Instantiates `XenaKubeEngine`, serves `public/dashboard.html` on `:3000`, receives cube events via WS from the browser. Run: `npx tsx relay.js`. Deps: `node-osc`, `ws`, `tsx`.
 
-- **Gyro upsampling**: BLE ~10 Hz → 60 Hz via velocity-aware quaternion Kalman filter (smoothing slider 0–1, default 0.5). 60 Hz loop uses `process.hrtime.bigint()` spin timer — `setInterval` drifts to ~40 Hz on Windows. OSC (SC / Max / TD) gets `kf.q` — low-latency, predict-based. The dashboard `gyro_tick` WS message gets a separately-computed SLERP-interpolated quat trailing BLE by `VISUAL_DELAY_MS` (default 120 ms) from a raw-sample ring buffer — sacrifices latency for zero extrapolation artefacts on static holds. Full engine-state bursts (`state` / `gyro_state`) still fire at BLE rate via `engine.onGyro`.
+- **Gyro upsampling**: BLE ~10 Hz → 60 Hz via velocity-aware quaternion Kalman filter (smoothing slider 0–1, default 0.5). 60 Hz loop uses `process.hrtime.bigint()` spin timer — `setInterval` drifts to ~40 Hz on Windows. OSC (Max / TD) gets `kf.q` — low-latency, predict-based. The dashboard `gyro_tick` WS message gets a separately-computed SLERP-interpolated quat trailing BLE by `VISUAL_DELAY_MS` (default 120 ms) from a raw-sample ring buffer — sacrifices latency for zero extrapolation artefacts on static holds. Full engine-state bursts (`state` / `gyro_state`) still fire at BLE rate via `engine.onGyro`.
 - **Control messages** (WS → relay): `set_diagram`, `clear_diagram`, `set_mode`, `reset`, `get_diagrams`, `set_gyro_smoothing`, `cube_solved` (browser detects FACELETS==solved on the unsolved→solved edge and reports; relay fires `/xk/solve`), `zero_gyro` (mirrors the dashboard's visual zero — captures `engineGyroZeroInv = conj(kf.q)` so the engine's S4 snap cells re-center on the user's rest pose; fires on auto-zero and the Zero Gyro button).
 - **Lifecycle**: auto-shutdown 5 s after last client disconnects.
 
@@ -145,7 +145,7 @@ Each physical cube turn:
 4. C_i advances (complex type permutation)
 5. **Voice engine** emits active voices (1 in sequential, 8 in polyphonic)
 6. **Expression processor** supplies continuous gyro-derived controls
-7. State broadcast to SC / Max (OSC) + dashboard (WS)
+7. State broadcast to Max (OSC) + dashboard (WS)
 
 ### Voice Modes
 
@@ -197,17 +197,9 @@ Rubik's algorithms detected from the move stream currently trigger **mode change
 - **Sieve L(m,n)**: pitch sets from prime residual classes mod 18; metabola every 3 subs.
 - **Tetra orbits**: 12 even (preserve tetrahedra) + 12 odd (swap).
 
-## SuperCollider
-
-Single file: `sc/xenakube.scd`. Boot: open in SC IDE, `Cmd+B`, select all, `Cmd+Enter`. Listens on lang port 57120. `Cmd+.` = panic.
-
-Sequential single-voice model. Active voice → stereo pan (by vertex position) → reverb send bus → `FreeVerb2` → `Limiter` (0.85). SynthDef roster, voice-overlap rules (min 0.5 s duration before switching), and OSC→synth param bindings are all in `sc/xenakube.scd` comments — source of truth.
-
-Scramble factor → reverb wet (0.1 dry → 0.65 drenched). Tetra orbit → reverb flavor (even = warm, odd = dry). Metabola → bell cue (2 oct above sieve centroid).
-
 ## Max/MSP — SWAM Cello Bridge
 
-Alternate synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) driven via MIDI from a Max/MSP bridge on port 57121. Runs alongside or instead of SC.
+Synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) driven via MIDI from a Max/MSP bridge on port 57121.
 
 ### Patch (4 objects)
 

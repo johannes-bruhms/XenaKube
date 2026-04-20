@@ -1173,11 +1173,11 @@ function phraseC8(vel, dur) {
 // FACE SIGNATURES (Phase A1) — gesture-type mapping per face.
 //
 // Source of truth: src/face-gesture.ts → FACE_SIGNATURES. This bridge
-// mirrors every field (minus panBias — SWAM is mono → stereo; pan lives
-// on the SC side). The ENV_PROFILE / ART_OFF_VEL / MOTION_NUDGE tables
-// below are SWAM-specific rendering placeholders for envelope /
-// articulation / motion. Vocabulary is canonical in TS; rendering
-// multipliers are backend-specific (SC will get its own when it lands).
+// mirrors every field (minus panBias — SWAM is mono; pan is reserved for
+// a future stereo routing path). The ENV_PROFILE / ART_OFF_VEL /
+// MOTION_NUDGE tables below are SWAM-specific rendering placeholders for
+// envelope / articulation / motion. Vocabulary is canonical in TS;
+// rendering multipliers are backend-specific.
 // ================================================================
 var FACE_MAP = {
 	"U":  { durationBias: 0.7, registerBias:  0.8, envelope: "pluck", articulation: "attack",    motion: "up" },

@@ -212,7 +212,7 @@ export class XenaKubeEngine {
     }
 
     // Voice output — computed first, emitted LAST so that downstream
-    // consumers (max/xk_swam.js, SC) see the post-turn state burst
+    // consumers (max/xk_swam.js) see the post-turn state burst
     // (/xk/path, /xk/tetra, …) BEFORE the /xk/voice trigger. Reversing
     // that order caused a 1-turn lag in any bridge-side logic keyed on
     // path or tetra (e.g. D37's path × tetra harmonic rotation for C4):

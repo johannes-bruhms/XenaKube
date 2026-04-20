@@ -13,8 +13,8 @@ GAN i4 Cube (BLE) --> Chrome Web Bluetooth --> relay.js (Node)
                                    SpellDetector  VoiceEngine  Expression
                                          │        │          │
                                          ▼        ▼          ▼
-                                   ModeManager  OSC:57120  OSC:57121  WS
-                                               SuperCollider  Max/SWAM  Browser
+                                   ModeManager  OSC:57121  WS
+                                               Max/SWAM    Browser
 ```
 
 A performer physically turns a Bluetooth-enabled Rubik's cube. Each turn is a musical event: the cube's S4 group state permutes which sound parameters apply to which voice. Rubik's algorithms (like the "sexy move" R U R' U') are detected from the move stream and trigger performance mode changes — palette switching, voice mode toggles, freezes.
@@ -62,7 +62,7 @@ Continuous gyro-derived control values (all normalized 0-1):
 ## Requirements
 
 - [Node.js](https://nodejs.org/) (v18+)
-- [SuperCollider](https://supercollider.github.io/) and/or [Max/MSP 9](https://cycling74.com/) + [SWAM Cello 3](https://www.audiomodeling.com/)
+- [Max/MSP 9](https://cycling74.com/) + [SWAM Cello 3](https://www.audiomodeling.com/)
 - A GAN i4 smart cube (Bluetooth)
 - Chrome (for Web Bluetooth API)
 
@@ -74,9 +74,9 @@ npm install
 
 ## Running
 
-**1. Start SuperCollider**
+**1. Start Max/MSP**
 
-Open `sc/xenakube.scd` in the SuperCollider IDE and evaluate the entire buffer (Cmd+Shift+Enter).
+Open the SWAM Cello bridge patch in Max 9+ (see `max/` + `CLAUDE.md` → "Max/MSP — SWAM Cello Bridge").
 
 **2. Start the relay**
 
@@ -94,7 +94,6 @@ Turn the cube. Sound happens.
 
 ```
 src/              TypeScript engine (S4 group, spells, voice, expression, scramble)
-sc/               SuperCollider synthesis (xenakube.scd)
 max/              Max/MSP SWAM Cello bridge (xk_swam.js for v8 object)
 public/           Browser dashboard (live visualizer + cube connect)
 relay.js          BLE-to-OSC bridge with XenaKubeEngine
