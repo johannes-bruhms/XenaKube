@@ -388,3 +388,11 @@ KS B   (MIDI 35) Page Modifier       hold for B+x combos (advanced)
 - **Harmonics + Tremolo selectors (D31)**: right-click each on the main page → MIDI Learn → CC 78 (Harmonics) / CC 79 (Tremolo). Required because KS F#/G# are 2-band with no Off band — the bridge routes these through CC to reach every state cleanly.
 - Verify Expression responds to CC 11 and Vibrato Depth to CC 1; if not, MIDI-Learn them
 - Save as `xenakube_cello.swampreset`
+
+### Per-instance workflow (D40, instance-pool topology)
+
+Since D40 (2026-04-20) the Max patch runs SWAM Cello 3 under a `poly~ @parallel 1 @voices 8` wrapper — each voice hosts its own `vst~ "SWAM Cello 3"` instance. The CC/KS surface above is identical per instance (same CC numbers, same KS bands, same preset requirements), but preset state is **not shared across instances**: Max saves VST chunks per `poly~` voice slot.
+
+- Open each voice's SWAM GUI once (double-click the voice in the poly~ edit window) and load the `xenakube_cello` preset — or at minimum set its preset to `default` so MIDI Learn assignments are predictable. Voices 1–7 otherwise fall back to whatever SWAM initialised on first instantiation.
+- Inside the poly~ subpatch, MIDI must enter via `polymidiin` → `midiparse` (midievent outlet). Plain `[in]` won't carry MIDI through to the voice's `vst~`.
+- All MIDI-Learn CC assignments (CC 11, 16, 17, 18, 19, 20, 73, 75, 78, 79, 80, 81) must be saved into the preset before it's loaded into a voice — the bridge writes identical CC streams to every voice outlet, and the preset is what maps them to SWAM knobs on each instance.

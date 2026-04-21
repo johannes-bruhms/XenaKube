@@ -4,7 +4,7 @@ Converged plan for rebuilding `max/xk_swam.js` against SWAM Cello 3's actual con
 
 This document is the single source of truth for the SWAM-bridge refactor. Update it as phases complete or new findings change the plan.
 
-> **Status (2026-04-18): refactor COMPLETE.** Diagnoses D1–D39 are all resolved and shipped. No further SWAM-specific refactor work is planned. Engine-level architectural work continues under the Temporal Identity framework — see `docs/todo.md`. New bridge changes required by Phase A1 (face-gesture dispatch) or Phase B (phrase-library playback) are tracked in those phases, not as new D-entries.
+> **Status (2026-04-20): refactor COMPLETE.** Diagnoses D1–D40 are all resolved and shipped. The D40 instance-pool restructure is a bridge-internal rewrite rather than a new SWAM-control finding — filed here because it touches every code path D1–D39 built (per-instance state shards, parameterized MIDI helpers). No further SWAM-specific refactor work is planned. Engine-level architectural work continues under the Temporal Identity framework — see `docs/todo.md`. New bridge changes required by Phase A1 (face-gesture dispatch) or Phase B (phrase-library playback) are tracked in those phases, not as new D-entries.
 
 ---
 
@@ -437,6 +437,60 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 **Why Double/Hold vs Double**: Double/Hold latches the first note's string while the next is struck on a different string — matches how a cellist holds a chord with the bow crossing strings. Double without Hold ends each voice at note-off and cuts the texture short. For overlapping XenaKube turns, Double/Hold produces the smoother lingering-chord feel. Flip the per-complex `bowPoly` field to `BOW_POLY.DOUBLE` if hanging string voices across phrase boundaries become a problem.
 
 **Verification**: land on any non-gliss complex → overlapping turns audibly sustain as a two-string texture rather than each note cutting the previous. Land on C5 / C6 / C7 → gliss phrases still slide (D34 prerequisite preserved via `MONO_POLY_RELEASE` which keeps the single monophonic line the portamento engine needs). The Bow Polyphony selector in the SWAM GUI should visibly jump between option 3 (Double/Hold) and option 1 (Mono Poly Release) as complexes change.
+
+### D40 — Single-instance bottleneck: refactor to N-voice SWAM instance pool *(RESOLVED 2026-04-20)*
+
+**Defect**: The bridge drove a single `vst~` SWAM Cello 3 instance. Every turn's voice shared the same CC/KS address space, so overlapping turns stomped each other: turn N's `setupComplex` would rewrite CC 78 Harmonics / CC 81 Bow Polyphony / KS Play Mode mid-phrase of turn N-1, forcing every in-flight voice onto the new complex's technique. For fast sequences (sexy-move quartet, `R U R' U R U2 R'`, etc.) the audible result was one continuously-retargeted cello line rather than distinct overlapping gestures. Even with D34 (Mono gliss) + D35 (Double/Hold per complex) + D33 (CC slew) fully honoured, a second turn on a different complex would always cut the first short, because the VST had one Play Mode at a time and the bridge kept the last writer's state.
+
+**Root cause**: architectural, not control-plane. D1–D39 correctly modelled SWAM's CC/KS behaviour for *one* voice; they can't stack voices because SWAM Cello 3 is inherently monophonic within its single-instance Play-Mode context. The only way to get N independent technique trajectories is N physical VST instances. The Max side had to grow a `poly~` with parallel DSP, and `xk_swam.js` had to shard every piece of mutable voice state (Play Mode, Harmonics, Tremolo, Bow Polyphony, CC cache, ramp tasks, scheduled phrase tasks, active-notes list, face-gesture snapshot fields, expression env state) off the global `state` object and onto a per-instance record.
+
+**Prerequisite verified in Max**: poly~ with `@parallel 1` at 8 voices on an i7-8700K holds ~40% DSP CPU under max-rate cube turning. `polymidiin` + `midiparse` (midievent outlet) is required inside the poly~ subpatch — plain `in` won't route MIDI correctly. Each voice's SWAM instance must be opened individually and its preset set to `default` (Max preset-save per-poly-slot is per-instance, not shared).
+
+**Fix** (`max/xk_swam.js` — full rewrite, 1892 → 1681 lines):
+
+1. **Outlets and pool** — `POOL_SIZE = 8`, `outlets = POOL_SIZE + 1`, `DEBUG_OUTLET = POOL_SIZE`. Outlets 0–7 fan out to the poly~ voice targets; outlet 8 is the `print xk_swam` debug sink.
+2. **Per-instance record** — `makeInstance(id)` builds one shard per voice:
+    - Lifecycle: `id`, `outlet` (= id), `status ∈ {IDLE, PLAYING, RELEASING}`, `allocatedAt`, `lastVoiceTime`.
+    - Technique selectors (previously on `state`): `activeComplex`, `playMode`, `harmonics`, `tremolo`, `bowPoly`, `gestureMode`, `altFing`, `keepBowDir`.
+    - CC machinery: `ccCache`, `ccRampTasks`, `ksPending`, `ksForceCount`, `forceKS`.
+    - Scheduling: `activeNotes` (note list for `allNotesOff`), `phraseTasks` (cancellable phrase Tasks), `releaseTask`.
+    - Voice-shot snapshot (captured from globals at `handleVoice` time, frozen for the phrase lifetime): `intensity`, `density`, `duration`, `path`, `transpose`, `tetra`, `faceDurationBias`, `faceTranspose`, `faceEnvProfile`, `faceOffVelOverride`, `faceReleaseMult`.
+    - Expression state: `baseExpr`, `peakExpr`, `bowPressureBase`.
+
+    The `instances` array is built once at module load; nothing ever adds/removes records.
+3. **Voice stealing** — `allocateInstance()` prefers IDLE; if none, the oldest RELEASING (lowest `lastVoiceTime`); finally the oldest PLAYING. Stealing calls `stealInstance(inst, now)` which runs `cancelPhrase(inst, false)`, cancels `inst.releaseTask`, and fires `allNotesOff(inst)` before the new voice's phrase dispatch — the previous voice's tail dies cleanly on its own outlet. No cross-instance interference.
+4. **Parameterized MIDI helpers** — every primitive now takes an `inst` first argument and routes via `outlet(inst.outlet, "midievent", …)`: `noteOn`, `noteOff`, `cc`, `ccForce`, `rampCC`, `cancelCCRamp`, `keyswitch`. Selector-diff helpers follow the same pattern: `setPlayMode(inst, …)`, `setHarmonics`, `setTremolo`, `setBowPolyphony`, `setEnum`. `harmonicsForC4(inst)` reads `inst.path / inst.tetra` (the D37 rotation still resolves per-voice; V2+odd still reaches CTRL). Scheduling is parameterized too: `scheduleAt(inst, ms, fn)`, `cancelPhrase(inst, preserveLegatoTail)`, `allNotesOff(inst)`, `scheduleRelease(inst, dur)`. Every phrase generator `phraseC1…phraseC8` takes `inst` and writes only to that instance's CC/note stream.
+5. **Status lifecycle** — `handleVoice`: IDLE/RELEASING/PLAYING → PLAYING (on allocation, `lastVoiceTime = now`). `scheduleRelease` inner task: PLAYING → RELEASING (the instance still has sounding tails but is preferentially reusable). `scheduleRelease` off-task: RELEASING → IDLE.
+6. **Shared sieve walker** — `state.sieve / sieveIdx / sieveDir / sieveHistory` and `commitSieveWalk(count)` remain global. This is the core Xenakian contract: pitch coherence across concurrently-sounding voices comes from a single walking index through the metabola, not N independent walkers. A removed-from-D40 earlier draft did per-complex sieve reset in `setupComplex` — that gets stomped by subsequent instances restarting the walk mid-other-voice, so it was removed.
+7. **Global continuous modulators iterate active instances** — `handleExprTilt / Spin / Dev / Scramble` loop `for (var i = 0; i < POOL_SIZE; i++)`, skipping `status === 'IDLE'`, writing per-instance CCs (Bow Position, Vibrato Depth/Rate, Bow Pressure, Expression scramble). So the cube's live gyro reshapes every currently-sounding voice in parallel — the "overlapping phrases all respond to my hands" feel is preserved. `handleRegime` broadcasts the new attack-ramp multiplier to all PLAYING instances.
+8. **Spell routing** — transient pings use a defined instance:
+    - Accent spells (`sexy-move`, `anti-sune`) route through `instances[state.lastAllocatedInstance]` so they layer on top of the voice that just fired (set by `handleVoice`).
+    - Dedicated-note pings (`oll-cross`, `sune`, `niklas`, `u-perm`) route through `instances[0]`. Pragmatic — these are timbral signatures meant to ring as a discrete event, not a continuation of a per-turn voice. A per-spell allocation pass (below) would promote each ping to its own instance.
+9. **Reset & watchdog** — `resetInstance(inst)` cancels all tasks/ramps/KS-pending, clears `ccCache` / `activeNotes`, null-seeds every selector field (so the next `setupComplex` fires each KS/CC as a diff), writes the silent CC baseline, then pins `GESTURE = EXPR`, `HARMONICS = OFF`, `TREMOLO = OFF`, `BOW_POLY = DOUBLE_HOLD`. `bang()` iterates all instances. `watchdogTick` checks orphan conditions per-instance (note-off without corresponding noteOn, release task overrunning its deadline).
+10. **Debug logging** — `log(msg)` writes to the debug outlet (`outlet(DEBUG_OUTLET, "xk_swam: " + msg)`) so Max's `print xk_swam` still receives every line while outlets 0–7 stay clean MIDI paths.
+
+**Patch topology change**:
+```
+[udpreceive 57121] → [v8 xk_swam.js @autowatch 1] → outlets 0..7 → [poly~ swam_voice 1 @parallel 1 @voices 8]
+                                                  outlet 8 → [print xk_swam]
+                                                                                                  ↓
+                                                                                          [dac~ 1 2]
+```
+Inside `swam_voice.maxpat`: `polymidiin` → `midiparse` (midievent outlet) → `vst~ "SWAM Cello 3" 2` → outputs routed back up through the poly~ summing bus. Plain `[in]` objects won't carry MIDI into the subpatch — `polymidiin + midiparse` is the correct path. `tester.maxpat` still documents the 4-object single-instance chain for hand-testing hypotheses; it's marked as the legacy harness, not the live topology.
+
+**Preset requirement per instance**: Max saves poly~ VST presets per-instance-slot, not globally. Open each voice's SWAM GUI once (double-click the voice in the poly~ edit window) and set its preset to `default` (or the `xenakube_cello` preset from D1 prerequisites once saved). Without this, voices 1–7 fall back to whatever SWAM loaded at first launch.
+
+**Verification**:
+- Fast sexy-move (`R U R' U'`) → four distinct cello utterances overlapping, not one line morphing between techniques. If a Mono gliss complex (C5/C6/C7) and a Pizz complex (C1) fire back-to-back, the gliss continues to slide on its own instance while the pizz plucks on another — previously the pizz's KS wrote Bow Polyphony = Double/Hold and killed the gliss's Mono Poly Release mid-slide.
+- Live gyro on a held cube with 4 active voices → every active instance's Bow Position / Vibrato / Expression walks with tilt/spin/dev; turning the cube still reshapes currently-sounding phrases. Confirm with `ks_logger` on any one voice slot: per-voice CC stream stays coherent with its own complex throughout the phrase.
+- Burst past POOL_SIZE (rapid turning > 8 overlaps) → voice stealing kicks in; the oldest RELEASING voice dies cleanly (watch its outlet go silent before the new phrase starts). No stuck notes, no double-triggering on the stolen instance.
+- Panic (`/xk/panic` or WS disconnect) → `bang()` resets all 8 instances; every VST voice goes silent simultaneously. No per-instance residual.
+- DSP CPU at POOL_SIZE = 8 with `@parallel 1` should sit ≈35–45% on an i7-8700K under max-rate turning.
+
+**What's left**:
+- **Per-spell instance allocation**: harmonic-ping spells currently share `instances[0]`. A cleaner design allocates a dedicated slot per spell event (`allocateInstance()` returns free/stolen voice, the ping plays, `scheduleRelease` returns it to IDLE). Deferred — current routing is audible and consistent.
+- **Shared vs per-instance sieve walker follow-up**: if Phase B phrase-library playback introduces structurally-independent voice lines (e.g. a spell phrase riding on top of per-turn voices), a per-phrase sieve clone may help. Gated on Phase B design, not D40.
+- **POOL_SIZE scaling**: 8 holds 40% DSP on an 8700K; higher CPUs can probably push 12–16. Leave at 8 until a performance limit is hit — bigger pools mean more stolen voices and more instance-preset management overhead.
 
 ### D39 — Tremolo rate modulation: replace 60 Hz spin+breath with per-phrase stochastic envelope *(RESOLVED 2026-04-18)*
 
