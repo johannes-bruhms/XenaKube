@@ -41,11 +41,33 @@
 autowatch = 1;
 inlets = 1;
 
-// Pool size — each instance is one SWAM Cello VST. Max outlets count is
-// fixed at load; resize by editing this constant and saving.
+// Pool size — each instance is one SWAM Cello VST. POOL_SIZE can now be
+// changed without re-wiring the patch (all voices share a single outlet;
+// voice routing is done in-message via `target N`).
 var POOL_SIZE = 8;
-outlets = POOL_SIZE + 1;  // 0..POOL_SIZE-1 → midievent; POOL_SIZE → debug
-var DEBUG_OUTLET = POOL_SIZE;
+
+// MAX_ACTIVE — soft cap on concurrent sounding voices (non-IDLE instances).
+// Decoupled from POOL_SIZE so the pool stays loaded but the texture stays
+// thin. At cap, allocateInstance skips the IDLE branch and voice-steals
+// the oldest RELEASING/PLAYING instead — Xenakis "one step at a time"
+// with a legato halo of overlap from the tail of the previous voice.
+var MAX_ACTIVE = 2;
+outlets = 2;                    // 0 → midievent (all voices), 1 → debug
+var MIDI_OUTLET  = 0;
+var DEBUG_OUTLET = 1;
+
+// Inlet / outlet tooltip labels — shown in Max on hover.
+setinletassist(0,            "OSC /xk/* from relay (port 57121) + bang/on/off/debug");
+setoutletassist(MIDI_OUTLET,  "target N + midievent for all " + POOL_SIZE + " voices → [poly~ swam_voice " + POOL_SIZE + "]");
+setoutletassist(DEBUG_OUTLET, "debug → [print xk_swam]");
+
+// Pulls in all data tables (OSC addresses, SWAM enums, CC band centers,
+// INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE, FACE_MAP,
+// LEGATO_COMPLEX, REGIME_* multipliers) generated from src/osc-schema.ts
+// + src/swam-mapping.ts + src/face-gesture.ts. Regenerate after any TS
+// table edit with `npm run gen:max` and then reload this script (right-
+// click v8 → Reload Script, or edit-and-save to trigger autowatch).
+include("gen_includes.js");
 
 // ================================================================
 // CONFIG — must match SWAM preset
@@ -106,27 +128,9 @@ function hasCC(ccNum) {
 	return true;
 }
 
-// ================================================================
-// D31 — Harmonics / Tremolo CC value maps (band centers)
-// ================================================================
-var HARMONICS_CC_VAL = {};
-HARMONICS_CC_VAL[0] = 16;    // OFF
-HARMONICS_CC_VAL[1] = 48;    // OCT
-HARMONICS_CC_VAL[2] = 80;    // OCT_5TH
-HARMONICS_CC_VAL[3] = 112;   // CTRL
-
-var TREMOLO_CC_VAL = {};
-TREMOLO_CC_VAL[0] = 21;      // OFF
-TREMOLO_CC_VAL[1] = 64;      // SLOW
-TREMOLO_CC_VAL[2] = 106;     // FAST
-
-var BOW_POLY = { MONO_STRING_CROSSING:0, MONO_POLY_RELEASE:1, DOUBLE:2, DOUBLE_HOLD:3, AUTO:4 };
-var BOW_POLY_CC_VAL = {};
-BOW_POLY_CC_VAL[0] = 12;
-BOW_POLY_CC_VAL[1] = 38;
-BOW_POLY_CC_VAL[2] = 64;
-BOW_POLY_CC_VAL[3] = 89;
-BOW_POLY_CC_VAL[4] = 115;
+// HARMONICS_CC_VAL / TREMOLO_CC_VAL / BOW_POLY / BOW_POLY_CC_VAL are
+// declared in gen_includes.js (source: src/swam-mapping.ts). See the
+// include() call at the top of this file.
 
 // ================================================================
 // KEY SWITCHES — SWAM Cello 3 v3.10+ (KS Octave = C0, KS_CH)
@@ -162,25 +166,14 @@ function velForKS(ks, idx, optionCount) {
 	return velForOption(idx, optionCount);
 }
 
-var HARMONICS = { OFF:0, OCT:1, OCT_5TH:2, CTRL:3 };
-var TREMOLO   = { OFF:0, SLOW:1, FAST:2 };
+// HARMONICS, TREMOLO and INTENSITY_MAP are declared in gen_includes.js
+// (source: src/swam-mapping.ts). GESTURE, KS_VEL, PLAY_MODE_VEL stay
+// local — they're Max-runtime concepts (KS velocity encoding, Gesture
+// Mode pin) not shared with the TS side.
 var GESTURE   = { EXPR:0, BIPOLAR:1, BOWING:2 };
 
 var KS_VEL = { LOW: 40, MID: 80, HIGH: 110 };
 var PLAY_MODE_VEL = { bow: KS_VEL.LOW, pizz: KS_VEL.MID, col: KS_VEL.HIGH };
-
-// ================================================================
-// INTENSITY MAP — per-intensity Expression peak, velocity, bow mult,
-// density scalar, tremolo-rate scalar.
-// ================================================================
-var INTENSITY_MAP = {
-	"p":   { expr: 20,  vel: 35,  bowMult: 0.70, density: 0.6, tremRateMult: 0.85 },
-	"mp":  { expr: 38,  vel: 50,  bowMult: 0.85, density: 0.8, tremRateMult: 0.92 },
-	"mf":  { expr: 55,  vel: 68,  bowMult: 1.00, density: 1.0, tremRateMult: 1.00 },
-	"f":   { expr: 75,  vel: 85,  bowMult: 1.15, density: 1.2, tremRateMult: 1.08 },
-	"ff":  { expr: 95,  vel: 100, bowMult: 1.30, density: 1.4, tremRateMult: 1.15 },
-	"fff": { expr: 115, vel: 120, bowMult: 1.45, density: 1.7, tremRateMult: 1.22 }
-};
 
 // ================================================================
 // COMPLEX TABLE — single source of truth per voice
@@ -252,10 +245,8 @@ var COMPLEX = {
 	     register:{ lo:60, hi:81 } }
 };
 
-var REGIME_ATTACK_MULT    = { contemplative:1.2, conversational:1.0, burst:0.5 };
-var REGIME_EXPR_RAMP_MULT = { contemplative:1.5, conversational:1.0, burst:0.4 };
-
-var LEGATO_COMPLEX = { 2:true, 3:true, 5:true, 6:true, 7:true };
+// REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT, LEGATO_COMPLEX are declared
+// in gen_includes.js (source: src/swam-mapping.ts).
 
 // ================================================================
 // STATE — global (shared across instances)
@@ -325,11 +316,12 @@ var state = {
 // ================================================================
 // INSTANCE POOL
 // ================================================================
-// Each instance is one SWAM Cello VST hosted in poly~. MIDI goes to its
-// own outlet; all per-voice caches, scheduled tasks, selector state, and
-// voice-shot snapshots live on the instance record. Phrase generators
-// and selector helpers take `inst` as first argument and write to
-// inst.outlet.
+// Each instance is one SWAM Cello VST hosted in poly~. All midievents
+// share MIDI_OUTLET (outlet 0); `inst.voice` (1..POOL_SIZE) is prepended
+// as a `target N` message so poly~ routes to the right voice. All per-
+// voice caches, scheduled tasks, selector state, and voice-shot
+// snapshots live on the instance record. Phrase generators and selector
+// helpers take `inst` as first argument.
 //
 // Status lifecycle:
 //   IDLE       — available for allocation
@@ -347,7 +339,7 @@ var state = {
 function makeInstance(id) {
 	return {
 		id: id,
-		outlet: id,                  // direct mapping; outlet 0..POOL_SIZE-1
+		voice: id + 1,               // 1-indexed poly~ voice number (target N)
 		status: 'IDLE',              // IDLE | PLAYING | RELEASING
 
 		// Selector state (diff targets for D1/D12/D27/D35 setEnum/set*)
@@ -377,6 +369,8 @@ function makeInstance(id) {
 		tetra: 0,
 		faceDurationBias: 1.0,
 		faceTranspose: 0,
+		faceEnvelope: null,      // 'pluck'|'swell'|'stab'|'drone'|'fade'|'burst'|null — drives phrase count + expr shape
+		faceMotion: null,        // 'static'|'up'|'down'|'oscillate'|null — drives sieve-walker direction
 		faceEnvProfile: null,
 		faceOffVelOverride: null,
 		faceReleaseMult: 1.0,
@@ -405,11 +399,20 @@ var watchdogTask = null;
 function allocateInstance() {
 	var now = Date.now();
 	var i;
-	// Prefer IDLE
+	// MAX_ACTIVE soft cap — count non-IDLE instances. If we're at the cap,
+	// skip the IDLE branch and fall through to voice-stealing so a new turn
+	// replaces an older voice rather than layering on top of it.
+	var activeCount = 0;
 	for (i = 0; i < POOL_SIZE; i++) {
-		if (instances[i].status === 'IDLE') {
-			instances[i].allocatedAt = now;
-			return instances[i];
+		if (instances[i].status !== 'IDLE') activeCount++;
+	}
+	if (activeCount < MAX_ACTIVE) {
+		// Prefer IDLE
+		for (i = 0; i < POOL_SIZE; i++) {
+			if (instances[i].status === 'IDLE') {
+				instances[i].allocatedAt = now;
+				return instances[i];
+			}
 		}
 	}
 	// Steal oldest RELEASING next — its notes are already fading
@@ -448,10 +451,19 @@ function statusNoteOn(ch)  { return 0x90 + (ch - 1); }
 function statusNoteOff(ch) { return 0x80 + (ch - 1); }
 function statusCC(ch)      { return 0xB0 + (ch - 1); }
 
+// Emit `target N` then `midievent …` as two sequential messages out of
+// the single MIDI_OUTLET. poly~ latches `target N` and sends the next
+// midievent to that voice; all POOL_SIZE voices share one wire to
+// [poly~ swam_voice 8]. Resizing the pool requires no re-wiring.
+function emitMidi(inst, status, byte1, byte2) {
+	outlet(MIDI_OUTLET, "target", inst.voice);
+	outlet(MIDI_OUTLET, "midievent", status, byte1, byte2);
+}
+
 function noteOn(inst, pitch, vel) {
 	pitch = clamp(pitch, 0, 127);
 	vel = clamp(vel, 1, 127);
-	outlet(inst.outlet, "midievent", statusNoteOn(MIDI_CH), pitch, vel);
+	emitMidi(inst, statusNoteOn(MIDI_CH), pitch, vel);
 }
 
 // Phase 8: velocity default = state.noteOffVel (turn-rate driven).
@@ -462,7 +474,7 @@ function noteOff(inst, pitch, vel) {
 		vel = (inst.faceOffVelOverride != null) ? inst.faceOffVelOverride : state.noteOffVel;
 	}
 	vel = clamp(Math.round(vel), 0, 127);
-	outlet(inst.outlet, "midievent", statusNoteOff(MIDI_CH), pitch, vel);
+	emitMidi(inst, statusNoteOff(MIDI_CH), pitch, vel);
 }
 
 // Continuous CC — per-instance cache-suppressed. Use for 60 Hz streams.
@@ -471,7 +483,7 @@ function cc(inst, num, val) {
 	val = clamp(Math.round(val), 0, 127);
 	if (inst.ccCache[num] === val) return;
 	inst.ccCache[num] = val;
-	outlet(inst.outlet, "midievent", statusCC(MIDI_CH), num, val);
+	emitMidi(inst, statusCC(MIDI_CH), num, val);
 }
 
 // Forced CC — always writes, updates cache.
@@ -479,7 +491,7 @@ function ccForce(inst, num, val) {
 	if (!hasCC(num)) return;
 	val = clamp(Math.round(val), 0, 127);
 	inst.ccCache[num] = val;
-	outlet(inst.outlet, "midievent", statusCC(MIDI_CH), num, val);
+	emitMidi(inst, statusCC(MIDI_CH), num, val);
 }
 
 // ================================================================
@@ -524,16 +536,16 @@ function keyswitch(inst, note, vel, channel) {
 	var prev = inst.ksPending[note];
 	if (prev) {
 		prev.task.cancel();
-		outlet(inst.outlet, "midievent", statusNoteOff(prev.ch || ch), note, v);
+		emitMidi(inst, statusNoteOff(prev.ch || ch), note, v);
 		inst.ksPending[note] = null;
 	}
 
-	outlet(inst.outlet, "midievent", statusNoteOn(ch), note, v);
+	emitMidi(inst, statusNoteOn(ch), note, v);
 	var ks = note;
 	var kch = ch;
 	var kv = v;
 	var t = new Task(function() {
-		outlet(inst.outlet, "midievent", statusNoteOff(kch), ks, kv);
+		emitMidi(inst, statusNoteOff(kch), ks, kv);
 		if (inst.ksPending[ks] && inst.ksPending[ks].task === t) inst.ksPending[ks] = null;
 	}, this);
 	t.schedule(KS_HOLD_MS);
@@ -830,9 +842,22 @@ function intensityDensity(inst) {
 // Commit the shared sieve walker to one direction for a phrase of `count`
 // notes (used by C2 / C6). Prevents mid-phrase direction flips at
 // boundaries so each phrase reads unambiguously ascending or descending.
-function commitSieveWalk(count) {
+// A face-motion override forces the direction (reseeding the index to the
+// appropriate boundary if there isn't runway); 'static' / 'oscillate' /
+// null fall back to the default auto-flip-at-boundary behaviour.
+function commitSieveWalk(count, motion) {
 	var s = state.sieve;
 	if (s.length === 0) return;
+	if (motion === 'up') {
+		state.sieveDir = 1;
+		if (state.sieveIdx + count - 1 >= s.length) state.sieveIdx = 0;
+		return;
+	}
+	if (motion === 'down') {
+		state.sieveDir = -1;
+		if (state.sieveIdx - (count - 1) < 0) state.sieveIdx = s.length - 1;
+		return;
+	}
 	if (state.sieveDir > 0 && state.sieveIdx + count - 1 >= s.length) {
 		state.sieveDir = -1;
 		state.sieveIdx = s.length - 1;
@@ -843,20 +868,55 @@ function commitSieveWalk(count) {
 }
 
 // ================================================================
+// FACE PHRASE-SHAPE HELPERS (Phase A1 sculpt pass, 2026-04-21)
+// ================================================================
+// faceShapedCount: the phrase's note count after applying the face
+//   envelope's isSingle override (pluck/stab/drone → 1) or countMult
+//   (burst → ×1.8). Gliss complexes (C5–C7) pass forGliss=true so
+//   isSingle collapses to zero SUBSEQUENT gliss notes (the anchor
+//   legato still fires once).
+//
+// stepVelScale: per-step velocity scalar for a multi-note phrase so
+//   swell crescendos across the rebow chain, fade decays, and
+//   accent-first (stab/burst) lands a hot first note. Returns 1.0 for
+//   single-note phrases or 'flat' curves.
+function faceShapedCount(inst, baseLo, baseHi, forGliss) {
+	var prof = inst.faceEnvProfile;
+	if (prof && prof.isSingle) return forGliss ? 0 : 1;
+	var raw = phraseCount(inst, baseLo, baseHi);
+	if (prof && prof.countMult && prof.countMult !== 1.0) {
+		raw = clamp(Math.round(raw * prof.countMult), baseLo, 12);
+	}
+	return raw;
+}
+
+function stepVelScale(velCurve, i, count) {
+	if (count <= 1) return 1.0;
+	var t = i / (count - 1);
+	switch (velCurve) {
+		case 'cresc':        return 0.72 + 0.55 * t;
+		case 'dim':          return 1.27 - 0.55 * t;
+		case 'accent-first': return (i === 0) ? 1.22 : 0.88;
+		default:             return 1.0;
+	}
+}
+
+// ================================================================
 // PHRASE GENERATORS (per-instance)
 // ================================================================
 
 // C1: Pizzicato cloud — short plucked notes, no legato
 function phraseC1(inst, vel, dur) {
-	var count = phraseCount(inst, 2, 5);
+	var count = faceShapedCount(inst, 2, 5, false);
+	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
 	var spread = Math.min(dur * 1000, 700);
 
 	for (var i = 0; i < count; i++) {
-		(function(idx) {
+		(function(idx, stepCount) {
 			var delay = idx === 0 ? 0 : rrand(20, Math.round(spread));
 			scheduleAt(inst, delay, function() {
 				var p = humanPitch(pickPitch(1, inst));
-				var v = humanVel(vel);
+				var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
 				noteOn(inst, p, v);
 				inst.activeNotes.push(p);
 				scheduleAt(inst, rrand(60, 220), function() {
@@ -865,7 +925,7 @@ function phraseC1(inst, vel, dur) {
 					if (pidx >= 0) inst.activeNotes.splice(pidx, 1);
 				});
 			});
-		})(i);
+		})(i, count);
 	}
 	scheduleRelease(inst, dur);
 }
@@ -873,41 +933,46 @@ function phraseC1(inst, vel, dur) {
 // C2: OrderedCloudAscDesc — bowed legato cloud along committed direction
 function phraseC2(inst, vel, dur) {
 	var hi = state.regime === "burst" ? 6 : 5;
-	var count = Math.max(3, phraseCount(inst, 3, hi));
-	commitSieveWalk(count);
+	var count = faceShapedCount(inst, 3, hi, false);
+	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
+	if (count >= 2) commitSieveWalk(count, inst.faceMotion);
 	var spacing = Math.max(90, Math.round(dur * 1000 / (count + 1)));
 	for (var i = 0; i < count; i++) {
-		(function(idx) {
+		(function(idx, stepCount) {
 			scheduleAt(inst, idx * spacing + humanDelay(), function() {
-				legatoNote(inst, humanPitch(pickPitch(2, inst)), humanVel(vel));
+				var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
+				legatoNote(inst, humanPitch(pickPitch(2, inst)), v);
 			});
-		})(i);
+		})(i, count);
 	}
-	scheduleRelease(inst, dur * 1.2);
+	scheduleRelease(inst, dur);
 }
 
 // C3: OrderedCloudFlat — legato rebows hovering at constant register
 function phraseC3(inst, vel, dur) {
-	var count = phraseCount(inst, 3, 5);
+	var count = faceShapedCount(inst, 3, 5, false);
+	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
 	var durMs = Math.max(400, dur * 1000);
 	var spacing = Math.max(110, Math.round(durMs / (count + 1)));
 	var center = pickPitch(3, inst);
 	for (var i = 0; i < count; i++) {
-		(function(idx) {
+		(function(idx, stepCount) {
 			scheduleAt(inst, idx * spacing + humanDelay(), function() {
 				var jitter = (Math.random() < 0.5) ? 0 : (Math.random() < 0.5 ? -1 : 1);
 				var p = clamp(center + jitter, CELLO_MIN, CELLO_MAX);
-				legatoNote(inst, humanPitch(p), humanVel(vel));
+				var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
+				legatoNote(inst, humanPitch(p), v);
 			});
-		})(i);
+		})(i, count);
 	}
-	scheduleRelease(inst, dur * 1.3);
+	scheduleRelease(inst, dur);
 }
 
 // C4: IonizedAtom — harmonic attacks clustered near central pitch with
 // random-timed arrival across the phrase ("atom + ionized timing")
 function phraseC4(inst, vel, dur) {
-	var count = phraseCount(inst, 2, 5);
+	var count = faceShapedCount(inst, 2, 5, false);
+	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
 	var spread = Math.max(300, dur * 1000);
 	var s = state.sieve;
 	var cmx = COMPLEX[4];
@@ -916,12 +981,12 @@ function phraseC4(inst, vel, dur) {
 	var loReg = Math.max(24, cmx.register.lo + (inst.path === "V2" ? -12 : 0));
 	var hiReg = Math.min(CELLO_MAX, cmx.register.hi);
 	for (var i = 0; i < count; i++) {
-		(function(idx) {
+		(function(idx, stepCount) {
 			var delay = idx === 0 ? 0 : rrand(40, Math.round(spread));
 			scheduleAt(inst, delay, function() {
 				var jitter = rrand(-2, 2);
 				var p = foldToRange(base + inst.transpose + faceTr + jitter, loReg, hiReg);
-				var v = clamp(humanVel(vel) - 15, 25, 100);
+				var v = clamp(humanVel(vel * stepVelScale(velCurve, idx, stepCount)) - 15, 25, 100);
 				noteOn(inst, humanPitch(p), v);
 				inst.activeNotes.push(p);
 				scheduleAt(inst, rrand(180, 400), function() {
@@ -930,20 +995,24 @@ function phraseC4(inst, vel, dur) {
 					if (pidx >= 0) inst.activeNotes.splice(pidx, 1);
 				});
 			});
-		})(i);
+		})(i, count);
 	}
 	scheduleRelease(inst, dur);
 }
 
-// C5: wild gliss — dense salvo of ≥8-semi leaps, low-vel overlap = SWAM slide
+// C5: wild gliss — dense salvo of ≥8-semi leaps, low-vel overlap = SWAM slide.
+// Face isSingle (pluck/stab/drone) collapses to just the anchor note — the
+// gliss-complex character survives via its Mono Poly Release bow polyphony +
+// portamento-on bed, the face overrides the salvo.
 function phraseC5(inst, vel, dur) {
-	var count = phraseCount(inst, 4, 9);
+	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
+	var count = faceShapedCount(inst, 4, 9, true);
 	var MIN_LEAP = 8;
 	var lastPitch = pickPitch(5, inst);
-	legatoNote(inst, humanPitch(lastPitch), humanVel(vel));
+	legatoNote(inst, humanPitch(lastPitch), humanVel(vel * stepVelScale(velCurve, 0, Math.max(count + 1, 1))));
 	for (var i = 0; i < count; i++) {
-		(function(idx) {
-			var t = Math.round((idx + 1) / (count + 1) * dur * 1000 * 0.92);
+		(function(idx, stepCount) {
+			var t = Math.round((idx + 1) / (stepCount + 1) * dur * 1000 * 0.92);
 			scheduleAt(inst, t, function() {
 				var p = pickPitch(5, inst);
 				var attempts = 0;
@@ -951,61 +1020,77 @@ function phraseC5(inst, vel, dur) {
 				glissNote(inst, humanPitch(p));
 				lastPitch = p;
 			});
-		})(i);
+		})(i, count);
 	}
-	scheduleRelease(inst, dur * 1.4);
+	scheduleRelease(inst, dur);
 }
 
-// C6: OrderedSlidingAscDesc — portamento steps along the sieve, committed
+// C6: OrderedSlidingAscDesc — portamento steps along the sieve, committed.
+// Face isSingle → one legato note, no subsequent gliss steps.
 function phraseC6(inst, vel, dur) {
-	var count = phraseCount(inst, 3, 6);
-	commitSieveWalk(count);
+	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
+	var isSingle = (inst.faceEnvProfile && inst.faceEnvProfile.isSingle) === true;
+	var count = faceShapedCount(inst, 3, 6, false);
+	if (count >= 2) commitSieveWalk(count, inst.faceMotion);
 	var spacing = Math.max(100, Math.round(dur * 1000 / (count + 1)));
 	for (var i = 0; i < count; i++) {
-		(function(idx) {
+		(function(idx, stepCount) {
 			scheduleAt(inst, idx * spacing + humanDelay(), function() {
-				if (idx === 0) {
-					legatoNote(inst, humanPitch(pickPitch(6, inst)), humanVel(vel));
+				if (idx === 0 || isSingle) {
+					var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
+					legatoNote(inst, humanPitch(pickPitch(6, inst)), v);
 				} else {
 					glissNote(inst, humanPitch(pickPitch(6, inst)));
 				}
 			});
-		})(i);
+		})(i, count);
 	}
-	scheduleRelease(inst, dur * 1.2);
+	scheduleRelease(inst, dur);
 }
 
-// C7: sustained + micro-drifts — deep breath-like floating
+// C7: sustained + micro-drifts — deep breath-like floating.
+// Face isSingle → no drifts (the anchor note breathes alone); face motion
+// up/down biases the drift direction; burst doubles the drift count.
 function phraseC7(inst, vel, dur) {
-	var driftCount = 1 + (intensityDensity(inst) >= 1.1 ? rrand(1, 2) : 0);
+	var isSingle = (inst.faceEnvProfile && inst.faceEnvProfile.isSingle) === true;
 	var p1 = pickPitch(7, inst);
 	legatoNote(inst, humanPitch(p1), humanVel(vel));
-	var durMs = dur * 1000;
-	for (var i = 0; i < driftCount; i++) {
-		(function(idx) {
-			var t = Math.round(durMs * (0.4 + (idx + 1) / (driftCount + 2) * 0.5));
-			scheduleAt(inst, t, function() {
-				var lo = (inst.path === "V2") ? 24 : CELLO_MIN;
-				var p2 = clamp(p1 + rrand(-3, 3), lo, CELLO_MAX);
-				glissNote(inst, p2);
-			});
-		})(i);
+	if (!isSingle) {
+		var driftCount = 1 + (intensityDensity(inst) >= 1.1 ? rrand(1, 2) : 0);
+		if (inst.faceEnvProfile && inst.faceEnvProfile.countMult > 1.0) {
+			driftCount = Math.min(6, Math.round(driftCount * inst.faceEnvProfile.countMult));
+		}
+		var motionDir = (inst.faceMotion === 'up') ? 1 : (inst.faceMotion === 'down') ? -1 : 0;
+		var durMs = dur * 1000;
+		for (var i = 0; i < driftCount; i++) {
+			(function(idx, stepCount) {
+				var t = Math.round(durMs * (0.4 + (idx + 1) / (stepCount + 2) * 0.5));
+				scheduleAt(inst, t, function() {
+					var lo = (inst.path === "V2") ? 24 : CELLO_MIN;
+					var delta = (motionDir !== 0) ? motionDir * rrand(1, 3) : rrand(-3, 3);
+					var p2 = clamp(p1 + delta, lo, CELLO_MAX);
+					glissNote(inst, p2);
+				});
+			})(i, driftCount);
+		}
 	}
-	scheduleRelease(inst, dur * 2.0);
+	scheduleRelease(inst, dur);
 }
 
 // C8: ponticello tremolo cluster — re-bows on same pitch
 function phraseC8(inst, vel, dur) {
-	var count = phraseCount(inst, 2, 4);
+	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
+	var count = faceShapedCount(inst, 2, 4, false);
 	var mainPitch = pickPitch(8, inst);
 	var spacing = Math.max(150, Math.round(dur * 1000 / (count + 1)));
 	for (var i = 0; i < count; i++) {
-		(function(idx) {
+		(function(idx, stepCount) {
 			scheduleAt(inst, idx * spacing + humanDelay(), function() {
-				var v = clamp(humanVel(vel) + 8 - idx * 3, 40, 120);
+				var curveScale = stepVelScale(velCurve, idx, stepCount);
+				var v = clamp(humanVel(vel * curveScale) + 8 - idx * 3, 40, 120);
 				legatoNote(inst, humanPitch(mainPitch), v);
 			});
-		})(i);
+		})(i, count);
 	}
 	scheduleRelease(inst, dur);
 }
@@ -1013,43 +1098,10 @@ function phraseC8(inst, vel, dur) {
 // ================================================================
 // FACE SIGNATURES (Phase A1)
 // ================================================================
-var FACE_MAP = {
-	"U":  { durationBias: 0.7, registerBias:  0.8, envelope: "pluck", articulation: "attack",    motion: "up" },
-	"U'": { durationBias: 1.4, registerBias:  0.8, envelope: "fade",  articulation: "release",   motion: "down" },
-	"D":  { durationBias: 0.6, registerBias: -0.8, envelope: "stab",  articulation: "attack",    motion: "down" },
-	"D'": { durationBias: 1.8, registerBias: -0.8, envelope: "drone", articulation: "sustained", motion: "static" },
-	"L":  { durationBias: 1.3, registerBias:  0.0, envelope: "swell", articulation: "sustained", motion: "up" },
-	"L'": { durationBias: 1.3, registerBias:  0.0, envelope: "fade",  articulation: "release",   motion: "down" },
-	"R":  { durationBias: 0.5, registerBias:  0.0, envelope: "stab",  articulation: "attack",    motion: "static" },
-	"R'": { durationBias: 0.6, registerBias:  0.0, envelope: "burst", articulation: "iterative", motion: "oscillate" },
-	"F":  { durationBias: 1.2, registerBias:  0.3, envelope: "swell", articulation: "sustained", motion: "up" },
-	"F'": { durationBias: 1.2, registerBias:  0.3, envelope: "swell", articulation: "sustained", motion: "down" },
-	"B":  { durationBias: 0.9, registerBias: -0.3, envelope: "pluck", articulation: "attack",    motion: "static" },
-	"B'": { durationBias: 1.6, registerBias: -0.3, envelope: "drone", articulation: "sustained", motion: "oscillate" }
-};
-
-var ENV_PROFILE = {
-	"pluck": { peakMult: 1.00, attackMult: 0.3,  releaseMult: 0.7 },
-	"stab":  { peakMult: 1.15, attackMult: 0.15, releaseMult: 0.6 },
-	"swell": { peakMult: 0.90, attackMult: 2.0,  releaseMult: 1.3 },
-	"drone": { peakMult: 0.80, attackMult: 1.5,  releaseMult: 1.5 },
-	"fade":  { peakMult: 1.00, attackMult: 1.0,  releaseMult: 2.2 },
-	"burst": { peakMult: 1.10, attackMult: 0.25, releaseMult: 0.5 }
-};
-
-var ART_OFF_VEL = {
-	"attack":    110,
-	"sustained":  45,
-	"release":    30,
-	"iterative":  95
-};
-
-var MOTION_NUDGE = {
-	"static":     0,
-	"up":         2,
-	"down":      -2,
-	"oscillate":  0
-};
+// FACE_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE are declared in
+// gen_includes.js (source: src/face-gesture.ts → buildFaceMap, and
+// src/swam-mapping.ts). See docs/swam_cello_reference.md and the TS
+// type definitions for the semantics of each field.
 
 // /xk/face fires BEFORE /xk/voice; stash the signature globally so
 // handleVoice can snapshot it onto the newly-allocated instance.
@@ -1099,6 +1151,12 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	// timer (envelope, release, phrase rebows) reads the scaled value.
 	duration = duration * (state.faceDurationBias || 1.0);
 
+	// Hard ceiling — Xenakis V2 K3/K5 are intrinsically 30 s. Without this,
+	// 30 s × face drone bias (1.8×) stacked with legacy phrase multipliers
+	// could leave voices scheduled to fade out nearly two minutes after the
+	// turn. 30 s is already long enough to be perceived as "sustained."
+	duration = Math.min(duration, 30);
+
 	state.turnCount++;
 	state.density = density;
 	state.duration = duration;
@@ -1122,6 +1180,8 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	inst.tetra      = state.tetra;
 	inst.faceDurationBias = state.faceDurationBias;
 	inst.faceTranspose    = state.faceTranspose || 0;
+	inst.faceEnvelope     = state.faceEnvelope;
+	inst.faceMotion       = state.faceMotion;
 	inst.faceEnvProfile   = state.faceEnvProfile;
 	inst.faceOffVelOverride = state.faceOffVelOverride;
 	inst.faceReleaseMult    = state.faceReleaseMult;
@@ -1146,10 +1206,19 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	}
 
 	inst.forceKS = false;
-	inst.status = 'PLAYING';
 
+	// Validate complex before flipping to PLAYING — otherwise an unknown
+	// type (off-by-one from future work, corrupt OSC, etc.) would leave the
+	// instance parked in PLAYING with no phrase + no release to clear it,
+	// blocking future allocations ("zombie"). Fall through to IDLE instead.
 	var cmx = COMPLEX[complexType];
-	if (!cmx) return;
+	if (!cmx) {
+		allNotesOff(inst);
+		inst.status = 'IDLE';
+		return;
+	}
+
+	inst.status = 'PLAYING';
 
 	var intMap = INTENSITY_MAP[intensity] || INTENSITY_MAP["mf"];
 	inst.baseExpr = intMap.expr;
@@ -1190,16 +1259,24 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	ccForce(inst, CC.PORTAMENTO_ON,   cmx.portamento.on ? 127 : 0);
 	ccForce(inst, CC.PORTAMENTO_TIME, cmx.portamento.time);
 
-	log("inst " + inst.id + " voice C" + complexType + " porta=" + (cmx.portamento.on ? "on" : "off") +
+	log("inst " + inst.id + " voice C" + complexType +
+	    " face=" + (state.face || "-") +
+	    "/" + (state.faceEnvelope || "-") +
+	    "/" + (state.faceMotion || "-") +
+	    " porta=" + (cmx.portamento.on ? "on" : "off") +
 	    " time=" + cmx.portamento.time + " bow=" + Math.round(bowBase) + " int=" + intensity);
 
 	var envForPhrase = cmx.exprEnv;
 	if (inst.faceEnvProfile) {
+		var fp = inst.faceEnvProfile;
+		var aCoef = (fp.attackCoef  != null) ? fp.attackCoef  : 1.0;
+		var pCoef = (fp.peakCoef    != null) ? fp.peakCoef    : 1.0;
+		var sCoef = (fp.sustainCoef != null) ? fp.sustainCoef : 1.0;
 		envForPhrase = {
-			attack:        cmx.exprEnv.attack,
-			peak:          cmx.exprEnv.peak,
-			sustain:       cmx.exprEnv.sustain,
-			attackRampMs:  (cmx.exprEnv.attackRampMs  || 40)  * inst.faceEnvProfile.attackMult,
+			attack:        cmx.exprEnv.attack  * aCoef,
+			peak:          cmx.exprEnv.peak    * pCoef,
+			sustain:       cmx.exprEnv.sustain * sCoef,
+			attackRampMs:  (cmx.exprEnv.attackRampMs  || 40)  * fp.attackMult,
 			sustainRampMs:  cmx.exprEnv.sustainRampMs,
 			releaseRampMs:  cmx.exprEnv.releaseRampMs
 		};
@@ -1497,24 +1574,25 @@ function handleTremLearn(val) {
 	if (inst.releaseTask) { inst.releaseTask.cancel(); inst.releaseTask = null; }
 	cancelCCRamp(inst, CC.EXPRESSION);
 	var v = clamp(Math.round(val != null ? val : 100), 0, 127);
-	outlet(inst.outlet, "midievent", statusCC(MIDI_CH), CC.TREMOLO_RATE, v);
+	emitMidi(inst, statusCC(MIDI_CH), CC.TREMOLO_RATE, v);
 	inst.ccCache[CC.TREMOLO_RATE] = v;
 	log("tremLearn CC 80 = " + v + " (inst 0, clean single-shot for MIDI-Learn)");
 }
 
 function watchdogTick() {
-	// Per-instance orphan-note check (D17). Fires only if an instance has
-	// active notes, no release scheduled, no pending phrase events, and
-	// has been silent for ≥ 3 s.
+	// Per-instance orphan-note check (D17). Fires if an instance has active
+	// notes, no release scheduled, and has been silent for ≥ 3 s. The
+	// phraseTasks array is append-only (completed tasks stay in it), so
+	// gating on `phraseTasks.length === 0` would make the watchdog
+	// practically inert — drop it.
 	try {
 		var now = Date.now();
 		for (var i = 0; i < POOL_SIZE; i++) {
 			var inst = instances[i];
 			var hasNotes = inst.activeNotes.length > 0;
 			var noRelease = (inst.releaseTask === null);
-			var noPhrase = (inst.phraseTasks.length === 0);
 			var stale = (inst.lastVoiceTime > 0) && (now - inst.lastVoiceTime > 3000);
-			if (hasNotes && noRelease && noPhrase && stale) {
+			if (hasNotes && noRelease && stale) {
 				log("watchdog tripped — orphan notes inst " + inst.id + ", flushing");
 				allNotesOff(inst);
 				inst.lastVoiceTime = 0;
@@ -1533,29 +1611,30 @@ function startWatchdog() {
 }
 
 // ================================================================
-// OSC ROUTING
+// OSC ROUTING — addresses sourced from gen_includes.js (OSC table,
+// originally src/osc-schema.ts). Dispatch switches on the address
+// constant, so a rename on the TS side propagates through codegen with
+// no hand-edit here.
 // ================================================================
 function anything() {
 	var addr = messagename;
 	var args = arrayfromargs(arguments);
 
-	if (addr === "/xk/voice") {
-		handleVoice(args[0], args[1], args[2], args[3], args[4]);
-	}
-	else if (addr === "/xk/face")     { handleFace(args[0]); }
-	else if (addr === "/xk/expr/tilt")     { handleExprTilt(args[0]); }
-	else if (addr === "/xk/expr/spin")     { handleExprSpin(args[0]); }
-	else if (addr === "/xk/expr/dev")      { handleExprDev(args[0]); }
-	else if (addr === "/xk/expr/scramble") { handleExprScramble(args[0]); }
-	else if (addr === "/xk/tetra")    { handleTetra(args[0]); }
-	else if (addr === "/xk/path")     { handlePath(args[0]); }
-	else if (addr === "/xk/regime")   { handleRegime(args[0]); }
-	else if (addr === "/xk/rate")     { handleRate(args[0]); }
-	else if (addr === "/xk/sieve")    { handleSieve.apply(this, args); }
-	else if (addr === "/xk/spell")    { handleSpell(args[0]); }
-	else if (addr === "/xk/scramble") { handleExprScramble(args[0]); }
-	else if (addr === "/xk/panic")    { handlePanic(); }
-	else if (addr === "/xk/tremLearn") { handleTremLearn(args[0]); }
+	if      (addr === OSC.VOICE)         { handleVoice(args[0], args[1], args[2], args[3], args[4]); }
+	else if (addr === OSC.FACE)          { handleFace(args[0]); }
+	else if (addr === OSC.EXPR_TILT)     { handleExprTilt(args[0]); }
+	else if (addr === OSC.EXPR_SPIN)     { handleExprSpin(args[0]); }
+	else if (addr === OSC.EXPR_DEV)      { handleExprDev(args[0]); }
+	else if (addr === OSC.EXPR_SCRAMBLE) { handleExprScramble(args[0]); }
+	else if (addr === OSC.TETRA)         { handleTetra(args[0]); }
+	else if (addr === OSC.PATH)          { handlePath(args[0]); }
+	else if (addr === OSC.REGIME)        { handleRegime(args[0]); }
+	else if (addr === OSC.RATE)          { handleRate(args[0]); }
+	else if (addr === OSC.SIEVE)         { handleSieve.apply(this, args); }
+	else if (addr === OSC.SPELL)         { handleSpell(args[0]); }
+	else if (addr === OSC.SCRAMBLE)      { handleExprScramble(args[0]); }
+	else if (addr === OSC.PANIC)         { handlePanic(); }
+	else if (addr === OSC.TREM_LEARN)    { handleTremLearn(args[0]); }
 }
 
 // ================================================================
@@ -1593,6 +1672,8 @@ function resetInstance(inst) {
 	inst.tetra = 0;
 	inst.faceDurationBias = 1.0;
 	inst.faceTranspose = 0;
+	inst.faceEnvelope = null;
+	inst.faceMotion = null;
 	inst.faceEnvProfile = null;
 	inst.faceOffVelOverride = null;
 	inst.faceReleaseMult = 1.0;

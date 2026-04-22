@@ -6,7 +6,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, getBuiltinDiagrams } = require('./src/index.ts');
+const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, getBuiltinDiagrams, OSC } = require('./src/index.ts');
 
 /*
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
@@ -256,8 +256,8 @@ function gyroLoop() {
 
       kfPredict(dt);
 
-      oscTD.send('/gan/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
-      oscMax.send('/xk/gyro', kf.q.x, kf.q.y, kf.q.z, kf.q.w);
+      oscTD.send(OSC.GAN_GYRO, kf.q.x, kf.q.y, kf.q.z, kf.q.w);
+      oscMax.send(OSC.GYRO,    kf.q.x, kf.q.y, kf.q.z, kf.q.w);
 
       // Expression at 60Hz from Kalman-filtered quat
       const expr = engine.getExpressionFor([kf.q.x, kf.q.y, kf.q.z, kf.q.w], nowMs);
@@ -378,7 +378,7 @@ engine.onVoice((output) => {
 /** Send /xk/panic to Max (used on WS disconnect). Bridges/synth flush state. */
 function sendPanic() {
   try {
-    oscMax.send('/xk/panic');
+    oscMax.send(OSC.PANIC);
   } catch (e) { /* OSC may be closed; safe to ignore */ }
 }
 
@@ -489,7 +489,7 @@ wss.on('connection', function connection(ws) {
                 _bleMoveCount++;
 
                 // Forward raw turn to TD
-                oscTD.send('/gan/turn', moveStr);
+                oscTD.send(OSC.GAN_TURN, moveStr);
 
                 // Tag move for dashboard broadcast, then feed engine
                 lastMove = moveStr;

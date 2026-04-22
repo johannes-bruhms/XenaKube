@@ -1,6 +1,18 @@
 // XenaKube Engine — public API
 export { XenaKubeEngine, type StateListener, type SpellListener, type VoiceListener, type SolveListener } from './engine.js';
 export { stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, type OscMessage } from './osc-output.js';
+export { OSC, vertexAddr, complexAddr, ALL_XK_ADDRESSES } from './osc-schema.js';
+export {
+  HARMONICS, TREMOLO, BOW_POLY,
+  HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,
+  INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE,
+  LEGATO_COMPLEX, REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
+  clamp, harmonicsForC4, phraseCountBounds, applyEnvelopeCount,
+  stepVelScale, commitSieveWalk, faceTranspose,
+  buildFaceMap, intensityEntry,
+  type EnvProfile, type VelCurve, type IntensityEntry, type IntensityLabel,
+  type FaceMapEntry,
+} from './swam-mapping.js';
 export {
   ELEMENTS, CAYLEY, INVERSES, IDENTITY,
   multiply, inverse, getPermutation, tetraOrbit,

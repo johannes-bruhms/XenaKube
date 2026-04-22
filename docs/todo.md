@@ -22,7 +22,7 @@ Pivot accepted (2026-04-18). The next block of engine-level work addresses the p
 
 **Next sculpt pass:**
 - [x] **Envelope / articulation / motion render at the bridge level** (2026-04-18). `ENV_PROFILE` (peakMult / attackMult / releaseMult), `ART_OFF_VEL` (per-articulation note-off velocity), and `MOTION_NUDGE` (±2 semitones, oscillate swings by turnCount parity) wire `sig.envelope` / `sig.articulation` / `sig.motion` into `state.peakExpr`, `scheduleExprEnvelope`'s `attackRampMs`, `scheduleRelease`'s ramp, and `noteOff()`'s velocity. Per-phrase shape contour inside `phraseC1..phraseC8` (the next item) is still pending — current pass shapes the *envelope around* each note but not the note-sequence shape inside the phrase.
-- [ ] Phrase-shape rendering (deeper pass): teach `phraseC1..phraseC8` to read `state.faceEnvelope` / `state.faceMotion` and shape their *note sequence* accordingly (pluck = single staccato note; swell = crescendo through the rebow chain; drone = held single note; burst = iterative subdivision; etc.). Current pass only shapes the per-note envelope, not how many notes a phrase fires or in what direction they move.
+- [x] **Phrase-shape rendering** (2026-04-21). `phraseC1..phraseC8` now consult per-instance `faceEnvelope` / `faceMotion` via `faceShapedCount` (`isSingle` → 1 note for pluck/stab/drone, gliss complexes → 0 subsequent gliss + anchor only; `countMult` 1.8× for burst), `stepVelScale` (per-step velocity curve — `cresc` for swell, `dim` for fade, `accent-first` for stab/burst), and `phraseReleaseMult` (≥2× release for drone so single notes ring). `commitSieveWalk(count, motion)` forces sieve direction on C2/C6 when face motion is `up`/`down`. `ENV_PROFILE` gained `attackCoef/peakCoef/sustainCoef` scalars so `handleVoice` multiplies the complex's exprEnv shape by the envelope archetype, giving each face a distinct CC 11 contour on top of its note count. Instance snapshot now freezes `faceEnvelope` and `faceMotion` categorically at `handleVoice` onset for D40 overlap correctness. Pending followup: tune the 12 signatures against live playing once the sculpt is audible.
 - [ ] Pan bias: the `sig.panBias` field is currently unused (SWAM is mono). Deferred until a stereo routing path exists.
 - [ ] Tune the 12 signatures against live playing — adjust durationBias / registerBias / envelope choices so all 12 faces are aurally distinguishable in sequence.
 
@@ -132,6 +132,18 @@ Pending regime work (held until Temporal Identity is in place — some of these 
 D1–D39 all resolved. Detailed write-ups in `docs/revision_roadmap.md`. Latest (2026-04-18): D36 V2 reachability, D37 harmonics rotation, D38 CC 80 reachability proof (superseded), D39 per-phrase stochastic tremolo envelope.
 
 No further SWAM-specific refactor work is planned. New bridge changes that become necessary during Phase A1 (face-gesture dispatch) or Phase B (phrase-library playback) get tracked as part of those phases, not as new D-entries.
+
+---
+
+## Tier 1 architectural shift — COMPLETE (2026-04-21)
+
+Three drift-closers landed together. Deliberately not given D-numbers — this is infra, not SWAM-mapping diagnosis.
+
+- [x] **Outlet collapse** — `max/xk_swam.js` from `POOL_SIZE + 1` outlets (per-instance MIDI + debug) to 2 outlets (shared `target N` + `midievent` on outlet 0, debug on outlet 1). `inst.outlet` → `inst.voice`. New `emitMidi(inst, …)` helper. Changing `POOL_SIZE` no longer requires patch re-wiring.
+- [x] **OSC schema unification** — new `src/osc-schema.ts` as single source of truth; `src/osc-output.ts` + `relay.js` use `OSC.*` constants; Max reads from generated include file. Zero raw `/xk/*` / `/gan/*` literals outside `src/osc-schema.ts`.
+- [x] **Shared SWAM mapping + codegen** — new `src/swam-mapping.ts` (enums, CC value maps, INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE, FACE_MAP builder, REGIME_* multipliers, pure helpers); 37-case vitest suite; `scripts/gen-max-include.js` emits `max/gen_includes.js`; `npm run gen:max` script wired. 14 duplicated declarations removed from `xk_swam.js`.
+
+Tier 2 / Tier 3 (hand-written function de-duplication — e.g. porting `phraseCX` to TS behind a `USE_TS_PHRASES` flag) stays gated on Phase B + Phase E tier 3.
 
 ---
 

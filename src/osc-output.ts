@@ -1,8 +1,14 @@
 // === OSC Output: Formats and sends state to Max/SWAM and TouchDesigner ===
+//
+// Addresses come from src/osc-schema.ts — the single source of truth. No
+// raw '/xk/*' string literals should live in this file; if you need a new
+// address, add it to the schema first and regen Max with `npm run
+// gen:max`.
 
 import type { XenaKubeState } from './types.js';
 import type { ExpressionState } from './expression.js';
 import type { SpellMatch } from './spells.js';
+import { OSC, vertexAddr, complexAddr } from './osc-schema.js';
 
 /** OSC message: address + args */
 export interface OscMessage {
@@ -14,81 +20,52 @@ export interface OscMessage {
 export function stateToOsc(state: XenaKubeState): OscMessage[] {
   const msgs: OscMessage[] = [];
 
-  // K_i cube group element
-  msgs.push({ address: '/xk/group/k', args: [state.kGroup] });
+  msgs.push({ address: OSC.GROUP_K, args: [state.kGroup] });
+  msgs.push({ address: OSC.GROUP_C, args: [state.cGroup] });
 
-  // C_i cube group element
-  msgs.push({ address: '/xk/group/c', args: [state.cGroup] });
-
-  // Vertex parameters (K1-K8 in current permuted order)
   for (let i = 0; i < 8; i++) {
     const v = state.kVertices[i];
-    msgs.push({
-      address: `/xk/vertex/${i + 1}`,
-      args: [v.density, v.intensity, v.duration],
-    });
+    msgs.push({ address: vertexAddr(i + 1), args: [v.density, v.intensity, v.duration] });
   }
 
-  // Complex assignments (C1-C8)
   for (let i = 0; i < state.cAssignments.length; i++) {
-    msgs.push({
-      address: `/xk/complex/${i + 1}`,
-      args: [state.cAssignments[i]],
-    });
+    msgs.push({ address: complexAddr(i + 1), args: [state.cAssignments[i]] });
   }
 
-  // Path
-  msgs.push({ address: '/xk/path', args: [state.path] });
+  msgs.push({ address: OSC.PATH,  args: [state.path] });
+  msgs.push({ address: OSC.CYCLE, args: [state.cyclicPhase] });
+  msgs.push({ address: OSC.TETRA, args: [state.tetraIndex] });
+  msgs.push({ address: OSC.SIEVE, args: state.sieve });
 
-  // Cyclic phase
-  msgs.push({ address: '/xk/cycle', args: [state.cyclicPhase] });
-
-  // Tetrahedral orbit
-  msgs.push({ address: '/xk/tetra', args: [state.tetraIndex] });
-
-  // Sieve pitches (variable length)
-  msgs.push({ address: '/xk/sieve', args: state.sieve });
-
-  // Raw gyro passthrough
   msgs.push({
-    address: '/xk/gyro',
+    address: OSC.GYRO,
     args: [state.gyro[0], state.gyro[1], state.gyro[2], state.gyro[3]],
   });
 
-  // Step counter
-  msgs.push({ address: '/xk/step', args: [state.step] });
+  msgs.push({ address: OSC.STEP,   args: [state.step] });
+  msgs.push({ address: OSC.PERM,   args: [...state.kPermutation] });
+  msgs.push({ address: OSC.ACTIVE, args: [state.activeVertex] });
 
-  // Vertex permutation
-  msgs.push({ address: '/xk/perm', args: [...state.kPermutation] });
-
-  // Active vertex (0-7): the single vertex currently sounding
-  msgs.push({ address: '/xk/active', args: [state.activeVertex] });
-
-  // NOTE: /xk/voice is NOT emitted in the state burst. It fires only on
+  // NOTE: OSC.VOICE is NOT emitted in the state burst. It fires only on
   // actual voice transitions via engine.onVoice (see relay.js). Emitting
   // it here would replay per-gyro-packet (~10 Hz) and trigger SWAM phrases
   // continuously even when the cube is still. See revision_roadmap.md D16.
 
-  // Gyro snap (target S4 element + its quaternion + deviation 0..1)
-  msgs.push({ address: '/xk/snap/element', args: [state.snapElement] });
+  msgs.push({ address: OSC.SNAP_ELEMENT, args: [state.snapElement] });
   msgs.push({
-    address: '/xk/snap/quat',
+    address: OSC.SNAP_QUAT,
     args: [state.snapQuat[0], state.snapQuat[1], state.snapQuat[2], state.snapQuat[3]],
   });
-  msgs.push({ address: '/xk/snap/dev', args: [state.gyroDeviation] });
+  msgs.push({ address: OSC.SNAP_DEV, args: [state.gyroDeviation] });
 
-  // Scramble factor (0 = solved, 1 = max scrambled)
-  msgs.push({ address: '/xk/scramble', args: [state.scrambleFactor] });
+  msgs.push({ address: OSC.SCRAMBLE, args: [state.scrambleFactor] });
+  msgs.push({ address: OSC.RATE,     args: [state.turnRate] });
+  msgs.push({ address: OSC.REGIME,   args: [state.regime] });
 
-  // Turn rate and regime
-  msgs.push({ address: '/xk/rate', args: [state.turnRate] });
-  msgs.push({ address: '/xk/regime', args: [state.regime] });
-
-  // Expression (also in full burst so BLE-rate updates include it)
-  msgs.push({ address: '/xk/expr/tilt', args: [state.expression.tilt] });
-  msgs.push({ address: '/xk/expr/spin', args: [state.expression.spin] });
-  msgs.push({ address: '/xk/expr/dev', args: [state.expression.deviation] });
-  msgs.push({ address: '/xk/expr/scramble', args: [state.expression.scramble] });
+  msgs.push({ address: OSC.EXPR_TILT,     args: [state.expression.tilt] });
+  msgs.push({ address: OSC.EXPR_SPIN,     args: [state.expression.spin] });
+  msgs.push({ address: OSC.EXPR_DEV,      args: [state.expression.deviation] });
+  msgs.push({ address: OSC.EXPR_SCRAMBLE, args: [state.expression.scramble] });
 
   return msgs;
 }
@@ -96,21 +73,21 @@ export function stateToOsc(state: XenaKubeState): OscMessage[] {
 /** Expression-only OSC messages for 60Hz relay loop */
 export function expressionToOsc(expr: ExpressionState): OscMessage[] {
   return [
-    { address: '/xk/expr/tilt', args: [expr.tilt] },
-    { address: '/xk/expr/spin', args: [expr.spin] },
-    { address: '/xk/expr/dev', args: [expr.deviation] },
-    { address: '/xk/expr/scramble', args: [expr.scramble] },
+    { address: OSC.EXPR_TILT,     args: [expr.tilt] },
+    { address: OSC.EXPR_SPIN,     args: [expr.spin] },
+    { address: OSC.EXPR_DEV,      args: [expr.deviation] },
+    { address: OSC.EXPR_SCRAMBLE, args: [expr.scramble] },
   ];
 }
 
 /** Spell detection → single OSC message */
 export function spellToOsc(match: SpellMatch): OscMessage {
-  return { address: '/xk/spell', args: [match.spell.name] };
+  return { address: OSC.SPELL, args: [match.spell.name] };
 }
 
 /** Cube solved (unsolved → solved edge) → single OSC message with no args */
 export function solveToOsc(): OscMessage {
-  return { address: '/xk/solve', args: [] };
+  return { address: OSC.SOLVE, args: [] };
 }
 
 /**
@@ -128,11 +105,11 @@ export function solveToOsc(): OscMessage {
 export function voiceToOsc(output: import('./voice-engine.js').VoiceOutput): OscMessage[] {
   const msgs: OscMessage[] = [];
   if (output.face !== null) {
-    msgs.push({ address: '/xk/face', args: [output.face] });
+    msgs.push({ address: OSC.FACE, args: [output.face] });
   }
   for (const ev of output.active) {
     msgs.push({
-      address: '/xk/voice',
+      address: OSC.VOICE,
       args: [
         ev.vertexIndex,
         ev.complex,
