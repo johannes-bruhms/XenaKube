@@ -287,6 +287,22 @@ See §3 "Must-be-learned CCs" table. The bridge's CC numbers are defined in code
 - Mic Position
 - Dry/Wet Mix
 
+### Ambiente (v3.10+ multi-source spatialization)
+
+SWAM Cello 3 v3.10 shipped an **Ambiente** panel (separate from the Room page) that tracks every VST instance loaded in the host as a "source" in a shared virtual studio. With `poly~ @voices 8` loading 8 SWAM instances, all 8 auto-register into `Studio A` on first load and — because they all load the same `default` preset — they share identical Distance / Angle coordinates. The plugin shows a red banner:
+
+> **WARNING Instruments Overlapping: adjust placement**
+
+and may sum overlapping sources into phase-cancellation artefacts.
+
+**Fixes (pick one, none are automatable from the bridge — Ambiente parameters are VST-side, no CC):**
+
+1. **Disable Ambiente in the default preset** (recommended, simplest). Open one SWAM instance, click the Ambiente panel's studio tab to a slot labelled "Empty" (so no source is registered), save the preset as `default`. Reload every poly~ voice. The warning disappears because no instance is tracked in a shared studio. You lose SWAM's built-in spatialization — add panning in Max if you want stereo spread (e.g., `[pan~]` or `[pan4s~]` on the poly~ output).
+2. **Move each source manually** (screenshot `docs/ss.png`). Open each SWAM instance's Ambiente panel; drag each cello to a different Distance/Angle in Studio A. This must be done per-instance, and the placements don't persist across fresh Max loads unless each voice has its own saved preset (see #3).
+3. **Save 8 per-voice presets** (`cello1.swam` .. `cello8.swam`) each with its own Ambiente placement, and load a different preset into each poly~ voice. Most thorough but most setup effort.
+
+The bridge can't reach Ambiente parameters: they're not on the plugin's MIDI-Learn list (VST automation only, no CC routing), and even if they were, the parameter IDs for Distance/Angle are per-source so we'd need a separate param per poly~ voice. The practical win is option #1 — disable Ambiente and spatialize in Max if needed.
+
 ---
 
 ## 8. XenaKube Gaps & Punch List

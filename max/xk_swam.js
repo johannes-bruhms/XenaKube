@@ -51,7 +51,16 @@ var POOL_SIZE = 8;
 // thin. At cap, allocateInstance skips the IDLE branch and voice-steals
 // the oldest RELEASING/PLAYING instead — Xenakis "one step at a time"
 // with a legato halo of overlap from the tail of the previous voice.
+// Live-tweakable from Max: send `max_active N` to v8 inlet 0 (wire a
+// [number] or [live.dial] → [prepend max_active] → [v8 xk_swam.js]).
 var MAX_ACTIVE = 2;
+
+function max_active(v) {
+	var n = Math.max(1, Math.min(POOL_SIZE, Math.round(v)));
+	MAX_ACTIVE = n;
+	log("max_active = " + MAX_ACTIVE + " (pool size = " + POOL_SIZE + ")");
+	outlet(DEBUG_OUTLET, "max_active", MAX_ACTIVE);
+}
 outlets = 2;                    // 0 → midievent (all voices), 1 → debug
 var MIDI_OUTLET  = 0;
 var DEBUG_OUTLET = 1;
@@ -438,7 +447,18 @@ function allocateInstance() {
 function stealInstance(inst, now) {
 	cancelPhrase(inst, false);
 	if (inst.releaseTask) { inst.releaseTask.cancel(); inst.releaseTask = null; }
+	cancelCCRamp(inst, CC.EXPRESSION);
+	// Hard-zero Expression and flush SWAM's voice completely. noteOff alone
+	// hands the pitch to SWAM's internal release envelope, which on bowed /
+	// drone modes can sustain 2-10 s + Ambiente reverb tail — audible as
+	// "forever notes." CC 120 All Sound Off bypasses the release envelope;
+	// CC 123 All Notes Off is belt-and-suspenders for any pitch SWAM is
+	// holding without our tracking (gliss tails, untracked legato chains).
+	ccForce(inst, CC.EXPRESSION, 0);
+	emitMidi(inst, statusCC(MIDI_CH), 120, 0);
+	emitMidi(inst, statusCC(MIDI_CH), 123, 0);
 	allNotesOff(inst);
+	inst.activeNotes = [];
 	inst.status = 'IDLE';
 	inst.allocatedAt = now || Date.now();
 	log("steal inst " + inst.id);
@@ -659,6 +679,13 @@ function scheduleRelease(inst, dur) {
 		rampCC(inst, CC.EXPRESSION, 0, fadeMs);
 		var offT = new Task(function() {
 			allNotesOff(inst);
+			// CC 120 All Sound Off — guarantees SWAM fully silences this
+			// instance. Without it, an untracked legato / gliss tail can
+			// continue sounding via SWAM's internal envelope even after our
+			// Expression ramp hits 0 (bowed-mode release can be 2-10 s).
+			emitMidi(inst, statusCC(MIDI_CH), 120, 0);
+			emitMidi(inst, statusCC(MIDI_CH), 123, 0);
+			inst.activeNotes = [];
 			inst.releaseTask = null;
 			inst.status = 'IDLE';
 		}, this);
@@ -733,6 +760,12 @@ function setupComplex(inst, complexType) {
 	ccForce(inst, CC.BOW_PRESSURE, cmx.bowPressure);
 
 	ccForce(inst, CC.PORTAMENTO_ON,   cmx.portamento.on ? 127 : 0);
+	// SWAM v3 quirk: CC 5 (Portamento Time) only takes effect when the
+	// plugin sees a parameter *change*. Writing the same value twice is
+	// treated as a no-op even if the internal state hasn't been synced.
+	// Wiggle through 0 first so SWAM registers the edit — equivalent to
+	// the user's manual fix of dragging the Portamento Time slider.
+	if (cmx.portamento.on) ccForce(inst, CC.PORTAMENTO_TIME, 0);
 	ccForce(inst, CC.PORTAMENTO_TIME, cmx.portamento.time);
 
 	var mult = REGIME_ATTACK_MULT[state.regime] || 1.0;
@@ -1462,17 +1495,26 @@ function handleSieve() {
 }
 
 // ================================================================
-// SPELL REACTIONS — TODO (D40): spells currently route through
-// state.lastAllocatedInstance (sexy-move/anti-sune accent on most recent
-// voice) and instance 0 (dedicated-note pings). Per-spell instance
-// allocation is the next refactor: harmonic-ping spells (oll-cross /
-// sune / niklas) should allocate their own instance so the ping doesn't
-// contend with the voice 0 phrase. u-perm staccato burst likewise.
+// SPELL REACTIONS — harmonic-ping spells (oll-cross / sune / niklas /
+// u-perm) allocate via the normal pool so they respect MAX_ACTIVE;
+// accent spells (sexy-move / anti-sune) ride the most-recent voice so
+// the accent lands on a currently-sounding cello.
 // ================================================================
+
+// Allocate a pool instance for a spell-triggered ping. Goes through the
+// normal cap-aware allocator so the ping steals the oldest RELEASING /
+// PLAYING when MAX_ACTIVE is hit — prevents spells from layering extra
+// cellos on top of the 2-voice cap.
+function allocateSpellPing() {
+	var p = allocateInstance();
+	p.status = 'PLAYING';
+	p.lastVoiceTime = Date.now();
+	return p;
+}
+
 function handleSpell(name) {
 	log("spell: " + name);
 	var lastInst = instances[state.lastAllocatedInstance != null ? state.lastAllocatedInstance : 0];
-	var inst0 = instances[0];
 
 	switch (name) {
 		case "sexy-move":
@@ -1484,6 +1526,7 @@ function handleSpell(name) {
 			break;
 
 		case "oll-cross":
+			var inst0 = allocateSpellPing();
 			setHarmonics(inst0, HARMONICS.OCT);
 			var harmPitch = foldToRange(pickPitch(4, inst0) + 12);
 			noteOn(inst0, harmPitch, 60);
@@ -1497,6 +1540,7 @@ function handleSpell(name) {
 			break;
 
 		case "u-perm":
+			var inst0 = allocateSpellPing();
 			var burstCount = rrand(3, 5);
 			ccForce(inst0, CC.BOW_PRESS_ACCENT, 100);
 			for (var i = 0; i < burstCount; i++) {
@@ -1520,6 +1564,7 @@ function handleSpell(name) {
 			break;
 
 		case "sune":
+			var inst0 = allocateSpellPing();
 			setHarmonics(inst0, HARMONICS.OCT_5TH);
 			var sunePitch = foldToRange(pickPitch(4, inst0));
 			noteOn(inst0, sunePitch, 55);
@@ -1545,6 +1590,7 @@ function handleSpell(name) {
 			break;
 
 		case "niklas":
+			var inst0 = allocateSpellPing();
 			setHarmonics(inst0, HARMONICS.CTRL);
 			var niklasPitch = foldToRange(pickPitch(4, inst0) - 3);
 			noteOn(inst0, niklasPitch, 52);
@@ -1692,6 +1738,12 @@ function resetInstance(inst) {
 	ccForce(inst, CC.BOW_PRESS_ACCENT, 0);
 	ccForce(inst, CC.BOW_SPEED, 64);
 	ccForce(inst, CC.PORTAMENTO_ON, 0);
+	// Wiggle CC 5 to force SWAM to register the parameter-change event —
+	// without this initial kick, the first gliss complex voice can fire
+	// CC 5 = target but SWAM's internal Portamento Time stays at whatever
+	// the slider was before save (often 0). See setupComplex for the
+	// same pattern on every complex switch.
+	ccForce(inst, CC.PORTAMENTO_TIME, 64);
 	ccForce(inst, CC.PORTAMENTO_TIME, 0);
 	ccForce(inst, CC.SUSTAIN_PEDAL, 0);
 	ccForce(inst, CC.ATTACK_RAMP, 64);

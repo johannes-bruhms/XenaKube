@@ -2,6 +2,20 @@
 
 All notable changes to XenaKube are documented here.
 
+## 2026-04-23
+
+### Changed
+- **SWAM bridge — tighten MAX_ACTIVE cap, live-control from Max, fix spell/stealing bypasses.**
+  - **Spell pings now allocate via the pool** — previously `handleSpell` wrote `var inst0 = instances[0]` at the top, so sune / oll-cross / niklas / u-perm harmonic pings hit instance 0 unconditionally, even if a voice phrase was already running there. Pings layered on top of the cap. New helper `allocateSpellPing()` goes through `allocateInstance()`, so at MAX_ACTIVE the ping voice-steals the oldest RELEASING / PLAYING instead of stacking. Each ping case now declares its own `var inst0 = allocateSpellPing()`; mode-toggle spells (sexy-move / anti-sune / t-perm) that don't need a dedicated note skip the allocation entirely rather than wasting a pool slot.
+  - **stealInstance truly silences.** Old `stealInstance` only cancelled tasks and called `allNotesOff(inst)` — which iterates `inst.activeNotes` only and misses untracked legato / gliss tails. SWAM then continued to sound the stolen voice via its internal release envelope (2–10 s on bowed modes, +Ambiente reverb). New stealInstance hard-writes CC 11 = 0, sends CC 120 (All Sound Off) + CC 123 (All Notes Off), and clears `activeNotes`. Same treatment added to `scheduleRelease`'s offT task so natural releases also guarantee silence after the CC 11 fade completes.
+  - **MAX_ACTIVE is live-controllable from Max.** New `max_active(v)` handler accepts integer messages from the v8 inlet (wire `[number] / [live.dial] → [prepend max_active] → [v8 xk_swam.js]`). Clamped to [1, POOL_SIZE]. Current value echoes to `DEBUG_OUTLET` as `max_active N` for GUI display. Changes take effect on next allocation — voices already sounding continue to their natural release.
+
+### Fixed
+- **Glissandi silent after cold load (SWAM v3 quirk).** SWAM's CC 5 (Portamento Time) only takes effect when the plugin sees a *parameter change event*. Writing the same value twice is a no-op even when the internal Portamento Time state is stale — this matches the user-observed workaround of "nudge the Portamento Time / Max Time sliders before playing." Fix: `setupComplex` now wiggles CC 5 through 0 → target on every gliss-on complex switch, and `resetInstance` (called by bang()) does an initial 64 → 0 kick so the parameter is live before the first voice event. The SWAM GUI's **Portamento Max Time** slider (Advanced → MIDI) must still be non-zero in the saved preset — it's not MIDI-mappable and gates CC 5's audible range.
+
+### Added
+- **`docs/swam_cello_reference.md` §7 — Ambiente overlap advisory.** SWAM Cello 3 v3.10+ ships an Ambiente panel that tracks every VST instance as a source in a shared virtual studio. With 8 poly~ voices all loading `default`, the plugin warns "Instruments Overlapping: adjust placement" and sums identical sources into phase cancellations. Ambiente parameters aren't exposed via MIDI-Learn (VST automation only), so this can't be patched from the bridge. Documented three user-side fixes: disable Ambiente in the default preset (recommended), move sources manually, or save 8 per-voice presets. See `docs/ss.png` / `docs/ss0.png`.
+
 ## 2026-04-22
 
 ### Fixed
