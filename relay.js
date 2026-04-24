@@ -1,12 +1,12 @@
 // Register tsx so we can require TypeScript modules directly
 require('tsx/cjs');
 
-const { Client } = require('node-osc');
+const { Client, Server: OscServer } = require('node-osc');
 const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, getBuiltinDiagrams, OSC } = require('./src/index.ts');
+const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, getBuiltinDiagrams, OSC, MIDI_ECHO_PORT } = require('./src/index.ts');
 
 /*
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
@@ -381,6 +381,32 @@ function sendPanic() {
     oscMax.send(OSC.PANIC);
   } catch (e) { /* OSC may be closed; safe to ignore */ }
 }
+
+// === MIDI echo listener (Phase E tier 2) ===
+//
+// The Max bridge mirrors every noteon/noteoff/panic it emits to the relay as
+// OSC over UDP 57122. We forward each packet to all connected WS clients as
+// `{ type: 'midi_echo', data: { kind, voice, pitch, velocity } }` so the
+// dashboard can transcribe exactly what SWAM plays. Keyswitches are excluded
+// on the Max side — only real score notes arrive here.
+const midiEchoServer = new OscServer(MIDI_ECHO_PORT, '127.0.0.1', () => {
+  console.log(`[MIDI-ECHO] listening on ${MIDI_ECHO_PORT}`);
+});
+
+midiEchoServer.on('message', (msg) => {
+  // node-osc delivers [address, ...args]. Map to our WS schema.
+  const address = msg[0];
+  let data = null;
+  if (address === OSC.MIDI_NOTEON)       data = { kind: 'noteon',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0 };
+  else if (address === OSC.MIDI_NOTEOFF) data = { kind: 'noteoff', voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0 };
+  else if (address === OSC.MIDI_PANIC)   data = { kind: 'panic' };
+  else return;
+
+  const payload = JSON.stringify({ type: 'midi_echo', data });
+  wss?.clients?.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) client.send(payload);
+  });
+});
 
 /** Broadcast engine state to all connected WS clients */
 function broadcastState(state, move) {

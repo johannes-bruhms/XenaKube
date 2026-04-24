@@ -35,6 +35,9 @@ var OSC = {
   VOICE: "/xk/voice",
   PANIC: "/xk/panic",
   TREM_LEARN: "/xk/tremLearn",
+  MIDI_NOTEON: "/xk/midi/noteon",
+  MIDI_NOTEOFF: "/xk/midi/noteoff",
+  MIDI_PANIC: "/xk/midi/panic",
   GAN_TURN: "/gan/turn",
   GAN_GYRO: "/gan/gyro"
 };

@@ -1,7 +1,7 @@
 // XenaKube Engine — public API
 export { XenaKubeEngine, type StateListener, type SpellListener, type VoiceListener, type SolveListener } from './engine.js';
 export { stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, type OscMessage } from './osc-output.js';
-export { OSC, vertexAddr, complexAddr, ALL_XK_ADDRESSES } from './osc-schema.js';
+export { OSC, vertexAddr, complexAddr, ALL_XK_ADDRESSES, MIDI_ECHO_PORT } from './osc-schema.js';
 export {
   HARMONICS, TREMOLO, BOW_POLY,
   HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,

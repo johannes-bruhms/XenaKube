@@ -54,10 +54,24 @@ export const OSC = {
   // ── Max-internal helper (not emitted by relay) ───────────────
   TREM_LEARN:    '/xk/tremLearn',       // i:value — single-shot CC80 for MIDI-Learn
 
+  // ── MIDI echo: Max bridge → relay (port 57122, reverse direction) ──
+  //    Fired from every noteOn / noteOff wrapper in `max/xk_swam.js`
+  //    so the dashboard can transcribe exactly what SWAM plays (Phase E
+  //    tier 2, landed 2026-04-23). Keyswitches bypass the wrappers so
+  //    technique-select toggles don't pollute the score.
+  MIDI_NOTEON:   '/xk/midi/noteon',     // i:voice (1..POOL_SIZE), i:pitch, i:velocity
+  MIDI_NOTEOFF:  '/xk/midi/noteoff',    // i:voice, i:pitch, i:velocity
+  MIDI_PANIC:    '/xk/midi/panic',      // (no args) — clear pending notes on bang/panic
+
   // ── raw pass-through to TouchDesigner (port 8000) ────────────
   GAN_TURN:      '/gan/turn',           // s:moveString ("R","U'","F2",...)
   GAN_GYRO:      '/gan/gyro',           // f,f,f,f
 } as const;
+
+/** Port the relay listens on for MIDI echoes from the Max bridge. Separate
+ *  from the 57121 relay→Max forward port so Max can have its own `[udpsend]`
+ *  back without colliding. 57120 was SuperCollider; dropped 2026-04-20. */
+export const MIDI_ECHO_PORT = 57122;
 
 /** Positional vertex address: `/xk/vertex/1`..`/xk/vertex/8`. */
 export function vertexAddr(i1to8: number): string {

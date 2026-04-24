@@ -4,7 +4,7 @@ Converged plan for rebuilding `max/xk_swam.js` against SWAM Cello 3's actual con
 
 This document is the single source of truth for the SWAM-bridge refactor. Update it as phases complete or new findings change the plan.
 
-> **Status (2026-04-20): refactor COMPLETE.** Diagnoses D1–D40 are all resolved and shipped. The D40 instance-pool restructure is a bridge-internal rewrite rather than a new SWAM-control finding — filed here because it touches every code path D1–D39 built (per-instance state shards, parameterized MIDI helpers). No further SWAM-specific refactor work is planned. Engine-level architectural work continues under the Temporal Identity framework — see `docs/todo.md`. New bridge changes required by Phase A1 (face-gesture dispatch) or Phase B (phrase-library playback) are tracked in those phases, not as new D-entries.
+> **Status (2026-04-23): refactor COMPLETE; D40 partially reverted.** Diagnoses D1–D39 are all resolved and shipped. **D40 (instance pool) was reverted on 2026-04-23** — SWAM Cello 3's Ambiente panel auto-registered every loaded VST instance as a reverb source regardless of which ones received MIDI, summing identical sources into audible phase overlap even with `MAX_ACTIVE = 2`, and CPU scaled 8× for texture the composer didn't want. The bridge now runs a **single `[vst~ "SWAM Cello 3"]` at `POOL_SIZE = MAX_ACTIVE = 1`**; the pool/allocator machinery is kept as a per-voice bookkeeping anchor (every phrase/CC/release task is still `inst`-threaded) so polyphony can be reinstated later by raising the two constants, re-adding `[poly~ swam_voice @voices N]`, and restoring the one-line `outlet(MIDI_OUTLET, "target", inst.voice);` in `emitMidi`. See the "Reverted" block at the end of D40 below. Engine-level work continues under the Temporal Identity framework — see `docs/todo.md`. New bridge changes required by Phase A1 (face-gesture dispatch) or Phase B (phrase-library playback) are tracked in those phases, not as new D-entries.
 
 ---
 
@@ -438,7 +438,40 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 
 **Verification**: land on any non-gliss complex → overlapping turns audibly sustain as a two-string texture rather than each note cutting the previous. Land on C5 / C6 / C7 → gliss phrases still slide (D34 prerequisite preserved via `MONO_POLY_RELEASE` which keeps the single monophonic line the portamento engine needs). The Bow Polyphony selector in the SWAM GUI should visibly jump between option 3 (Double/Hold) and option 1 (Mono Poly Release) as complexes change.
 
-### D40 — Single-instance bottleneck: refactor to N-voice SWAM instance pool *(RESOLVED 2026-04-20)*
+### D42 — Gliss collapse: face `isSingle` envelopes erased the slide invariant on half the faces *(RESOLVED 2026-04-23)*
+
+**Defect**: "Ord gliss" (C6) and "wild gliss" (C5) cards on the dashboard frequently produced a single sustained note with no audible slide. Occasionally a second, much quieter note of the same pitch followed — audible as "a single note that gets softer," no glide. Symptom reported repeatedly since Phase A1 landed; previous "gliss fix" commits (D34, the 2026-04-23 "gliss kick" for CC 5 staleness) each addressed a different failure mode and left this one in place.
+
+**Root cause — two compounding structural bugs + one design error**:
+
+1. **`faceShapedCount(forGliss=true)` returned 0 on `isSingle` envelopes.** Phase A1 sculpt pass (2026-04-21) introduced `ENV_PROFILE.isSingle` to collapse phrases to a single note on pluck/stab/drone faces — `U / D / D' / R / B / B'`, exactly half the 12 face-moves. For gliss complexes the helper returned 0 subsequent notes: `phraseC5` ran its `for` loop zero times (anchor legatoNote only), `phraseC6` routed `idx === 0 || isSingle` to legato (anchor only), `phraseC7` skipped `if (!isSingle)` entirely. Result: on any turn whose face was in the isSingle set, the gliss complex produced a single legato note with no overlap. SWAM's Mono Poly Release detector *needs* overlapping noteOns to engage portamento — a single noteOn slides to nothing. 50% of gliss voices were silent-by-design.
+
+2. **Same-pitch fallback in `phraseC5` / `phraseC6`.** Even on the other 6 faces, when the sieve was narrow or the walker stalled at a boundary, `pickPitch` would return the same pitch as the anchor. `phraseC5` had a 12-attempt MIN_LEAP guard that gave up silently; `phraseC6` had no leap guard at all. The resulting `glissNote(samePitch)` emitted a noteOn at the anchor's pitch with vel=18 — SWAM slid to itself (zero-length slide) and the listener heard "anchor note, then the same note much quieter" when the anchor's noteOff fired 60 ms later.
+
+3. **The comment "gliss character survives via Mono Poly Release bow polyphony" was factually wrong.** Bow Polyphony is a mode the plugin is in; it doesn't synthesise a slide out of one note. The mistake was baked into the phrase generators' comments and the `CLAUDE.md` description — a wrong architectural assertion that let the collapse-to-single logic look correct on code review.
+
+**Meta-cause**: three "gliss fixes" across three commits (D34, later gliss-overlap bump, "gliss kick" CC 5 wiggle) all patched specific failure modes without introducing any runtime invariant. The next refactor (face envelope) silently broke the feature again. This is the pattern the new `CLAUDE.md § Recurring-bug discipline` explicitly forbids.
+
+**Fix** (`max/xk_swam.js`):
+
+1. **New `glissStep(inst, source, target, minLeap)` primitive** — now the ONLY path by which C5/C6/C7 emit subsequent pitches. Internally calls `enforceLeap(source, target, minLeap)` which coerces target ≥`minLeap` semitones from source (clamped to cello range, direction flipped at boundaries so corners never collapse back into the dead zone) and then `glissNote(humanPitch(p))`. Increments `inst.glissOverlapCount`. Same-pitch overlap is structurally impossible; the leap is enforced not hoped.
+
+2. **`faceShapedCount(forGliss=true)` minimum is 1, not 0.** Every C5/C6/C7 voice must emit at least one slide. Face envelope still reshapes duration, velocity, register, and contour — just can't erase the slide.
+
+3. **Per-phrase rewrites**:
+   - `phraseC5` — `count = Math.max(1, …)`; leap guard's 12-attempt fallback now passes through `glissStep` so failure still produces a leap.
+   - `phraseC6` — forces `count ≥ 2` (anchor + ≥1 slide). Drops the `|| isSingle` branch in the per-idx dispatcher; idx ≥ 1 always routes through `glissStep` with `minLeap = 1` (respects sieve walk, only kicks in when walker stalls).
+   - `phraseC7` — always fires ≥1 drift regardless of `isSingle`. `delta === 0` guard forces ±1 so the drift has somewhere to slide to.
+
+4. **Runtime invariant + telemetry**. `handleVoice` sets `inst.glissExpected = (complexType === 5 || 6 || 7)` and resets `glissOverlapCount = 0`. `scheduleRelease`'s natural-end task logs `GLISS FAIL inst N CX face=F motion=M overlaps=0 dur=D` if the counter is 0 when a gliss phrase finishes naturally. `stealInstance` clears the flag so fast-turn phrase cuts don't trip false positives (user intent, not a bug).
+
+**Why this is the last gliss fix**: the telemetry means the next modulator that threatens the invariant — intensity map, regime multiplier, voice stealing, some future face feature — will produce a loud log line during dev instead of a silent regression discovered in performance weeks later. The invariant is the commitment; the fix is just what makes the invariant currently hold.
+
+**Docs**: `CLAUDE.md` gains a "Bridge Invariants" section and a "Recurring-bug discipline" rule in Self-Maintenance. Max/ directory row updated to describe `glissStep` as the gliss-phrase primitive and the GLISS FAIL telemetry path.
+
+---
+
+### D40 — Single-instance bottleneck: refactor to N-voice SWAM instance pool *(RESOLVED 2026-04-20 · REVERTED 2026-04-23)*
 
 **Defect**: The bridge drove a single `vst~` SWAM Cello 3 instance. Every turn's voice shared the same CC/KS address space, so overlapping turns stomped each other: turn N's `setupComplex` would rewrite CC 78 Harmonics / CC 81 Bow Polyphony / KS Play Mode mid-phrase of turn N-1, forcing every in-flight voice onto the new complex's technique. For fast sequences (sexy-move quartet, `R U R' U R U2 R'`, etc.) the audible result was one continuously-retargeted cello line rather than distinct overlapping gestures. Even with D34 (Mono gliss) + D35 (Double/Hold per complex) + D33 (CC slew) fully honoured, a second turn on a different complex would always cut the first short, because the VST had one Play Mode at a time and the bridge kept the last writer's state.
 
@@ -491,6 +524,15 @@ Inside `swam_voice.maxpat`: `polymidiin` → `midiparse` (midievent outlet) → 
 - **Per-spell instance allocation**: harmonic-ping spells currently share `instances[0]`. A cleaner design allocates a dedicated slot per spell event (`allocateInstance()` returns free/stolen voice, the ping plays, `scheduleRelease` returns it to IDLE). Deferred — current routing is audible and consistent.
 - **Shared vs per-instance sieve walker follow-up**: if Phase B phrase-library playback introduces structurally-independent voice lines (e.g. a spell phrase riding on top of per-turn voices), a per-phrase sieve clone may help. Gated on Phase B design, not D40.
 - **POOL_SIZE scaling**: 8 holds 40% DSP on an 8700K; higher CPUs can probably push 12–16. Leave at 8 until a performance limit is hit — bigger pools mean more stolen voices and more instance-preset management overhead.
+
+**Reverted (2026-04-23 — `max/xenakube_cello.maxpat`, v5)**: the pool is collapsed to one slot in live use. Two concrete failures drove the revert:
+
+1. **SWAM Ambiente overlap.** SWAM Cello 3 v3.10+'s Ambiente panel auto-registers every loaded VST instance as a reverb source in a shared virtual studio. With 8 `poly~` voices all loading `default`, the plugin warned "Instruments Overlapping: adjust placement" on every cold load and summed identical sources into phase cancellations that were audible even with `MAX_ACTIVE = 2` (6 idle instances still contributing to the reverb bus). Ambiente parameters aren't exposed via MIDI-Learn (VST automation only), so per-instance spatialisation can't be patched from the bridge — the three user-side fixes (disable Ambiente in the default preset, per-voice panning, per-voice presets) each add manual per-instance setup that negates the pool's plug-and-play advantage. See `docs/swam_cello_reference.md` §7.
+2. **CPU × 8 for texture the composer didn't want.** DSP floor was ~40% per the original verification; single instance sits ~5%. The pool's value was "overlapping turns render as overlapping gestures" — in practice the composer preferred the monophonic Xenakis feel where each turn cleanly steals the previous, so the 8× CPU bought nothing musical.
+
+**v5 topology**: `[udpreceive 57121] → [gate] → [v8 xk_swam.js] → outlet 0 → [vst~ "SWAM Cello 3"] → DSP chain → [dac~]`. `POOL_SIZE = MAX_ACTIVE = 1`; `emitMidi` no longer emits `target N` (the poly~ routing directive) — just the bare `midievent status b1 b2`. The `instances` array is still built, `allocateInstance` still runs, `stealInstance` still fires CC 120 + CC 123 + CC 11=0 on every new voice — all the per-voice state (ccCache, activeNotes, phraseTasks, face snapshots, status lifecycle) keeps its home as `inst.*`, so the phrase / release / CC-ramp / gyro-modulator code paths are untouched. The revert is one `POOL_SIZE` constant + one `outlet("target", …)` deletion + the patch-side topology swap; no logic loss.
+
+**To re-enable polyphony**: (a) raise `POOL_SIZE` and `MAX_ACTIVE` in `xk_swam.js`, (b) restore the `outlet(MIDI_OUTLET, "target", inst.voice);` line in `emitMidi`, (c) swap `[vst~ "SWAM Cello 3"]` in the patch for `[poly~ swam_voice @parallel 1 @voices POOL_SIZE]`, (d) restore the `swam-voice.maxpat` `polymidiin → midiparse → vst~ "SWAM Cello 3"` subpatch. The Ambiente overlap remains the hard prerequisite — either disable Ambiente in the preset or save per-voice spatialised presets before scaling beyond 1 instance.
 
 ### D39 — Tremolo rate modulation: replace 60 Hz spin+breath with per-phrase stochastic envelope *(RESOLVED 2026-04-18)*
 

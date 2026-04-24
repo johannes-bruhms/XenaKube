@@ -1,59 +1,51 @@
 // ================================================================
-// xk_swam.js — XenaKube → SWAM Cello 3 MIDI bridge (v4 — instance pool)
+// xk_swam.js — XenaKube → SWAM Cello 3 MIDI bridge (v5 — single instance)
 //
-// Receives /xk/* OSC from relay.js (port 57121) and outputs midievent
-// messages to N parallel [vst~ SWAM Cello] instances, each hosted inside
-// a poly~ voice for multi-threaded DSP. Each voice event allocates one
-// instance from the pool, the full gesture (envelope + phrase + release)
-// renders inside that instance, and the instance returns to the pool when
-// the fade completes. Overlapping turns stack as overlapping SWAM voices
-// — a fast sexy-move can layer ~4 independent cello materials without
-// voice-stealing any single instance's KS/CC state.
+// Receives /xk/* OSC from relay.js (port 57121) and emits midievent
+// messages out outlet 0 into a single downstream [vst~ "SWAM Cello 3"].
+// Each /xk/voice renders its full gesture (envelope + phrase + release)
+// into that one instance; a new voice hard-steals the current one via
+// stealInstance (CC 120 All Sound Off + CC 123 All Notes Off + CC 11 = 0),
+// giving Xenakis "one step at a time." No poly~, no per-voice routing.
 //
-// v4 (D40, 2026-04-20) — instance pool refactor:
-//   • POOL_SIZE MIDI outlets (one per instance); debug outlet moves to
-//     index POOL_SIZE.
-//   • Per-instance state: selector cache (playMode/harmonics/tremolo/
-//     bowPoly/gestureMode), ccCache, activeNotes, phraseTasks,
-//     releaseTask, ccRampTasks, ksPending, voice-shot snapshots
-//     (intensity/density/duration/path/transpose/face*).
-//   • Global state: sieve walker, regime, live gyro (tilt/spin/dev/
-//     scramble), face mapping. Continuous CC handlers iterate active
-//     instances so cube orientation shapes every sounding voice.
-//   • Sieve walker stays shared — Xenakian pitch-set coherence across
-//     overlapping voices.
-//   • Spells currently route through instance 0 (TODO: per-spell
-//     allocation).
+// v5 (2026-04-23) — single-instance revert. The v4 instance-pool
+// machinery (makeInstance, allocateInstance, stealInstance, per-instance
+// ccCache / activeNotes / phraseTasks / face snapshots / status
+// lifecycle) is kept because the single `inst` threading is how every
+// phrase / CC ramp / release task is bookkept. POOL_SIZE = MAX_ACTIVE = 1
+// collapses the allocator to one slot; `inst.voice = 1` (for echo OSC
+// addressing only, no MIDI routing).
 //
-// v3 refactor history (all still valid per-instance): D17 panic watchdog,
+// v4 pool (2026-04-20) reverted: Ambiente auto-registered all 8 VST
+// instances as reverb sources causing phase overlap even with
+// MAX_ACTIVE = 2, and CPU scaled 8× for texture the composer didn't
+// want. Single-instance restores the sound the composer preferred.
+//
+// v3 refactor history (all still valid): D17 panic watchdog,
 // D1/D2/D12/D27 SWAM KS model + diffing, D5/D7 COMPLEX table, D4/D8/D33
 // per-complex expression envelope slewed via rampCC, D18 60 Hz CC
 // deadband, D28 KS sync guard, D29 interleave guard, D31 Harmonics/
 // Tremolo via CC 78/79, D32/D39 tremolo-rate stochastic envelope, D34
 // low-vel gliss overlap, D35 per-complex Bow Polyphony, D37 C4 harmonic
-// rotation.
+// rotation, D40 CC 120/123 silencing on steal, D41 per-phrase
+// duration clamp + portamento wiggle + face sculpt.
 //
-// Prerequisite: each SWAM instance configured to the same preset (see
-// docs/swam_cello_reference.md). poly~ subpatch uses polymidiin +
-// midiparse (midievent outlet) — NOT regular [in].
+// Prerequisite: the downstream [vst~ SWAM Cello 3] preset configured
+// per docs/swam_cello_reference.md. No poly~ / polymidiin required.
 // ================================================================
 
 autowatch = 1;
 inlets = 1;
 
-// Pool size — each instance is one SWAM Cello VST. POOL_SIZE can now be
-// changed without re-wiring the patch (all voices share a single outlet;
-// voice routing is done in-message via `target N`).
-var POOL_SIZE = 8;
-
-// MAX_ACTIVE — soft cap on concurrent sounding voices (non-IDLE instances).
-// Decoupled from POOL_SIZE so the pool stays loaded but the texture stays
-// thin. At cap, allocateInstance skips the IDLE branch and voice-steals
-// the oldest RELEASING/PLAYING instead — Xenakis "one step at a time"
-// with a legato halo of overlap from the tail of the previous voice.
-// Live-tweakable from Max: send `max_active N` to v8 inlet 0 (wire a
-// [number] or [live.dial] → [prepend max_active] → [v8 xk_swam.js]).
-var MAX_ACTIVE = 2;
+// Single-instance mode — the v8 feeds one downstream [vst~ SWAM Cello]
+// directly (no poly~ / target routing). The pool/allocator machinery
+// stays for per-instance state bookkeeping (ccCache, activeNotes,
+// phraseTasks, face snapshots, status lifecycle) and voice-stealing
+// semantics, but POOL_SIZE = 1 collapses it to one slot: every new
+// voice hard-steals the current one via stealInstance (CC 120 + 123 +
+// Expression=0). Xenakis "one step at a time."
+var POOL_SIZE = 1;
+var MAX_ACTIVE = 1;
 
 function max_active(v) {
 	var n = Math.max(1, Math.min(POOL_SIZE, Math.round(v)));
@@ -61,14 +53,16 @@ function max_active(v) {
 	log("max_active = " + MAX_ACTIVE + " (pool size = " + POOL_SIZE + ")");
 	outlet(DEBUG_OUTLET, "max_active", MAX_ACTIVE);
 }
-outlets = 2;                    // 0 → midievent (all voices), 1 → debug
+outlets = 3;                    // 0 → midievent → [vst~ SWAM Cello], 1 → debug, 2 → MIDI echo
 var MIDI_OUTLET  = 0;
 var DEBUG_OUTLET = 1;
+var ECHO_OUTLET  = 2;           // Phase E tier 2 — noteon/noteoff echo to relay (UDP 57122)
 
 // Inlet / outlet tooltip labels — shown in Max on hover.
 setinletassist(0,            "OSC /xk/* from relay (port 57121) + bang/on/off/debug");
-setoutletassist(MIDI_OUTLET,  "target N + midievent for all " + POOL_SIZE + " voices → [poly~ swam_voice " + POOL_SIZE + "]");
+setoutletassist(MIDI_OUTLET,  "midievent → [vst~ SWAM Cello 3]");
 setoutletassist(DEBUG_OUTLET, "debug → [print xk_swam]");
+setoutletassist(ECHO_OUTLET,  "/xk/midi/{noteon,noteoff,panic} → [udpsend 127.0.0.1 57122] → relay → dashboard rolling score");
 
 // Pulls in all data tables (OSC addresses, SWAM enums, CC band centers,
 // INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE, FACE_MAP,
@@ -325,30 +319,27 @@ var state = {
 // ================================================================
 // INSTANCE POOL
 // ================================================================
-// Each instance is one SWAM Cello VST hosted in poly~. All midievents
-// share MIDI_OUTLET (outlet 0); `inst.voice` (1..POOL_SIZE) is prepended
-// as a `target N` message so poly~ routes to the right voice. All per-
-// voice caches, scheduled tasks, selector state, and voice-shot
-// snapshots live on the instance record. Phrase generators and selector
-// helpers take `inst` as first argument.
+// Single SWAM Cello instance. The pool structure is retained as the
+// bookkeeping anchor for per-voice caches (ccCache, activeNotes,
+// phraseTasks, face snapshots, selector diff state) and the status
+// lifecycle, but POOL_SIZE = MAX_ACTIVE = 1 means every allocation
+// returns instances[0] and every new voice hard-steals the old one.
+// `inst.voice = 1` is kept only as the voice-id in the MIDI echo OSC
+// to the dashboard.
 //
-// Status lifecycle:
-//   IDLE       — available for allocation
+// Status lifecycle (collapsed to one slot):
+//   IDLE       — no phrase in flight; next voice goes straight in
 //   PLAYING    — phrase is generating notes, expression peaked/sustaining
-//   RELEASING  — scheduleRelease fired, CC 11 slewing to 0, notes about
-//                to be flushed; still in pool but lowest-priority-to-steal
+//   RELEASING  — scheduleRelease fired, CC 11 slewing to 0
 //
-// Voice stealing picks (in order): IDLE → oldest RELEASING → oldest
-// PLAYING. Since phrases are ~0.5–30 s and a fast sexy-move is 4 turns
-// in ~400 ms, a pool of 8 comfortably handles overlap without stealing
-// for expected gesture rates. Burst regime + long C7 breath phrases can
-// still exhaust the pool, at which point the oldest in-flight phrase
-// yields.
+// Any new voice arriving while status != IDLE triggers stealInstance
+// (CC 11 = 0 + CC 120 + CC 123 + noteOff all tracked pitches) before
+// the new phrase starts.
 // ================================================================
 function makeInstance(id) {
 	return {
 		id: id,
-		voice: id + 1,               // 1-indexed poly~ voice number (target N)
+		voice: id + 1,               // 1-indexed id used only for MIDI echo OSC to dashboard
 		status: 'IDLE',              // IDLE | PLAYING | RELEASING
 
 		// Selector state (diff targets for D1/D12/D27/D35 setEnum/set*)
@@ -388,6 +379,13 @@ function makeInstance(id) {
 		baseExpr: 0,
 		peakExpr: 0,
 		bowPressureBase: 64,
+
+		// Gliss invariant telemetry (D42). Every C5/C6/C7 voice MUST emit
+		// ≥1 glissStep; scheduleRelease's offT checks the counter and logs
+		// "GLISS FAIL" if the phrase finished without producing an overlap.
+		// See CLAUDE.md § Bridge Invariants.
+		glissOverlapCount: 0,
+		glissExpected: false,
 
 		// KS sync guard
 		ksForceCount: 0,
@@ -445,6 +443,10 @@ function allocateInstance() {
 }
 
 function stealInstance(inst, now) {
+	// D42 — stolen phrases never reach scheduleRelease's offT, so clear the
+	// gliss-expected flag to avoid a false-positive "GLISS FAIL" log. A fast
+	// turn that cuts a gliss short is user intent, not a bug.
+	inst.glissExpected = false;
 	cancelPhrase(inst, false);
 	if (inst.releaseTask) { inst.releaseTask.cancel(); inst.releaseTask = null; }
 	cancelCCRamp(inst, CC.EXPRESSION);
@@ -471,19 +473,29 @@ function statusNoteOn(ch)  { return 0x90 + (ch - 1); }
 function statusNoteOff(ch) { return 0x80 + (ch - 1); }
 function statusCC(ch)      { return 0xB0 + (ch - 1); }
 
-// Emit `target N` then `midievent …` as two sequential messages out of
-// the single MIDI_OUTLET. poly~ latches `target N` and sends the next
-// midievent to that voice; all POOL_SIZE voices share one wire to
-// [poly~ swam_voice 8]. Resizing the pool requires no re-wiring.
+// Emit a midievent directly out MIDI_OUTLET. No poly~ / target routing —
+// the v8 now feeds a single downstream [vst~ SWAM Cello] (or [midiout])
+// directly. `inst` is still threaded through for per-instance state
+// (ccCache, activeNotes, etc.) but never leaves the JS side.
 function emitMidi(inst, status, byte1, byte2) {
-	outlet(MIDI_OUTLET, "target", inst.voice);
 	outlet(MIDI_OUTLET, "midievent", status, byte1, byte2);
+}
+
+// Phase E tier 2 — mirror every noteon/noteoff the bridge emits to the relay
+// as OSC so the dashboard can transcribe exactly what SWAM plays. Keyswitches
+// (which call emitMidi directly, bypassing the noteOn/noteOff wrappers) are
+// intentionally excluded — they're technique-select toggles, not score notes.
+// Addresses come from gen_includes.js (OSC.MIDI_NOTEON / MIDI_NOTEOFF /
+// MIDI_PANIC).
+function emitEchoNote(address, inst, pitch, vel) {
+	outlet(ECHO_OUTLET, address, inst.voice, pitch, vel);
 }
 
 function noteOn(inst, pitch, vel) {
 	pitch = clamp(pitch, 0, 127);
 	vel = clamp(vel, 1, 127);
 	emitMidi(inst, statusNoteOn(MIDI_CH), pitch, vel);
+	emitEchoNote(OSC.MIDI_NOTEON, inst, pitch, vel);
 }
 
 // Phase 8: velocity default = state.noteOffVel (turn-rate driven).
@@ -495,6 +507,7 @@ function noteOff(inst, pitch, vel) {
 	}
 	vel = clamp(Math.round(vel), 0, 127);
 	emitMidi(inst, statusNoteOff(MIDI_CH), pitch, vel);
+	emitEchoNote(OSC.MIDI_NOTEOFF, inst, pitch, vel);
 }
 
 // Continuous CC — per-instance cache-suppressed. Use for 60 Hz streams.
@@ -677,6 +690,21 @@ function scheduleRelease(inst, dur) {
 
 		inst.status = 'RELEASING';
 		rampCC(inst, CC.EXPRESSION, 0, fadeMs);
+
+		// D42 gliss invariant assertion — phrase ran to natural end without
+		// being stolen, so if glissExpected was true we should have seen ≥1
+		// overlap. A 0 here means the phrase generator emitted no slide
+		// despite being a gliss complex — a silent bug pre-D42. Logged loud.
+		if (inst.glissExpected) {
+			if ((inst.glissOverlapCount | 0) < 1) {
+				log("GLISS FAIL inst " + inst.id + " C" + inst.activeComplex +
+				    " face=" + (inst.faceEnvelope || "-") +
+				    " motion=" + (inst.faceMotion || "-") +
+				    " overlaps=0 dur=" + dur.toFixed(2));
+			}
+			inst.glissExpected = false;
+		}
+
 		var offT = new Task(function() {
 			allNotesOff(inst);
 			// CC 120 All Sound Off — guarantees SWAM fully silences this
@@ -834,13 +862,30 @@ function foldToRange(pitch, lo, hi) {
 // ================================================================
 // LEGATO / GLISS (per-instance)
 // ================================================================
-function legatoNote(inst, pitch, vel) {
+// Overlap window before the previous note's noteOff fires. 20 ms is fine
+// for plain legato chains — we just want the new note to sound before the
+// old one cuts. Gliss (C5/C6/C7) asks SWAM's Bow Polyphony "Mono Poly
+// Release" detector to treat the overlap as a portamento target, and 20 ms
+// is tight enough that cold-load / state-drift occasionally misses it —
+// so glissNote uses GLISS_OVERLAP_MS instead.
+var LEGATO_OVERLAP_MS = 20;
+var GLISS_OVERLAP_MS  = 60;
+
+// D43 — first gliss step fires this many ms after the anchor, regardless of
+// phrase duration. Makes the slide audible early so a stolen short phrase
+// (fast turn cutting the voice at ~300 ms) still reads as a gliss rather
+// than a sustained note. 150 ms is late enough for the anchor to establish
+// a clear starting pitch, early enough that the slide is unambiguous before
+// scheduleRelease's 200 ms floor hits for tiny durations.
+var FIRST_GLISS_MS = 150;
+
+function legatoNoteOverlap(inst, pitch, vel, overlapMs) {
 	var oldNotes = inst.activeNotes.slice();
 	noteOn(inst, pitch, vel);
 	inst.activeNotes.push(pitch);
 
 	if (oldNotes.length > 0) {
-		scheduleAt(inst, 20, function() {
+		scheduleAt(inst, overlapMs, function() {
 			for (var i = 0; i < oldNotes.length; i++) {
 				noteOff(inst, oldNotes[i]);
 				var idx = inst.activeNotes.indexOf(oldNotes[i]);
@@ -850,9 +895,56 @@ function legatoNote(inst, pitch, vel) {
 	}
 }
 
+function legatoNote(inst, pitch, vel) {
+	legatoNoteOverlap(inst, pitch, vel, LEGATO_OVERLAP_MS);
+}
+
 var GLISS_VEL = 18;
 function glissNote(inst, pitch) {
-	legatoNote(inst, pitch, GLISS_VEL);
+	legatoNoteOverlap(inst, pitch, GLISS_VEL, GLISS_OVERLAP_MS);
+}
+
+// ----------------------------------------------------------------
+// GLISS INVARIANT (D42 — see CLAUDE.md § Bridge Invariants)
+// ----------------------------------------------------------------
+// Every C5/C6/C7 voice MUST emit ≥1 glissStep so SWAM's Mono Poly
+// Release detector sees at least one overlap and produces a slide.
+// glissStep is the ONLY path by which gliss complexes emit their
+// subsequent pitches; it guarantees:
+//   (a) the target pitch is ≥minLeap away from source (same-pitch
+//       overlaps produce no audible slide — SWAM slides to the same
+//       pitch → zero-length slide);
+//   (b) glissOverlapCount is incremented so scheduleRelease's offT
+//       can assert the invariant held.
+//
+// Face envelopes / intensity / regime may scale how many gliss steps
+// a phrase emits, but may NEVER set the count to 0 for a gliss
+// complex — if they need to collapse the phrase, they must still
+// leave one glissStep call standing. CLAUDE.md enforces this.
+
+// Coerce targetPitch to be at least minLeap semitones away from
+// sourcePitch, clamped to cello range. If the clamped direction
+// still can't achieve the leap (we're in a tight corner of the
+// cello range), flip direction so we always land on a pitch
+// outside the dead zone.
+function enforceLeap(sourcePitch, targetPitch, minLeap) {
+	if (Math.abs(targetPitch - sourcePitch) >= minLeap) return targetPitch;
+	var dir = (targetPitch >= sourcePitch) ? 1 : -1;
+	var p = clamp(sourcePitch + dir * minLeap, CELLO_MIN, CELLO_MAX);
+	if (Math.abs(p - sourcePitch) < minLeap) {
+		p = clamp(sourcePitch - dir * minLeap, CELLO_MIN, CELLO_MAX);
+	}
+	return p;
+}
+
+// Fire one gliss step: coerce minimum leap, emit glissNote with
+// GLISS_OVERLAP_MS anchor-off window, tally inst.glissOverlapCount.
+// Returns the actual (post-coercion) pitch so callers can chain.
+function glissStep(inst, sourcePitch, targetPitch, minLeap) {
+	var p = enforceLeap(sourcePitch, targetPitch, minLeap);
+	glissNote(inst, humanPitch(p));
+	inst.glissOverlapCount = (inst.glissOverlapCount | 0) + 1;
+	return p;
 }
 
 // ================================================================
@@ -901,13 +993,19 @@ function commitSieveWalk(count, motion) {
 }
 
 // ================================================================
-// FACE PHRASE-SHAPE HELPERS (Phase A1 sculpt pass, 2026-04-21)
+// FACE PHRASE-SHAPE HELPERS (Phase A1 sculpt pass, 2026-04-21 / D42 2026-04-23)
 // ================================================================
 // faceShapedCount: the phrase's note count after applying the face
 //   envelope's isSingle override (pluck/stab/drone → 1) or countMult
-//   (burst → ×1.8). Gliss complexes (C5–C7) pass forGliss=true so
-//   isSingle collapses to zero SUBSEQUENT gliss notes (the anchor
-//   legato still fires once).
+//   (burst → ×1.8).
+//
+//   forGliss=true (called from phraseC5/C6/C7): the minimum returned
+//   count is 1 SUBSEQUENT gliss note, not 0. The gliss invariant
+//   (CLAUDE.md § Bridge Invariants / D42) requires every C5/C6/C7
+//   voice to emit at least one anchor→target slide; face envelope
+//   modulates WHERE the slide sits inside the phrase but may not
+//   erase the slide itself. Pluck face on C5 still slides — just in
+//   a short plucky window rather than a salvo.
 //
 // stepVelScale: per-step velocity scalar for a multi-note phrase so
 //   swell crescendos across the rebow chain, fade decays, and
@@ -915,7 +1013,7 @@ function commitSieveWalk(count, motion) {
 //   single-note phrases or 'flat' curves.
 function faceShapedCount(inst, baseLo, baseHi, forGliss) {
 	var prof = inst.faceEnvProfile;
-	if (prof && prof.isSingle) return forGliss ? 0 : 1;
+	if (prof && prof.isSingle) return forGliss ? 1 : 1;
 	var raw = phraseCount(inst, baseLo, baseHi);
 	if (prof && prof.countMult && prof.countMult !== 1.0) {
 		raw = clamp(Math.round(raw * prof.countMult), baseLo, 12);
@@ -1033,25 +1131,25 @@ function phraseC4(inst, vel, dur) {
 	scheduleRelease(inst, dur);
 }
 
-// C5: wild gliss — dense salvo of ≥8-semi leaps, low-vel overlap = SWAM slide.
-// Face isSingle (pluck/stab/drone) collapses to just the anchor note — the
-// gliss-complex character survives via its Mono Poly Release bow polyphony +
-// portamento-on bed, the face overrides the salvo.
+// C5: wild gliss — dense salvo of ≥8-semi leaps. glissStep GUARANTEES the
+// leap and the overlap that triggers SWAM's Mono Poly Release slide
+// regardless of how narrow the sieve is or what face envelope is active.
+// Face envelope scales phrase density via faceShapedCount but may not zero
+// it — the gliss invariant (D42) requires ≥1 slide per C5 voice.
 function phraseC5(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var count = faceShapedCount(inst, 4, 9, true);
+	var count = Math.max(1, faceShapedCount(inst, 4, 9, true));
 	var MIN_LEAP = 8;
-	var lastPitch = pickPitch(5, inst);
-	legatoNote(inst, humanPitch(lastPitch), humanVel(vel * stepVelScale(velCurve, 0, Math.max(count + 1, 1))));
+	var lastPitchRef = { p: pickPitch(5, inst) };
+	legatoNote(inst, humanPitch(lastPitchRef.p), humanVel(vel * stepVelScale(velCurve, 0, count + 1)));
 	for (var i = 0; i < count; i++) {
 		(function(idx, stepCount) {
 			var t = Math.round((idx + 1) / (stepCount + 1) * dur * 1000 * 0.92);
 			scheduleAt(inst, t, function() {
 				var p = pickPitch(5, inst);
 				var attempts = 0;
-				while (Math.abs(p - lastPitch) < MIN_LEAP && attempts < 12) { p = pickPitch(5, inst); attempts++; }
-				glissNote(inst, humanPitch(p));
-				lastPitch = p;
+				while (Math.abs(p - lastPitchRef.p) < MIN_LEAP && attempts < 12) { p = pickPitch(5, inst); attempts++; }
+				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP);
 			});
 		})(i, count);
 	}
@@ -1059,21 +1157,28 @@ function phraseC5(inst, vel, dur) {
 }
 
 // C6: OrderedSlidingAscDesc — portamento steps along the sieve, committed.
-// Face isSingle → one legato note, no subsequent gliss steps.
+// idx 0 = anchor legato; idx ≥1 = glissStep sliding from the previous pitch.
+// D42: count is forced to ≥2 even when face isSingle so the slide invariant
+// holds — pluck/stab/drone faces get a short "anchor → one slide" shape, not
+// a silent anchor. MIN_LEAP = 1 honors the sieve walk (adjacent residues are
+// typically 1–4 semis apart); enforceLeap only kicks in if the walker stalls.
 function phraseC6(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var isSingle = (inst.faceEnvProfile && inst.faceEnvProfile.isSingle) === true;
 	var count = faceShapedCount(inst, 3, 6, false);
-	if (count >= 2) commitSieveWalk(count, inst.faceMotion);
+	if (count < 2) count = 2;  // D42 gliss invariant — anchor + ≥1 slide
+	commitSieveWalk(count, inst.faceMotion);
 	var spacing = Math.max(100, Math.round(dur * 1000 / (count + 1)));
+	var lastPitchRef = { p: null };
 	for (var i = 0; i < count; i++) {
 		(function(idx, stepCount) {
 			scheduleAt(inst, idx * spacing + humanDelay(), function() {
-				if (idx === 0 || isSingle) {
+				if (idx === 0) {
+					lastPitchRef.p = pickPitch(6, inst);
 					var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
-					legatoNote(inst, humanPitch(pickPitch(6, inst)), v);
+					legatoNote(inst, humanPitch(lastPitchRef.p), v);
 				} else {
-					glissNote(inst, humanPitch(pickPitch(6, inst)));
+					var p = pickPitch(6, inst);
+					lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, 1);
 				}
 			});
 		})(i, count);
@@ -1081,31 +1186,37 @@ function phraseC6(inst, vel, dur) {
 	scheduleRelease(inst, dur);
 }
 
-// C7: sustained + micro-drifts — deep breath-like floating.
-// Face isSingle → no drifts (the anchor note breathes alone); face motion
-// up/down biases the drift direction; burst doubles the drift count.
+// C7: sustained + micro-drifts — deep breath-like floating. Every drift is a
+// glissStep that slides from the anchor (or previous drift) to a nearby
+// pitch, triggering SWAM portamento. D42: isSingle faces still produce ≥1
+// drift — the gliss invariant outranks the envelope's collapse. Face motion
+// up/down biases direction; burst's countMult thickens the drift count.
 function phraseC7(inst, vel, dur) {
 	var isSingle = (inst.faceEnvProfile && inst.faceEnvProfile.isSingle) === true;
 	var p1 = pickPitch(7, inst);
 	legatoNote(inst, humanPitch(p1), humanVel(vel));
-	if (!isSingle) {
-		var driftCount = 1 + (intensityDensity(inst) >= 1.1 ? rrand(1, 2) : 0);
-		if (inst.faceEnvProfile && inst.faceEnvProfile.countMult > 1.0) {
-			driftCount = Math.min(6, Math.round(driftCount * inst.faceEnvProfile.countMult));
-		}
-		var motionDir = (inst.faceMotion === 'up') ? 1 : (inst.faceMotion === 'down') ? -1 : 0;
-		var durMs = dur * 1000;
-		for (var i = 0; i < driftCount; i++) {
-			(function(idx, stepCount) {
-				var t = Math.round(durMs * (0.4 + (idx + 1) / (stepCount + 2) * 0.5));
-				scheduleAt(inst, t, function() {
-					var lo = (inst.path === "V2") ? 24 : CELLO_MIN;
-					var delta = (motionDir !== 0) ? motionDir * rrand(1, 3) : rrand(-3, 3);
-					var p2 = clamp(p1 + delta, lo, CELLO_MAX);
-					glissNote(inst, p2);
-				});
-			})(i, driftCount);
-		}
+	var driftCount = isSingle
+		? 1
+		: 1 + (intensityDensity(inst) >= 1.1 ? rrand(1, 2) : 0);
+	if (!isSingle && inst.faceEnvProfile && inst.faceEnvProfile.countMult > 1.0) {
+		driftCount = Math.min(6, Math.round(driftCount * inst.faceEnvProfile.countMult));
+	}
+	var motionDir = (inst.faceMotion === 'up') ? 1 : (inst.faceMotion === 'down') ? -1 : 0;
+	var durMs = dur * 1000;
+	for (var i = 0; i < driftCount; i++) {
+		(function(idx, stepCount) {
+			var t = Math.round(durMs * (0.4 + (idx + 1) / (stepCount + 2) * 0.5));
+			scheduleAt(inst, t, function() {
+				var lo = (inst.path === "V2") ? 24 : CELLO_MIN;
+				// rrand(-3,3) can return 0 — force a non-zero delta so the
+				// slide has somewhere to go (SWAM slides from p1 to itself
+				// would be silent).
+				var delta = (motionDir !== 0) ? motionDir * rrand(1, 3) : rrand(-3, 3);
+				if (delta === 0) delta = (Math.random() < 0.5) ? -1 : 1;
+				var p2 = clamp(p1 + delta, lo, CELLO_MAX);
+				glissStep(inst, p1, p2, 1);
+			});
+		})(i, driftCount);
 	}
 	scheduleRelease(inst, dur);
 }
@@ -1253,6 +1364,11 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 
 	inst.status = 'PLAYING';
 
+	// D42 gliss invariant — reset overlap counter; scheduleRelease's offT
+	// asserts ≥1 overlap fired for C5/C6/C7. See CLAUDE.md § Bridge Invariants.
+	inst.glissOverlapCount = 0;
+	inst.glissExpected = (complexType === 5 || complexType === 6 || complexType === 7);
+
 	var intMap = INTENSITY_MAP[intensity] || INTENSITY_MAP["mf"];
 	inst.baseExpr = intMap.expr;
 	var baseVel = intMap.vel;
@@ -1288,8 +1404,15 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 		}
 	}
 
-	// Defensive portamento re-assertion — per-instance every voice event
+	// Defensive portamento re-assertion — per-instance every voice event.
+	// SWAM v3 quirk: CC 5 (Portamento Time) is a no-op unless the plugin
+	// sees a parameter *change event*. When setupComplex is skipped (same
+	// complex as previous voice, e.g. C5 → C5), writing CC 5 to its current
+	// value leaves stale Portamento Time state — gliss then fails and the
+	// anchor sustains as a single note. Wiggle through 0 first so SWAM
+	// re-latches; harmless when portamento is off (SWAM ignores CC 5).
 	ccForce(inst, CC.PORTAMENTO_ON,   cmx.portamento.on ? 127 : 0);
+	if (cmx.portamento.on) ccForce(inst, CC.PORTAMENTO_TIME, 0);
 	ccForce(inst, CC.PORTAMENTO_TIME, cmx.portamento.time);
 
 	log("inst " + inst.id + " voice C" + complexType +
@@ -1795,6 +1918,11 @@ function bang() {
 
 	for (var i = 0; i < POOL_SIZE; i++) resetInstance(instances[i]);
 
+	// Phase E tier 2 — dashboard clears its pending-notes map on panic so a
+	// stale noteon (lost UDP, or offline before a noteoff) doesn't hang in
+	// the rolling score forever.
+	outlet(ECHO_OUTLET, OSC.MIDI_PANIC);
+
 	log("reset — " + POOL_SIZE + " instances cleared");
 }
 
@@ -1809,6 +1937,6 @@ function log(msg)         { outlet(DEBUG_OUTLET, "xk_swam: " + msg); }
 // INIT
 // ================================================================
 function loadbang() {
-	log("v4 ready — instance pool " + POOL_SIZE + " SWAM voices");
+	log("v5 ready — single SWAM instance (POOL_SIZE=" + POOL_SIZE + ")");
 	startWatchdog();
 }

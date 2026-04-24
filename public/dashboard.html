@@ -2050,12 +2050,6 @@ function updateState(state, move) {
     if (lbl) lbl.className = isActive ? 'active' : '';
   }
 
-  // Stash for the tier-1 notation renderer (voice events arrive separately
-  // from state and need path + sieve context). Copy rather than reference
-  // in case upstream mutates.
-  if (Array.isArray(state.sieve)) latestSieve = state.sieve.slice();
-  if (state.path) latestPath = state.path;
-
   // currentGyro / hasGyro are driven solely by the gyro_tick handler, which
   // ships the SLERP-interpolated visual quat. Writing them here too would
   // superimpose a fresh-but-choppy 10 Hz stream on top of the smooth 60 Hz
@@ -2248,141 +2242,182 @@ function handleSolveEvent() {
 }
 
 // ============================================================
-// Phase E tier 1 — archetypal notation
+// Phase E tier 2 — rolling score from SWAM MIDI echo (landed 2026-04-23)
 //
-// Each `voice` WS event maps to one StaveNote (per active voice in the
-// payload — 1 in sequential, 8 in polyphonic → rendered as a chord).
-// Nothing about this reflects what SWAM actually plays inside its
-// phraseCX generator; it's the *archetype* of the gesture the engine
-// dispatched. Tier-3 will replace this with a deterministic echo of
-// the TS-side note-list, at which point the mapper collapses.
+// The Max bridge mirrors every noteon/noteoff it emits to the relay as
+// OSC /xk/midi/noteon|noteoff on UDP 57122; the relay forwards each as a
+// WS `midi_echo` message. We pair noteons to noteoffs by (voice, pitch),
+// record the measured duration, and transcribe the last NOTATION_MAX
+// completed notes onto a bass-clef staff. Keyswitches are excluded on
+// the Max side, so this stream is exactly the score-audible output.
+//
+// Tier 3 will replace the echo with a TS-generated note-list (zero-drift,
+// face-articulation glyphs restored) once the Max→TS phrase migration
+// lands — see docs/todo.md Phase B + Phase E tier 3.
 // ============================================================
 
-let latestSieve = [];
-let latestPath = 'V1';
-const NOTATION_MAX = 8;
-const voiceBuffer = [];       // rolling buffer of { voice, move } entries
-let notationResized = false;  // lazy-init the VexFlow renderer
+const NOTATION_MAX = 16;              // rolling window of completed notes
+const PENDING_MAX_AGE_MS = 45000;     // force-drop notes stuck pending >45s
+
+const pendingMidiNotes = new Map();   // key "voice:pitch" → { pitch, velocity, voice, onsetMs }
+const completedMidiNotes = [];        // rolling buffer of { pitch, velocity, voice, onsetMs, durationMs }
 
 const NOTE_NAMES_LOWER = ['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
 
-/** Duration in seconds → VexFlow duration code. Tier-1 quantises to four
- *  buckets; dotted / tied variants are deferred until tier 2. */
-function quantizeDuration(seconds) {
-  if (!Number.isFinite(seconds) || seconds <= 0) return 'q';
-  if (seconds < 1.2) return 'q';
-  if (seconds < 3.5) return 'h';
-  if (seconds < 9)   return 'w';
-  return 'w'; // very long — tier-1 caps at whole. Tier-2 will tie.
+/** MIDI note number → VexFlow key string ("c#/4" etc.). Only sharps — we
+ *  have no enharmonic context from raw MIDI. Flat-spelling is a tier-3
+ *  concern (the TS phrase generator can choose). */
+function midiToVexKey(midi) {
+  const clamped = Math.max(0, Math.min(127, midi|0));
+  const pc = ((clamped % 12) + 12) % 12;
+  const oct = Math.floor(clamped / 12) - 1;
+  return `${NOTE_NAMES_LOWER[pc]}/${oct}`;
 }
 
-/** Face envelope → VexFlow articulation code.
- *  Codes: a. staccato / a> accent / a^ marcato / ao staccatissimo /
- *         a- tenuto / a@a fermata above. */
-function articulationForEnvelope(env) {
-  switch (env) {
-    case 'pluck': return 'a.';
-    case 'stab':  return 'a>';
-    case 'burst': return 'ao';
-    case 'drone': return 'a@a';
-    case 'swell': return 'a-';
-    case 'fade':  return 'a-';
-    default:      return null;
-  }
+/** Measured note duration (ms) → VexFlow duration code. Cutoffs assume a
+ *  ~90 BPM perceived tempo; we quantise to five buckets since SWAM phrases
+ *  range from ~80 ms pizz flicks to multi-second drones. No bar lines, no
+ *  meter — FormatAndDraw lays notes out by nominal width. */
+function midiDurationToVex(durationMs) {
+  if (!Number.isFinite(durationMs) || durationMs <= 0) return '16';
+  if (durationMs < 180)   return '16';   // sixteenth: short pizz rebow
+  if (durationMs < 380)   return '8';    // eighth: quick attack
+  if (durationMs < 900)   return 'q';    // quarter: standard bow
+  if (durationMs < 2500)  return 'h';    // half: sustained bow
+  return 'w';                             // whole: drone (tie-pending; tier 3)
 }
 
-/** Pick a pitch for a VoiceEvent using the face's registerBias + sieve.
- *  Strategy: pitchClass from (vertexIdx * 7) % 12 (perfect-5th spiral —
- *  matches engine's `pitchClassMod`). Register: registerBias × 12
- *  (halved on V2), centred on C3 (MIDI 48). Falls back cleanly when
- *  face is null (non-face moves skip registerBias entirely).
- *  Returns a VexFlow key string ("c/3", "f#/4", …). */
-function pickNotationPitch(vertexIdx, face, path) {
-  const pc = ((vertexIdx % 8) * 7) % 12;
-  const sig = face ? FACE_SIG[face] : null;
-  const spread = path === 'V2' ? 6 : 12;
-  const regShift = sig ? Math.round(sig.registerBias * spread) : 0;
-  // C3 (MIDI 48) as bass-clef centre keeps most notes on-staff.
-  const midi = 48 + pc + regShift;
-  const clamped = Math.max(28, Math.min(72, midi)); // stay inside a 4-octave window
-  const pn = NOTE_NAMES_LOWER[clamped % 12];
-  const octave = Math.floor(clamped / 12) - 1;
-  return `${pn}/${octave}`;
+/** Velocity (0-127) → dynamic marking. Six bands aligned with SWAM's
+ *  perceived loudness curve. */
+function velocityToDynamic(v) {
+  if (v < 28)  return 'pp';
+  if (v < 52)  return 'p';
+  if (v < 74)  return 'mp';
+  if (v < 96)  return 'mf';
+  if (v < 114) return 'f';
+  return 'ff';
 }
 
-/** Build a VexFlow StaveNote for a single WS voice payload. */
-function voiceToStaveNote(VF, payload) {
-  const { active = [], face = null } = payload || {};
-  if (!active.length) return null;
+/** Build a VexFlow StaveNote from one completed MIDI event. */
+function midiToStaveNote(VF, evt, showDynamic) {
+  const key = midiToVexKey(evt.pitch);
+  const duration = midiDurationToVex(evt.durationMs);
+  const note = new VF.StaveNote({ keys: [key], duration, clef: 'bass' });
 
-  // Polyphonic: all active voices stacked as a chord. Sequential: one key.
-  const keys = active.map(ev => pickNotationPitch(ev.vertexIndex, face, latestPath));
-  // Duration + intensity from the first active voice — they're all the same
-  // slot in polyphonic mode (voices share the turn's duration/intensity).
-  const first = active[0];
-  const duration = quantizeDuration(first?.params?.duration);
-  const intensity = first?.params?.intensity || 'mf';
-
-  const note = new VF.StaveNote({ keys, duration, clef: 'bass' });
-
-  // Articulation from face envelope. Non-face moves skip the glyph.
-  const artCode = face ? articulationForEnvelope(FACE_SIG[face]?.envelope) : null;
-  if (artCode) {
-    const position = VF.Modifier.Position.ABOVE;
-    for (let k = 0; k < keys.length; k++) {
-      note.addModifier(new VF.Articulation(artCode).setPosition(position), k);
-    }
+  // Accidental glyph (VexFlow 4 doesn't auto-derive from key names).
+  if (key.indexOf('#') >= 0) {
+    note.addModifier(new VF.Accidental('#'), 0);
   }
 
-  // Dynamic marking as a text annotation below the note.
-  const dyn = new VF.Annotation(intensity)
-    .setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM)
-    .setFont('Times', 11, 'italic');
-  note.addModifier(dyn, 0);
-
+  if (showDynamic) {
+    const dyn = new VF.Annotation(velocityToDynamic(evt.velocity))
+      .setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM)
+      .setFont('Times', 11, 'italic');
+    note.addModifier(dyn, 0);
+  }
   return note;
 }
 
-/** Rebuild the SVG from the current buffer. */
+/** Rebuild the SVG from the current buffer. Called on every completed
+ *  note; VexFlow handles 16 notes at 60fps easily on modern hardware. */
 function renderNotation() {
   const host = document.getElementById('notation-strip');
   if (!host) return;
 
-  // Hide the strip until we have at least one event.
-  host.classList.toggle('empty', voiceBuffer.length === 0);
+  const notes = completedMidiNotes.slice(-NOTATION_MAX);
+  host.classList.toggle('empty', notes.length === 0);
   host.innerHTML = '';
-  if (voiceBuffer.length === 0) return;
+  if (notes.length === 0) return;
 
-  // Vex UMD bundle exposes a global — support both flat + .Flow shapes.
   const VF = window.Vex?.Flow || window.VexFlow;
   if (!VF) return;
 
-  const width = Math.max(360, Math.min(720, voiceBuffer.length * 70 + 80));
+  const width = Math.max(420, Math.min(960, notes.length * 48 + 100));
   const height = 110;
 
   const renderer = new VF.Renderer(host, VF.Renderer.Backends.SVG);
   renderer.resize(width, height);
   const ctx = renderer.getContext();
 
-  const stave = new VF.Stave(10, 10, width - 20)
-    .addClef('bass');
+  const stave = new VF.Stave(10, 10, width - 20).addClef('bass');
   stave.setContext(ctx).draw();
 
-  const notes = voiceBuffer
-    .map(entry => voiceToStaveNote(VF, entry))
-    .filter(n => n !== null);
-  if (notes.length === 0) return;
+  // Dynamic annotations on every 4th note only — placing one under every
+  // note clutters the strip at dense phrase activity. First note + every
+  // 4th thereafter gives a readable per-phrase contour.
+  const staveNotes = notes.map((evt, i) => midiToStaveNote(VF, evt, i === 0 || i % 4 === 0));
 
-  // One voice, 4/4 nominal — tier-1 doesn't attempt bar-line accuracy,
-  // so we use a soft-fitted Formatter.FormatAndDraw which ignores meter.
-  VF.Formatter.FormatAndDraw(ctx, stave, notes);
+  try {
+    VF.Formatter.FormatAndDraw(ctx, stave, staveNotes);
+  } catch (e) {
+    // VexFlow occasionally throws on pathological duration sequences;
+    // keep the strip alive, log for diagnosis.
+    console.warn('[notation] FormatAndDraw failed:', e?.message || e);
+  }
 }
 
-function handleVoiceEvent(payload) {
-  voiceBuffer.push(payload);
-  while (voiceBuffer.length > NOTATION_MAX) voiceBuffer.shift();
-  renderNotation();
+function handleMidiEcho(data) {
+  if (!data || !data.kind) return;
+
+  if (data.kind === 'panic') {
+    pendingMidiNotes.clear();
+    return;
+  }
+
+  const key = `${data.voice}:${data.pitch}`;
+
+  if (data.kind === 'noteon') {
+    pendingMidiNotes.set(key, {
+      pitch: data.pitch,
+      velocity: data.velocity,
+      voice: data.voice,
+      onsetMs: performance.now(),
+    });
+    return;
+  }
+
+  if (data.kind === 'noteoff') {
+    const pending = pendingMidiNotes.get(key);
+    if (!pending) return;              // stray noteoff (lost UDP noteon) — skip
+    pendingMidiNotes.delete(key);
+
+    completedMidiNotes.push({
+      pitch: pending.pitch,
+      velocity: pending.velocity,
+      voice: pending.voice,
+      onsetMs: pending.onsetMs,
+      durationMs: performance.now() - pending.onsetMs,
+    });
+    while (completedMidiNotes.length > NOTATION_MAX * 2) completedMidiNotes.shift();
+    renderNotation();
+  }
 }
+
+// Sweep pending notes periodically. A stuck entry (lost noteoff UDP, browser
+// reconnect mid-phrase) would otherwise haunt the map forever. After
+// PENDING_MAX_AGE_MS we force-complete it so the note still lands on the
+// staff with its accumulated duration.
+setInterval(() => {
+  const now = performance.now();
+  let flushed = 0;
+  for (const [key, pending] of pendingMidiNotes) {
+    if (now - pending.onsetMs > PENDING_MAX_AGE_MS) {
+      pendingMidiNotes.delete(key);
+      completedMidiNotes.push({
+        pitch: pending.pitch,
+        velocity: pending.velocity,
+        voice: pending.voice,
+        onsetMs: pending.onsetMs,
+        durationMs: now - pending.onsetMs,
+      });
+      flushed++;
+    }
+  }
+  if (flushed > 0) {
+    while (completedMidiNotes.length > NOTATION_MAX * 2) completedMidiNotes.shift();
+    renderNotation();
+  }
+}, 5000);
 
 // Tilt and spin are derived from gyro quaternion client-side
 // (faster than waiting for relay to compute + broadcast at 60Hz)
@@ -2501,9 +2536,14 @@ function wsConnect() {
         spellBook = msg.data;
       } else if (msg.type === 'solve') {
         handleSolveEvent();
-      } else if (msg.type === 'voice') {
-        handleVoiceEvent(msg.data);
+      } else if (msg.type === 'midi_echo') {
+        handleMidiEcho(msg.data);
       }
+      // Note: the engine's `voice` WS message still fires on every turn
+      // (powers any listener that wants the archetypal gesture shape),
+      // but the notation strip no longer consumes it — Phase E tier 2
+      // reads the MIDI echo instead so the staff reflects exactly what
+      // SWAM plays, not what the engine dispatched.
     } catch (e) {
       console.error('Parse error:', e);
     }
