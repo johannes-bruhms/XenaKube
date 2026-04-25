@@ -253,7 +253,7 @@ Synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) driven via 
 
 ### Patch Topology
 
-Runtime patch: `max/xenakube_cello.maxpat` (open in Max 9+).
+Runtime patch: `max/xenakube_swam.maxpat` (open in Max 9+).
 
 ```
 [udpreceive 57121] → [gate] → [v8 xk_swam.js @autowatch 1] → outlet 0 → [vst~ "SWAM Cello 3"] → DSP chain → [dac~]
@@ -277,7 +277,7 @@ The SWAM instance's preset is set manually inside the SWAM GUI (saved as `xenaku
 |------|------|
 | `xk_swam.js` | v8 object: OSC → midievent into a single downstream `[vst~]`. Voice allocator + `stealInstance` (cancels phrase tasks, CC 11 = 0, CC 120, CC 123, noteOff tracked pitches); per-instance bookkeeping (`ccCache`, `activeNotes`, `phraseTasks`, `releaseTask`, `ccRampTasks`, `ksPending`, selector cache, voice-shot snapshots of intensity / density / duration / path / transpose / tetra / face*, IDLE → PLAYING → RELEASING → IDLE lifecycle); phrase generators `phraseC1..C8`; selector helpers (`setPlayMode` / `setHarmonics` / `setTremolo` / `setBowPolyphony` / `setEnum`); scheduling primitives (`scheduleAt` / `scheduleRelease` / `scheduleExprEnvelope`); 60 Hz CC modulators with spin-deadband; `/xk/panic` + per-instance inactivity watchdog. SWAM mapping tables come from `gen_includes.js` — do not duplicate locally. Pitches folded to cello range via `foldToRange(pitch, lo, hi)`. `bang()` pins Gesture Mode = Expression on init. |
 | `gen_includes.js` | **Generated** by `scripts/gen-max-include.js` from `src/osc-schema.ts` + `src/swam-mapping.ts` + `src/face-gesture.ts`. Committed to git (Max can't run tsx). Holds OSC address strings, SWAM enums, CC band centers, INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE, FACE_MAP, LEGATO_COMPLEX, REGIME_*. **Do not hand-edit.** Regenerate with `npm run gen:max` and reload the v8 object in Max. |
-| `xenakube_cello.maxpat` | Main performance patch. `[loadbang]` fires `max_active 1` into the v8 inlet and `read xenakube_2.swam` into the VST on open. |
+| `xenakube_swam.maxpat` | Main performance patch. `[loadbang]` fires `max_active 1` into the v8 inlet and `read xenakube_2.swam` into the VST on open. |
 | `xenakube_2.swam` | SWAM Cello 3 preset, auto-loaded by the patch on open. Contains MIDI-Learn assignments, Bow Polyphony page config, Ambiente disable, KS Velocity Remap bands. Edit via the SWAM plugin GUI → save with the same name; Max reloads on next `read` message. |
 | `ks_logger.js` | Optional pass-through v8 between `xk_swam.js` and `vst~`. Toggleable (`on`/`off`/`dump`). Captures raw `midievent` with timestamps; `dump` prints KS-only timeline (field, option guess, Δprev, Δfield) plus non-KS summary + JSON for review. Use for diagnosing KS glitches (flashing harmonics / tremolo). |
 
