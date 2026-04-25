@@ -53,16 +53,18 @@ function max_active(v) {
 	log("max_active = " + MAX_ACTIVE + " (pool size = " + POOL_SIZE + ")");
 	outlet(DEBUG_OUTLET, "max_active", MAX_ACTIVE);
 }
-outlets = 3;                    // 0 → midievent → [vst~ SWAM Cello], 1 → debug, 2 → MIDI echo
+outlets = 4;                    // 0 → midievent → [vst~ SWAM Cello], 1 → debug, 2 → MIDI echo, 3 → detected moves/spells
 var MIDI_OUTLET  = 0;
 var DEBUG_OUTLET = 1;
 var ECHO_OUTLET  = 2;           // Phase E tier 2 — noteon/noteoff echo to relay (UDP 57122)
+var MOVES_OUTLET = 3;           // 2026-04-24 — detected face-moves + spell completions for Max-side display/routing
 
 // Inlet / outlet tooltip labels — shown in Max on hover.
 setinletassist(0,            "OSC /xk/* from relay (port 57121) + bang/on/off/debug");
 setoutletassist(MIDI_OUTLET,  "midievent → [vst~ SWAM Cello 3]");
 setoutletassist(DEBUG_OUTLET, "debug → [print xk_swam]");
 setoutletassist(ECHO_OUTLET,  "/xk/midi/{noteon,noteoff,panic} → [udpsend 127.0.0.1 57122] → relay → dashboard rolling score");
+setoutletassist(MOVES_OUTLET, "detected: 'face <L|L'|R|R'|...>' on every quarter-turn, 'spell <name>' on every algorithm match — wire to [route face spell]");
 
 // Pulls in all data tables (OSC addresses, SWAM enums, CC band centers,
 // INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE, FACE_MAP,
@@ -380,11 +382,14 @@ function makeInstance(id) {
 		peakExpr: 0,
 		bowPressureBase: 64,
 
-		// Gliss invariant telemetry (D42). Every C5/C6/C7 voice MUST emit
-		// ≥1 glissStep; scheduleRelease's offT checks the counter and logs
-		// "GLISS FAIL" if the phrase finished without producing an overlap.
-		// See CLAUDE.md § Bridge Invariants.
+		// Gliss invariant telemetry (D42 + D46). Every C5/C6/C7 voice MUST
+		// emit ≥1 glissStep; scheduleRelease's offT checks the sum of
+		// glissOverlapCount (within-string slides) + glissLeapCount
+		// (cross-string leaps) and logs "GLISS FAIL" if both are 0. Per-
+		// phrase log line reports the breakdown so the user can verify
+		// in [print xk_swam]. See CLAUDE.md § Bridge Invariants.
 		glissOverlapCount: 0,
+		glissLeapCount: 0,
 		glissExpected: false,
 
 		// KS sync guard
@@ -481,14 +486,17 @@ function emitMidi(inst, status, byte1, byte2) {
 	outlet(MIDI_OUTLET, "midievent", status, byte1, byte2);
 }
 
-// Phase E tier 2 — mirror every noteon/noteoff the bridge emits to the relay
-// as OSC so the dashboard can transcribe exactly what SWAM plays. Keyswitches
-// (which call emitMidi directly, bypassing the noteOn/noteOff wrappers) are
-// intentionally excluded — they're technique-select toggles, not score notes.
-// Addresses come from gen_includes.js (OSC.MIDI_NOTEON / MIDI_NOTEOFF /
-// MIDI_PANIC).
+// Phase E tier 2 (rev B 2026-04-24) — mirror every noteon/noteoff the bridge
+// emits to the relay as OSC so the dashboard can transcribe exactly what SWAM
+// plays. Keyswitches (which call emitMidi directly, bypassing the noteOn/noteOff
+// wrappers) are intentionally excluded — they're technique-select toggles, not
+// score notes. The 4th arg `complex` is `inst.activeComplex` at echo time
+// (1..8 = Cn, 0 if pre-init); the dashboard piano-roll uses it to colour notes
+// by technique and connect adjacent same-voice C5/C6/C7 notes as glissando
+// curves. Addresses come from gen_includes.js (OSC.MIDI_NOTEON / MIDI_NOTEOFF
+// / MIDI_PANIC).
 function emitEchoNote(address, inst, pitch, vel) {
-	outlet(ECHO_OUTLET, address, inst.voice, pitch, vel);
+	outlet(ECHO_OUTLET, address, inst.voice, pitch, vel, inst.activeComplex || 0);
 }
 
 function noteOn(inst, pitch, vel) {
@@ -626,12 +634,23 @@ function setTremolo(inst, target) {
 	inst.tremolo = target;
 }
 
+// D44 — diff guard removed (2026-04-23). Pre-D44 this function early-
+// returned when `inst.bowPoly === target`, which silently dropped CC 81
+// writes whenever the bridge's cached state already matched. But SWAM-
+// side state can drift out of sync with our cache on plugin reload,
+// preset re-read, or session start (resetInstance fires CC 81 before
+// `[read xenakube_2.swam]` finishes loading the preset, so the CC is
+// either ignored or overwritten). Result: bridge thinks Bow Polyphony =
+// Double/Hold, SWAM is actually still in Mono Poly Release from the last
+// gliss session, and every subsequent C2/C3/C8 voice's diff guard
+// returned early — no CC 81 ever escaped, double stops never sounded.
+// Always re-asserting on every call costs one CC write; cheap insurance.
 function setBowPolyphony(inst, target) {
-	if (inst.bowPoly === target) return;
 	if (HAS_BOW_POLY_CC) {
 		ccForce(inst, CC.BOW_POLYPHONY, BOW_POLY_CC_VAL[target]);
 	}
 	inst.bowPoly = target;
+	log("inst " + inst.id + " bowPoly=" + target + " cc81=" + BOW_POLY_CC_VAL[target]);
 }
 
 function setEnum(inst, field, ks, target, optionCount) {
@@ -691,16 +710,25 @@ function scheduleRelease(inst, dur) {
 		inst.status = 'RELEASING';
 		rampCC(inst, CC.EXPRESSION, 0, fadeMs);
 
-		// D42 gliss invariant assertion — phrase ran to natural end without
-		// being stolen, so if glissExpected was true we should have seen ≥1
-		// overlap. A 0 here means the phrase generator emitted no slide
-		// despite being a gliss complex — a silent bug pre-D42. Logged loud.
+		// D42 + D46 gliss invariant assertion. Phrase ran to natural end
+		// without being stolen, so if glissExpected was true we should have
+		// seen ≥1 gliss event (slide OR leap). 0 means the phrase generator
+		// emitted no glissStep at all despite being a gliss complex — a
+		// silent bug pre-D42. The per-phrase breakdown is always logged so
+		// the user can verify slide/leap distribution in [print xk_swam].
 		if (inst.glissExpected) {
-			if ((inst.glissOverlapCount | 0) < 1) {
+			var slides = inst.glissOverlapCount | 0;
+			var leaps  = inst.glissLeapCount    | 0;
+			if (slides + leaps < 1) {
 				log("GLISS FAIL inst " + inst.id + " C" + inst.activeComplex +
 				    " face=" + (inst.faceEnvelope || "-") +
 				    " motion=" + (inst.faceMotion || "-") +
-				    " overlaps=0 dur=" + dur.toFixed(2));
+				    " slides=0 leaps=0 dur=" + dur.toFixed(2));
+			} else {
+				log("inst " + inst.id + " C" + inst.activeComplex +
+				    " face=" + (inst.faceEnvelope || "-") +
+				    " slides=" + slides + " leaps=" + leaps +
+				    " dur=" + dur.toFixed(2));
 			}
 			inst.glissExpected = false;
 		}
@@ -879,6 +907,18 @@ var GLISS_OVERLAP_MS  = 60;
 // scheduleRelease's 200 ms floor hits for tiny durations.
 var FIRST_GLISS_MS = 150;
 
+// D45 — minimum spacing between consecutive gliss events. SWAM's Mono Poly
+// Release portamento needs ~150–200 ms to actually engage; if the next
+// overlapping noteon arrives sooner, SWAM aborts the in-progress slide and
+// jumps to the new pitch — audibly, the phrase reads as a salvo of fast
+// LEAPS rather than slides. The phrase generators (esp. C5 with high
+// intensity + burst face) could schedule events 50–120 ms apart, which is
+// where the "wild gliss does fast leaps instead" report came from. 200 ms
+// is the floor; phrases that can't fit `count` events at this spacing get
+// `count` clipped to whatever fits (the typical 1–3 s phrase keeps every
+// event because its ideal spacing exceeds the floor anyway).
+var MIN_GLISS_SPACING_MS = 200;
+
 function legatoNoteOverlap(inst, pitch, vel, overlapMs) {
 	var oldNotes = inst.activeNotes.slice();
 	noteOn(inst, pitch, vel);
@@ -902,6 +942,65 @@ function legatoNote(inst, pitch, vel) {
 var GLISS_VEL = 18;
 function glissNote(inst, pitch) {
 	legatoNoteOverlap(inst, pitch, GLISS_VEL, GLISS_OVERLAP_MS);
+}
+
+// D46 — string-crossing geometry.
+//
+// SWAM Cello is a physical-modeling instrument. Real cellos have four strings,
+// and the Mono Poly Release portamento engine slides cleanly only when both
+// source and target reach a single string. A cross-string overlap engages
+// SWAM's portamento state internally then bails to a string-cross leap when it
+// can't reach the target — audibly a leap, but the GUI shows a residual
+// portamento attempt that doesn't match the sound. To make MIDI intent
+// unambiguous, the bridge classifies every gliss step:
+//
+//   sameString(src, dst) === true  → emit overlap (portamento engages cleanly)
+//   sameString(src, dst) === false → emit clean noteOff → gap → noteOn (string
+//                                    crossing; SWAM doesn't try to portamento)
+//
+// Practical playable ranges per string (MIDI), tuned to slide-comfortable
+// positions (not extreme thumb positions). A real cellist *could* play higher
+// on each string, but the slide rarely engages cleanly past these bounds.
+var CELLO_STRINGS = [
+	{ name: 'C', open: 36, hi: 55 },  // C2..G3
+	{ name: 'G', open: 43, hi: 62 },  // G2..D4
+	{ name: 'D', open: 50, hi: 69 },  // D3..A4
+	{ name: 'A', open: 57, hi: 89 }   // A3..F6 (full upper range)
+];
+
+// True if at least one string's playable range contains both pitches.
+function sameString(p1, p2) {
+	for (var i = 0; i < CELLO_STRINGS.length; i++) {
+		var s = CELLO_STRINGS[i];
+		if (p1 >= s.open && p1 <= s.hi && p2 >= s.open && p2 <= s.hi) return true;
+	}
+	return false;
+}
+
+// Cross-string leap velocity (medium-articulated, distinct from GLISS_VEL=18
+// which signals "slide me" to SWAM via low-velocity overlap).
+var LEAP_VEL = 70;
+
+// Gap between source noteOff and target noteOn for a cross-string leap.
+// Must be > 0 and noticeably larger than GLISS_OVERLAP_MS so SWAM
+// unambiguously sees a discrete note change (no portamento attempt).
+var LEAP_GAP_MS = 50;
+
+// leapStep — emit a clean string-crossing leap. Kills the source note(s)
+// immediately, waits LEAP_GAP_MS, then fires the target as a fresh noteOn at
+// LEAP_VEL. SWAM sees no overlap → no portamento attempt → GUI cleanly shows
+// the new note (and string).
+function leapStep(inst, targetPitch) {
+	var oldNotes = inst.activeNotes.slice();
+	for (var i = 0; i < oldNotes.length; i++) {
+		noteOff(inst, oldNotes[i]);
+	}
+	inst.activeNotes = [];
+	var hp = humanPitch(targetPitch);
+	scheduleAt(inst, LEAP_GAP_MS, function() {
+		noteOn(inst, hp, LEAP_VEL);
+		inst.activeNotes.push(hp);
+	});
 }
 
 // ----------------------------------------------------------------
@@ -937,14 +1036,102 @@ function enforceLeap(sourcePitch, targetPitch, minLeap) {
 	return p;
 }
 
-// Fire one gliss step: coerce minimum leap, emit glissNote with
-// GLISS_OVERLAP_MS anchor-off window, tally inst.glissOverlapCount.
+// Fire one gliss step. Coerces minimum leap, then dispatches:
+//   same-string  → glissNote (overlap → SWAM portamento engages)  → glissOverlapCount++
+//   cross-string → leapStep  (clean noteOff → gap → noteOn)        → glissLeapCount++
+// D46: explicit dispatch keeps SWAM out of the "tried to portamento, couldn't
+// reach target on this string, GUI shows residual portamento state without
+// the audible slide" failure mode. Both counters feed the D42 invariant
+// (totalEvents = slides + leaps must be ≥ 1 per gliss-complex voice).
 // Returns the actual (post-coercion) pitch so callers can chain.
 function glissStep(inst, sourcePitch, targetPitch, minLeap) {
 	var p = enforceLeap(sourcePitch, targetPitch, minLeap);
-	glissNote(inst, humanPitch(p));
-	inst.glissOverlapCount = (inst.glissOverlapCount | 0) + 1;
+	if (sameString(sourcePitch, p)) {
+		glissNote(inst, humanPitch(p));
+		inst.glissOverlapCount = (inst.glissOverlapCount | 0) + 1;
+	} else {
+		leapStep(inst, p);
+		inst.glissLeapCount = (inst.glissLeapCount | 0) + 1;
+	}
 	return p;
+}
+
+// D45 — schedule `maxCount` gliss events spread between `firstMs` and
+// `tailEnd`, but never closer together than `minSpacingMs`. If the
+// requested count can't fit at min spacing, returns fewer entries —
+// caller should treat the returned array's length as authoritative.
+// The first event is always at `firstMs` (D43 immediate-first-gliss
+// invariant). Subsequent events use `max(idealSpacing, minSpacingMs)`,
+// so dense / short phrases get clipped count instead of leap-collapse.
+function glissSchedule(maxCount, firstMs, tailEnd, minSpacingMs) {
+	var times = [firstMs];
+	if (maxCount <= 1) return times;
+	var available = tailEnd - firstMs;
+	var idealSpacing = available / (maxCount - 1);
+	var spacing = Math.max(minSpacingMs, idealSpacing);
+	for (var i = 1; i < maxCount; i++) {
+		var t = firstMs + Math.round(i * spacing);
+		if (t > tailEnd) break;
+		times.push(t);
+	}
+	return times;
+}
+
+// ----------------------------------------------------------------
+// DOUBLE STOPS (D43, 2026-04-23)
+// ----------------------------------------------------------------
+// Cellists play double stops — two strings bowed/plucked together — as a
+// routine expressive device. Our phrase generators had been strictly
+// monophonic despite C2/C3/C4/C8 already setting Bow Polyphony = Double/Hold
+// (page-modifier CC 81) in the COMPLEX table. The control plane was ready;
+// the content layer never used it.
+//
+// maybeDoubleStop fires a companion noteOn alongside a main pitch with
+// probability `p`. The companion is pushed onto inst.activeNotes so the
+// next legato overlap, scheduleRelease, stealInstance, or allNotesOff
+// tears both pitches down together — no leaks, no stuck notes.
+//
+// Gliss complexes (C5/C6/C7) deliberately DO NOT use this: Bow Polyphony
+// = Mono Poly Release mode would reinterpret the second noteOn as a slide
+// target, so a "double stop" on a gliss phrase becomes just another gliss.
+// If double-stop gliss is wanted later, it needs its own path with
+// different bow-polyphony state.
+
+// Musical cello double-stop intervals (semitones). Weighted toward perfect
+// 4th / 5th / octave and major-6th — the "open string + stopped note"
+// double stops that ring most naturally on a real cello.
+var DOUBLE_STOP_INTERVALS = [3, 4, 5, 7, 8, 9, 12];
+
+// Pick a companion pitch for a double stop paired with `mainPitch`.
+// Direction biased by register so both pitches land in comfortable
+// cello double-stop range (MIDI 36–77). Returns null if no usable
+// companion fits (never happens inside CELLO_MIN..CELLO_MAX in practice).
+function doubleStopCompanion(mainPitch) {
+	var interval = DOUBLE_STOP_INTERVALS[Math.floor(Math.random() * DOUBLE_STOP_INTERVALS.length)];
+	var dirPref;
+	if (mainPitch >= 60)      dirPref = -1;  // C4+: drop the companion below
+	else if (mainPitch <= 48) dirPref =  1;  // C3-: raise the companion above
+	else                      dirPref = (Math.random() < 0.5) ? 1 : -1;
+
+	var candidate = mainPitch + dirPref * interval;
+	if (candidate < CELLO_MIN || candidate > 77) {
+		candidate = mainPitch - dirPref * interval;
+	}
+	if (candidate < CELLO_MIN || candidate > CELLO_MAX) return null;
+	if (candidate === mainPitch) return null;
+	return candidate;
+}
+
+// Stochastic double stop. With probability `p`, emits a companion noteOn
+// at 85% of the main velocity. The companion is registered in
+// inst.activeNotes so the next legato overlap / release / steal / panic
+// cleans it up the same way as any main pitch.
+function maybeDoubleStop(inst, mainPitch, vel, p) {
+	if (Math.random() >= p) return;
+	var companion = doubleStopCompanion(mainPitch);
+	if (companion == null) return;
+	noteOn(inst, companion, Math.max(1, Math.round(vel * 0.85)));
+	inst.activeNotes.push(companion);
 }
 
 // ================================================================
@@ -1061,7 +1248,11 @@ function phraseC1(inst, vel, dur) {
 	scheduleRelease(inst, dur);
 }
 
-// C2: OrderedCloudAscDesc — bowed legato cloud along committed direction
+// C2: OrderedCloudAscDesc — bowed legato cloud along committed direction.
+// D43: ~35% of rebow steps (after the first) land as double stops. Bow
+// Polyphony = Double/Hold already set via setupComplex; companion noteOn
+// rides alongside the main legato note and is cleaned up by the next
+// rebow's overlap window.
 function phraseC2(inst, vel, dur) {
 	var hi = state.regime === "burst" ? 6 : 5;
 	var count = faceShapedCount(inst, 3, hi, false);
@@ -1072,14 +1263,18 @@ function phraseC2(inst, vel, dur) {
 		(function(idx, stepCount) {
 			scheduleAt(inst, idx * spacing + humanDelay(), function() {
 				var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
-				legatoNote(inst, humanPitch(pickPitch(2, inst)), v);
+				var main = humanPitch(pickPitch(2, inst));
+				legatoNote(inst, main, v);
+				if (idx >= 1) maybeDoubleStop(inst, main, v, 0.35);
 			});
 		})(i, count);
 	}
 	scheduleRelease(inst, dur);
 }
 
-// C3: OrderedCloudFlat — legato rebows hovering at constant register
+// C3: OrderedCloudFlat — legato rebows hovering at constant register. D43:
+// ~40% double-stop rate. C3 is the most sustained-flat complex, so double
+// stops here read as the cleanest "held interval" effect.
 function phraseC3(inst, vel, dur) {
 	var count = faceShapedCount(inst, 3, 5, false);
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
@@ -1092,7 +1287,9 @@ function phraseC3(inst, vel, dur) {
 				var jitter = (Math.random() < 0.5) ? 0 : (Math.random() < 0.5 ? -1 : 1);
 				var p = clamp(center + jitter, CELLO_MIN, CELLO_MAX);
 				var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
-				legatoNote(inst, humanPitch(p), v);
+				var main = humanPitch(p);
+				legatoNote(inst, main, v);
+				if (idx >= 1) maybeDoubleStop(inst, main, v, 0.40);
 			});
 		})(i, count);
 	}
@@ -1118,11 +1315,18 @@ function phraseC4(inst, vel, dur) {
 				var jitter = rrand(-2, 2);
 				var p = foldToRange(base + inst.transpose + faceTr + jitter, loReg, hiReg);
 				var v = clamp(humanVel(vel * stepVelScale(velCurve, idx, stepCount)) - 15, 25, 100);
-				noteOn(inst, humanPitch(p), v);
-				inst.activeNotes.push(p);
+				// Capture the humanised pitch once: noteOn / activeNotes /
+				// noteOff must all reference the SAME pitch number, otherwise
+				// SWAM gets a noteOn it never sees a noteOff for (CC 120 on
+				// the next steal masks it audibly) and the dashboard pairs
+				// noteOn at hp with no matching noteOff at p — visible as a
+				// rectangle that grows forever until the 45 s watchdog.
+				var hp = humanPitch(p);
+				noteOn(inst, hp, v);
+				inst.activeNotes.push(hp);
 				scheduleAt(inst, rrand(180, 400), function() {
-					noteOff(inst, p);
-					var pidx = inst.activeNotes.indexOf(p);
+					noteOff(inst, hp);
+					var pidx = inst.activeNotes.indexOf(hp);
 					if (pidx >= 0) inst.activeNotes.splice(pidx, 1);
 				});
 			});
@@ -1132,64 +1336,79 @@ function phraseC4(inst, vel, dur) {
 }
 
 // C5: wild gliss — dense salvo of ≥8-semi leaps. glissStep GUARANTEES the
-// leap and the overlap that triggers SWAM's Mono Poly Release slide
-// regardless of how narrow the sieve is or what face envelope is active.
-// Face envelope scales phrase density via faceShapedCount but may not zero
-// it — the gliss invariant (D42) requires ≥1 slide per C5 voice.
+// leap and the overlap that triggers SWAM's Mono Poly Release slide. D43:
+// first slide fires at FIRST_GLISS_MS so even a stolen-short phrase reads
+// as gliss. D45: subsequent slides spaced ≥ MIN_GLISS_SPACING_MS so SWAM
+// has time to actually engage portamento between events — without the
+// floor, dense short phrases collapsed into fast leaps. D42: face envelope
+// scales phrase density via faceShapedCount but may not zero it.
 function phraseC5(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var count = Math.max(1, faceShapedCount(inst, 4, 9, true));
+	var requestedCount = Math.max(1, faceShapedCount(inst, 4, 9, true));
 	var MIN_LEAP = 8;
 	var lastPitchRef = { p: pickPitch(5, inst) };
+
+	var durMs = dur * 1000;
+	var tailEnd = Math.max(FIRST_GLISS_MS + 200, durMs * 0.92);
+	var times = glissSchedule(requestedCount, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
+	var count = times.length;
+
 	legatoNote(inst, humanPitch(lastPitchRef.p), humanVel(vel * stepVelScale(velCurve, 0, count + 1)));
+
 	for (var i = 0; i < count; i++) {
-		(function(idx, stepCount) {
-			var t = Math.round((idx + 1) / (stepCount + 1) * dur * 1000 * 0.92);
-			scheduleAt(inst, t, function() {
+		(function(tMs) {
+			scheduleAt(inst, tMs, function() {
 				var p = pickPitch(5, inst);
 				var attempts = 0;
 				while (Math.abs(p - lastPitchRef.p) < MIN_LEAP && attempts < 12) { p = pickPitch(5, inst); attempts++; }
 				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP);
 			});
-		})(i, count);
+		})(times[i]);
 	}
 	scheduleRelease(inst, dur);
 }
 
-// C6: OrderedSlidingAscDesc — portamento steps along the sieve, committed.
-// idx 0 = anchor legato; idx ≥1 = glissStep sliding from the previous pitch.
-// D42: count is forced to ≥2 even when face isSingle so the slide invariant
-// holds — pluck/stab/drone faces get a short "anchor → one slide" shape, not
-// a silent anchor. MIN_LEAP = 1 honors the sieve walk (adjacent residues are
-// typically 1–4 semis apart); enforceLeap only kicks in if the walker stalls.
+// C6: OrderedSlidingAscDesc — portamento steps along the sieve. idx 0 =
+// anchor legato at t=0; idx 1 = first slide at FIRST_GLISS_MS (D43);
+// idx ≥2 distribute through the phrase tail with ≥ MIN_GLISS_SPACING_MS
+// spacing (D45). D42: requested count forced to ≥2 even when face isSingle
+// so the slide invariant holds; MIN_LEAP = 1 honors the sieve walk.
 function phraseC6(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var count = faceShapedCount(inst, 3, 6, false);
-	if (count < 2) count = 2;  // D42 gliss invariant — anchor + ≥1 slide
-	commitSieveWalk(count, inst.faceMotion);
-	var spacing = Math.max(100, Math.round(dur * 1000 / (count + 1)));
+	var requestedCount = faceShapedCount(inst, 3, 6, false);
+	if (requestedCount < 2) requestedCount = 2;  // D42 gliss invariant
+	var durMs = dur * 1000;
+	var tailEnd = Math.max(FIRST_GLISS_MS + 200, durMs * 0.9);
+	var slideTimes = glissSchedule(requestedCount - 1, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
+	var totalCount = 1 + slideTimes.length;
+	commitSieveWalk(totalCount, inst.faceMotion);
+
 	var lastPitchRef = { p: null };
-	for (var i = 0; i < count; i++) {
-		(function(idx, stepCount) {
-			scheduleAt(inst, idx * spacing + humanDelay(), function() {
-				if (idx === 0) {
-					lastPitchRef.p = pickPitch(6, inst);
-					var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
-					legatoNote(inst, humanPitch(lastPitchRef.p), v);
-				} else {
-					var p = pickPitch(6, inst);
-					lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, 1);
-				}
+
+	// Anchor — fires first, sets lastPitchRef for the slide chain.
+	scheduleAt(inst, humanDelay(), function() {
+		lastPitchRef.p = pickPitch(6, inst);
+		var v = humanVel(vel * stepVelScale(velCurve, 0, totalCount));
+		legatoNote(inst, humanPitch(lastPitchRef.p), v);
+	});
+
+	// Slides — read lastPitchRef.p set by the anchor / previous slide.
+	for (var i = 0; i < slideTimes.length; i++) {
+		(function(tMs) {
+			scheduleAt(inst, tMs + humanDelay(), function() {
+				var p = pickPitch(6, inst);
+				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, 1);
 			});
-		})(i, count);
+		})(slideTimes[i]);
 	}
 	scheduleRelease(inst, dur);
 }
 
-// C7: sustained + micro-drifts — deep breath-like floating. Every drift is a
-// glissStep that slides from the anchor (or previous drift) to a nearby
-// pitch, triggering SWAM portamento. D42: isSingle faces still produce ≥1
-// drift — the gliss invariant outranks the envelope's collapse. Face motion
+// C7: sustained + micro-drifts — deep breath-like floating. D43: first drift
+// fires at FIRST_GLISS_MS so the character reads as "anchor with breath-drift"
+// immediately. D45: drifts spaced ≥ MIN_GLISS_SPACING_MS so SWAM completes
+// each slide before the next begins. D42: isSingle faces still produce ≥1
+// drift — the gliss invariant outranks envelope collapse. Face motion
 // up/down biases direction; burst's countMult thickens the drift count.
 function phraseC7(inst, vel, dur) {
 	var isSingle = (inst.faceEnvProfile && inst.faceEnvProfile.isSingle) === true;
@@ -1203,10 +1422,12 @@ function phraseC7(inst, vel, dur) {
 	}
 	var motionDir = (inst.faceMotion === 'up') ? 1 : (inst.faceMotion === 'down') ? -1 : 0;
 	var durMs = dur * 1000;
-	for (var i = 0; i < driftCount; i++) {
-		(function(idx, stepCount) {
-			var t = Math.round(durMs * (0.4 + (idx + 1) / (stepCount + 2) * 0.5));
-			scheduleAt(inst, t, function() {
+	var tailEnd = Math.max(FIRST_GLISS_MS + 250, durMs * 0.88);
+	var times = glissSchedule(driftCount, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
+
+	for (var i = 0; i < times.length; i++) {
+		(function(tMs) {
+			scheduleAt(inst, tMs, function() {
 				var lo = (inst.path === "V2") ? 24 : CELLO_MIN;
 				// rrand(-3,3) can return 0 — force a non-zero delta so the
 				// slide has somewhere to go (SWAM slides from p1 to itself
@@ -1216,23 +1437,33 @@ function phraseC7(inst, vel, dur) {
 				var p2 = clamp(p1 + delta, lo, CELLO_MAX);
 				glissStep(inst, p1, p2, 1);
 			});
-		})(i, driftCount);
+		})(times[i]);
 	}
 	scheduleRelease(inst, dur);
 }
 
-// C8: ponticello tremolo cluster — re-bows on same pitch
+// C8: ponticello tremolo cluster — re-bows on same pitch. D43: ~30% chance
+// the entire phrase is a double-stop tremolo (sul pont tremolo double-stop
+// is a classic cello cluster effect). The companion is chosen ONCE per
+// phrase and reused across every rebow so the cluster reads as a fixed
+// interval, not a rotating set.
 function phraseC8(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
 	var count = faceShapedCount(inst, 2, 4, false);
 	var mainPitch = pickPitch(8, inst);
+	var companion = (Math.random() < 0.30) ? doubleStopCompanion(mainPitch) : null;
 	var spacing = Math.max(150, Math.round(dur * 1000 / (count + 1)));
 	for (var i = 0; i < count; i++) {
 		(function(idx, stepCount) {
 			scheduleAt(inst, idx * spacing + humanDelay(), function() {
 				var curveScale = stepVelScale(velCurve, idx, stepCount);
 				var v = clamp(humanVel(vel * curveScale) + 8 - idx * 3, 40, 120);
-				legatoNote(inst, humanPitch(mainPitch), v);
+				var main = humanPitch(mainPitch);
+				legatoNote(inst, main, v);
+				if (companion != null) {
+					noteOn(inst, companion, Math.max(1, Math.round(v * 0.85)));
+					inst.activeNotes.push(companion);
+				}
 			});
 		})(i, count);
 	}
@@ -1250,6 +1481,10 @@ function phraseC8(inst, vel, dur) {
 // /xk/face fires BEFORE /xk/voice; stash the signature globally so
 // handleVoice can snapshot it onto the newly-allocated instance.
 function handleFace(face) {
+	// Emit detected face-move on outlet 3 first so the Max-side display
+	// updates regardless of whether this face has a known signature.
+	outlet(MOVES_OUTLET, "face", face);
+
 	var sig = FACE_MAP[face];
 	if (!sig) {
 		state.face = null;
@@ -1364,9 +1599,11 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 
 	inst.status = 'PLAYING';
 
-	// D42 gliss invariant — reset overlap counter; scheduleRelease's offT
-	// asserts ≥1 overlap fired for C5/C6/C7. See CLAUDE.md § Bridge Invariants.
+	// D42 + D46 gliss invariant — reset slide + leap counters;
+	// scheduleRelease's offT asserts ≥1 (slide OR leap) fired for C5/C6/C7
+	// and logs the per-phrase breakdown.
 	inst.glissOverlapCount = 0;
+	inst.glissLeapCount = 0;
 	inst.glissExpected = (complexType === 5 || complexType === 6 || complexType === 7);
 
 	var intMap = INTENSITY_MAP[intensity] || INTENSITY_MAP["mf"];
@@ -1414,6 +1651,16 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	ccForce(inst, CC.PORTAMENTO_ON,   cmx.portamento.on ? 127 : 0);
 	if (cmx.portamento.on) ccForce(inst, CC.PORTAMENTO_TIME, 0);
 	ccForce(inst, CC.PORTAMENTO_TIME, cmx.portamento.time);
+
+	// D44 — defensive Bow Polyphony re-assertion. Even when setupComplex
+	// is skipped (same complex as previous voice), force CC 81 so SWAM
+	// can never silently fall behind the bridge's cached state. Pre-D44,
+	// a state drift between bridge and plugin meant double stops were
+	// effectively never heard on C2/C3/C8 because the diff guard kept
+	// suppressing the only CC that would have re-synced them.
+	if (cmx.bowPoly != null && HAS_BOW_POLY_CC) {
+		ccForce(inst, CC.BOW_POLYPHONY, BOW_POLY_CC_VAL[cmx.bowPoly]);
+	}
 
 	log("inst " + inst.id + " voice C" + complexType +
 	    " face=" + (state.face || "-") +
@@ -1637,6 +1884,7 @@ function allocateSpellPing() {
 
 function handleSpell(name) {
 	log("spell: " + name);
+	outlet(MOVES_OUTLET, "spell", name);
 	var lastInst = instances[state.lastAllocatedInstance != null ? state.lastAllocatedInstance : 0];
 
 	switch (name) {

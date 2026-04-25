@@ -438,6 +438,134 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 
 **Verification**: land on any non-gliss complex → overlapping turns audibly sustain as a two-string texture rather than each note cutting the previous. Land on C5 / C6 / C7 → gliss phrases still slide (D34 prerequisite preserved via `MONO_POLY_RELEASE` which keeps the single monophonic line the portamento engine needs). The Bow Polyphony selector in the SWAM GUI should visibly jump between option 3 (Double/Hold) and option 1 (Mono Poly Release) as complexes change.
 
+### D46 — Cross-string gliss puts SWAM into a half-engaged portamento state that doesn't match the audible leap *(RESOLVED 2026-04-24)*
+
+**Defect** (user report): even after D42–D45 cleaned up the bridge-side gliss path, some C5 wild-gliss phrases still played as leaps instead of slides. The user accepted the leaps musically — but observed that SWAM's GUI didn't reflect them properly, suggesting the MIDI wasn't being interpreted the way the bridge intended.
+
+**Root cause** (physical-modeling cello geometry, not a bridge bug per se):
+
+SWAM Cello models a real cello — four strings with overlapping but bounded playable ranges (C 36–55, G 43–62, D 50–69, A 57–89 in slide-comfortable territory). `Mono Poly Release` mode engages portamento when overlapping noteons reach the same string. When source and target straddle different strings — which is common for C5's `MIN_LEAP = 8` semis at higher pitches — SWAM enters a partial portamento state from the overlap MIDI, fails to find a slide path on the source string, and bails to a string-cross leap. Audibly: a leap. GUI: residual portamento attempt indicators (modulation, slide engagement) that flicker without producing the slide. The mismatch is what the user noticed.
+
+The bridge had no concept of cello string geometry — it sent the same overlap MIDI for every gliss step regardless of whether the transition was within-string (clean slide) or cross-string (forced leap).
+
+**Fix**: make the bridge cognizant of string crossings and emit unambiguous MIDI for each case.
+
+1. **`CELLO_STRINGS` table + `sameString(p1, p2)` helper**. Practical playable ranges per string (C 36–55, G 43–62, D 50–69, A 57–89 — slide-comfortable, not extreme thumb positions). `sameString` returns true iff at least one string's range contains both pitches.
+
+2. **`leapStep(inst, target)` primitive**. Emits a clean cross-string leap: `noteOff` source notes immediately, wait `LEAP_GAP_MS = 50` ms, then `noteOn` target at `LEAP_VEL = 70`. Critical that there's no overlap — SWAM unambiguously sees a discrete note change and doesn't enter a portamento attempt. The 50 ms gap is comfortably larger than `GLISS_OVERLAP_MS = 60` ms (we want the gap to be a clean noteOff→silence→noteOn, not anything that could be read as overlap), and `LEAP_VEL = 70` is a medium-articulated cello bow strike (distinct from `GLISS_VEL = 18`, which signals "slide me" via low velocity).
+
+3. **`glissStep` dispatch**: same-string → existing `glissNote` (overlap → portamento, GUI shows clean slide engagement); cross-string → `leapStep` (clean note change, GUI shows new note without spurious portamento state). Both paths increment per-instance counters — `glissOverlapCount` for slides, `glissLeapCount` for leaps.
+
+4. **D42 invariant generalised**. Pre-D46: "≥1 overlap" was the success criterion. Post-D46: "≥1 (slide OR leap)" — leaps are first-class outcomes, not failures. `scheduleRelease`'s natural-end task always emits `inst N CX face=F slides=S leaps=L dur=D`; only promotes to `GLISS FAIL ... slides=0 leaps=0 ...` if both counters are 0 (the original silent-bug failure mode). The slide/leap breakdown lets the user audit string-crossing distribution per face/intensity in real time via `[print xk_swam]`.
+
+**Audible effect**:
+
+- Same-string transitions: identical to D45 — overlap, portamento engages cleanly, GUI shows slide.
+- Cross-string transitions: previously SWAM tried to portamento and bailed to leap with vel-18 GLISS_VEL (mushy). Now the bridge emits an explicit clean leap at vel-70 LEAP_VEL — crisp string change, GUI accurately reflects the new note and string.
+- C5 wild-gliss at high pitches (where 8-semi+ leaps frequently cross strings): now reads as deliberate dramatic string-jumping instead of confused slide attempts.
+- C6 / C7 typically stay within one string at their typical pitch range, so they keep slide character — no audible change.
+
+**Why this is a clean fix instead of another patch**: the slide/leap distinction is the actual physical truth of cello playing. Modelling it explicitly in the bridge means SWAM gets unambiguous MIDI intent on every transition, the GUI matches what's heard, and the user can verify the breakdown in real time via the always-on telemetry. Future work on string-aware effects (e.g., per-string articulation, bow change cues) has the geometry table to build on.
+
+---
+
+### D45 — Dense gliss phrases collapse to fast leaps because SWAM portamento can't engage in time *(RESOLVED 2026-04-24)*
+
+**Defect**: User report after D42–D44 landed:
+
+> "seems to be working better for the gliss, but sometimes the 'wild gliss' stuff just does fast leaps instead. ... i like the overall shape and density, but i think sometimes it is too fast or something for the vst and it just plays leaps. maybe they need to be spaced out just a tiny bit more?"
+
+The user's diagnosis was on the nose. C5 phrases with high `count` and short `dur` were scheduling glissNote calls 50–120 ms apart. SWAM Cello's Mono Poly Release portamento needs ~150–200 ms (depending on `Portamento Time` CC 5 + the preset's `Portamento Max Time`) to actually engage and slide between two pitches. When the next overlapping noteon arrives sooner, SWAM aborts the in-progress slide and jumps to the new target — audibly indistinguishable from a discrete leap.
+
+**Math walkthrough that confirmed it**:
+
+`faceShapedCount(inst, 4, 9, true)` for ff intensity (`density = 1.5`) on a burst face (`countMult = 1.8`) can return up to 12 (clamped). `phraseC5`'s old scheduler distributed those events across `(tailStart, tailEnd) = (FIRST_GLISS_MS + 150, durMs * 0.92) = (300, 920)` ms for a `dur = 1 s` voice. Linear distribution: 12 events / 620 ms tail = ~52 ms per event. SWAM's portamento window is ~150–200 ms minimum. So 3–4 in 4 events were arriving mid-slide and triggering the leap fallback. The user heard a salvo of leaps with the occasional successful slide — "sometimes" matched the random variability of which events landed where.
+
+**Fix**:
+
+1. **`MIN_GLISS_SPACING_MS = 200`** new constant in `max/xk_swam.js`. Hard floor on the spacing between consecutive `glissStep` events on a single phrase. 200 ms picked as the comfortable upper bound on SWAM's slide engagement time across C5/C6/C7 (port times 50/80/115 in CC scale).
+
+2. **`glissSchedule(maxCount, firstMs, tailEnd, minSpacingMs)`** new helper. Returns timestamps starting at `firstMs` and using `max(idealSpacing, minSpacingMs)` between events. If a scheduled event would land past `tailEnd`, the array is truncated and the caller treats `times.length` as the authoritative count. Preserves the D43 immediate-first-gliss invariant: `times[0]` is always `firstMs`.
+
+3. **All three gliss phrases** route through `glissSchedule`:
+   - `phraseC5` — schedules `requestedCount` slides, anchor fired separately at t=0.
+   - `phraseC6` — schedules `requestedCount - 1` slides (anchor occupies idx 0); `commitSieveWalk` is now called with the *actual* `totalCount` returned by the helper, not the requested one, so the sieve walker doesn't over-commit when the schedule clipped events.
+   - `phraseC7` — schedules `driftCount` drifts, anchor fired separately.
+
+**Effect on density**:
+
+| Phrase | dur (s) | Requested count | Old min spacing | New count after clip | New spacing |
+|--------|---------|-----------------|-----------------|----------------------|-------------|
+| C5 typical | 2.0 | 6 | ~337 ms (already above floor) | 6 (no change) | 337 ms |
+| C5 dense burst | 1.0 | 12 | ~52 ms (leap collapse) | 5 | 200 ms |
+| C5 short | 0.5 | 4 | ~88 ms (leap collapse) | 2 | 200 ms |
+| C6 typical | 2.0 | 5 (1 anchor + 4 slides) | ~370 ms | unchanged | unchanged |
+| C7 typical | 3.0 | 3 (1 anchor + 2 drifts) | ~750 ms | unchanged | unchanged |
+
+So the floor only clips when the phrase is genuinely too dense for SWAM to keep up. Typical playing is unaffected.
+
+**Docs**: `CLAUDE.md` Bridge Invariants table gains a "Min gliss spacing" row. Telemetry — none new; D42's "GLISS FAIL overlaps=0" still catches the case where the schedule somehow returned zero events (it doesn't, by construction — `firstMs` is always emitted).
+
+---
+
+### D44 — Bow Polyphony state drift: diff guard silently freezes SWAM in the wrong mode *(RESOLVED 2026-04-24)*
+
+**Defect**: D43 added stochastic double stops to C2/C3/C8, but the user reported they weren't audible — and confirmed by watching the SWAM GUI that Bow Polyphony mode never switched between gliss and bowed complexes. The bridge thought it was sending Double/Hold; SWAM stayed visibly in Mono Poly Release.
+
+**Root cause** (bridge-side, NOT preset-side):
+
+`setBowPolyphony` had a diff guard `if (inst.bowPoly === target) return` — early exit when the bridge's cached state matched the target. The intent was avoiding redundant CC 81 writes. The hidden cost: any time the bridge's cache drifted out of sync with SWAM's actual state, the bridge would never re-assert and the plugin stayed stuck.
+
+The drift's origin was a startup race:
+
+1. Patch `[loadbang]` fires both `max_active 1 → v8 inlet` (which triggers `bang()` → `resetInstance()` → `setBowPolyphony(DOUBLE_HOLD)` → `ccForce(CC 81 = 89)`) and `[read xenakube_2.swam] → vst~` (which loads the preset). The two paths are unsynchronised.
+2. If the CC 81 = 89 write reached `[vst~]` before the preset finished loading, it was either swallowed (plugin not ready) or overwritten by the preset's saved Bow Polyphony default — which after the long D34/D35/D38/D39/D42/D43 gliss-debugging sessions was almost certainly Mono Poly Release.
+3. The bridge's cache now said Bow Polyphony = Double/Hold; SWAM was actually in Mono Poly Release.
+4. User plays a C2 voice. `setupComplex(2)` calls `setBowPolyphony(DOUBLE_HOLD)`. The diff guard sees `inst.bowPoly === DOUBLE_HOLD` and returns early. NO CC 81 written.
+5. SWAM stays in Mono Poly Release. The companion noteOn from `maybeDoubleStop` is interpreted as a slide target. User hears one note, sometimes with a tiny portamento — never a double stop.
+
+The audible signature was distinctive: a quieter "second note" near in pitch to the main, occasionally with a brief slide — exactly what SWAM produces when Mono Poly Release sees overlapping noteons that we'd intended as a chord.
+
+**Fix**:
+
+1. **Drop the diff guard** in `setBowPolyphony`. Selectors are cheap to re-assert; the cost of one extra CC 81 write per `setupComplex` call is negligible. The bug it was guarding against (CC firehose) doesn't apply to selectors that fire only on complex change.
+
+2. **Per-voice CC 81 re-assertion in `handleVoice`**, next to the existing CC 5 portamento wiggle. Even when `setupComplex` is skipped (same complex as previous voice), CC 81 is force-written from `cmx.bowPoly`. The bridge can never silently lag SWAM beyond one voice event.
+
+3. **Logging**: `setBowPolyphony` emits `inst N bowPoly=T cc81=V` on every call. The user can now verify via `[print xk_swam]` that the bridge is asserting the expected mode for each complex — separating bridge bugs from preset bugs.
+
+**Generalisation**: `setHarmonics` and `setTremolo` still have the same diff-guard pattern. They haven't been reported broken — possibly because their bands cover the relevant modes more forgivingly, possibly because the user hasn't yet hit the right combination. The fix recipe is documented in `CLAUDE.md § Bridge Invariants` and should be applied if either selector is ever observed to drift.
+
+**Docs**: `CLAUDE.md` gains a "Selector re-assertion" row in the Bridge Invariants table.
+
+---
+
+### D43 — Gliss slide lands too late; double stops never generated on bowed/sustain complexes *(RESOLVED 2026-04-23)*
+
+**Defect** (two parallel user reports):
+
+1. **"The first slide lands too late."** With the D42 fix in place, every gliss complex voice now produces a real overlap — but the first `glissStep` was scheduled at `(1/(count+1)) * dur * 1000 * 0.92`. For a 2-second C6 voice with count=3 that's ~460 ms of anchor before the first slide; for a 300 ms phrase stolen by a fast next turn, no slide at all. The user's forward model expects the gesture to read as gliss from the earliest moment: *"should begin with an immediate gliss, otherwise it just sounds like a sustained note."*
+
+2. **"Where the hell are all the double stops?"** Every phrase generator (C1–C8) had been strictly monophonic — one `noteOn` at a time. But the COMPLEX table has set `bowPoly: BOW_POLY.DOUBLE_HOLD` on C1/C2/C3/C4/C8 since D35, specifically because Double/Hold is the Bow Polyphony mode that allows simultaneous noteons to sound as double stops. The MIDI control plane was fully configured; the content layer never made use of it. Bowed sweep (C2), sustain (C3), and tremolo cluster (C8) in particular are the complexes where cellists would naturally play double stops on a real instrument.
+
+**Fix**:
+
+1. **`FIRST_GLISS_MS = 150`** — new constant in `max/xk_swam.js`. `phraseC5` schedules idx 0 at `FIRST_GLISS_MS`; `phraseC6` schedules idx 1 (idx 0 is the anchor legato) at `FIRST_GLISS_MS`; `phraseC7` schedules its first drift at `FIRST_GLISS_MS`. Remaining slides in each phrase distribute through `(FIRST_GLISS_MS + 150..250, durMs * 0.88..0.92)` via `(idx / stepCount) * tailLen`. `scheduleRelease`'s 200 ms floor (`Math.max(dur * 1000, 200)`) is always greater than `FIRST_GLISS_MS`, so the first slide never races the release ramp even at sub-200 ms durations.
+
+2. **Double stops on C2 / C3 / C8**:
+   - **`doubleStopCompanion(main)`** picks an interval from `[3, 4, 5, 7, 8, 9, 12]` semitones (weighted toward the naturally-resonant cello double-stops: m3, M3, P4, P5, m6, M6, octave). Direction biased by register: main ≥ MIDI 60 → companion below; main ≤ MIDI 48 → companion above; mid-range → random. Clamped to the comfortable double-stop range 36–77; flipped if out of range; returns null on impossible cases (never hits in practice).
+   - **`maybeDoubleStop(inst, main, vel, p)`** fires the companion noteOn at 85% of `vel` with probability `p` and registers it in `inst.activeNotes`. The next legato overlap / scheduleRelease / stealInstance / allNotesOff path tears both pitches down together using existing machinery — no leak, no stuck notes.
+   - **C2** (bowed cloud): 35% per-step after idx 0. First attack stays clean so the ear establishes the main pitch before the interval lands.
+   - **C3** (hovering flat): 40% per-step after idx 0. C3's constant-register character reads cleanest as held intervals.
+   - **C8** (tremolo cluster): 30% chance of a phrase-long companion. Picked once at phrase start and reused across every rebow, so the cluster reads as a fixed sul-pont interval rather than a rotating set.
+   - **C1 (pizz)** and **C4 (harmonics)** not modified in this pass. Both have `DOUBLE_HOLD` and could accept the same pattern later; deferred pending musical judgment on pizz double-stop density and harmonic-atom chord voicings.
+
+3. **Intentionally not added to C5/C6/C7 gliss complexes.** Their `bowPoly: MONO_POLY_RELEASE` mode reinterprets a second overlapping noteOn as a slide target, so a "double stop" on a gliss phrase would just become another gliss. Double-stop gliss (a chord with internal portamento, e.g. parallel-5th slides) would need its own path — a second `inst` subvoice with different bow-polyphony state, or an entire complex C5' / C6' with different semantics. Tracked as a Phase B phrase-library candidate, not part of D43.
+
+**Docs**: `CLAUDE.md` Bridge Invariants table gains the "Immediate first gliss" row; `max/ directory` row updated with the `FIRST_GLISS_MS` constant and the `doubleStopCompanion` / `maybeDoubleStop` helpers. Not documenting double stops as an invariant (they're probabilistic by design) — if they silently disappear, the user will hear it and we'll add telemetry then.
+
+---
+
 ### D42 — Gliss collapse: face `isSingle` envelopes erased the slide invariant on half the faces *(RESOLVED 2026-04-23)*
 
 **Defect**: "Ord gliss" (C6) and "wild gliss" (C5) cards on the dashboard frequently produced a single sustained note with no audible slide. Occasionally a second, much quieter note of the same pitch followed — audible as "a single note that gets softer," no glide. Symptom reported repeatedly since Phase A1 landed; previous "gliss fix" commits (D34, the 2026-04-23 "gliss kick" for CC 5 staleness) each addressed a different failure mode and left this one in place.

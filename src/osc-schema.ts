@@ -57,10 +57,12 @@ export const OSC = {
   // ── MIDI echo: Max bridge → relay (port 57122, reverse direction) ──
   //    Fired from every noteOn / noteOff wrapper in `max/xk_swam.js`
   //    so the dashboard can transcribe exactly what SWAM plays (Phase E
-  //    tier 2, landed 2026-04-23). Keyswitches bypass the wrappers so
-  //    technique-select toggles don't pollute the score.
-  MIDI_NOTEON:   '/xk/midi/noteon',     // i:voice (1..POOL_SIZE), i:pitch, i:velocity
-  MIDI_NOTEOFF:  '/xk/midi/noteoff',    // i:voice, i:pitch, i:velocity
+  //    tier 2, landed 2026-04-23; rev B 2026-04-24 — adds complex arg
+  //    so the rolling piano-roll can colour by technique and connect
+  //    glissando steps in C5/C6/C7). Keyswitches bypass the wrappers
+  //    so technique-select toggles don't pollute the score.
+  MIDI_NOTEON:   '/xk/midi/noteon',     // i:voice (1..POOL_SIZE), i:pitch, i:velocity, i:complex (0=unknown, 1..8=Cn)
+  MIDI_NOTEOFF:  '/xk/midi/noteoff',    // i:voice, i:pitch, i:velocity, i:complex
   MIDI_PANIC:    '/xk/midi/panic',      // (no args) — clear pending notes on bang/panic
 
   // ── raw pass-through to TouchDesigner (port 8000) ────────────

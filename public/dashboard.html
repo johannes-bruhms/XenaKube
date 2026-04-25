@@ -810,27 +810,25 @@
     50% { opacity: 1; }
   }
 
-  /* Phase E tier 1 — notation strip (top-center, below spell row).
-   * VexFlow renders an SVG inside #notation; we size the wrapper, not the
-   * SVG itself (VexFlow sets its own width/height per draw). */
-  .notation-strip {
-    margin-top: 10px;
-    background: rgba(10, 10, 15, 0.55);
-    border: 1px solid rgba(0, 204, 255, 0.18);
-    border-radius: 6px;
-    padding: 6px 10px 2px;
-    min-height: 90px;
+  /* Phase E tier 2 rev C — rolling piano-roll as full-viewport background.
+   * Sits behind cube-canvas (which is alpha:true, so the cube + overlays
+   * float on top of the scrolling score). No frame, no grid, no octave
+   * lines — pure note rectangles + gliss curves on transparent ground.
+   * Resizes with the window; pitch range C2..C6 maps across full height. */
+  #rolling-score {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
     pointer-events: none;
-    backdrop-filter: blur(2px);
+    z-index: -1;
   }
-  .notation-strip svg { display: block; margin: 0 auto; }
-  .notation-strip svg * { stroke: #c8c8d8; fill: #c8c8d8; }
-  .notation-strip.empty { opacity: 0; }
 </style>
-<script src="https://cdn.jsdelivr.net/npm/vexflow@4.2.3/build/cjs/vexflow.js"></script>
 </head>
 <body>
 
+<canvas id="rolling-score"></canvas>
 <canvas id="cube-canvas"></canvas>
 
 <div class="spell-history" id="spell-history"></div>
@@ -857,6 +855,11 @@
         <label>ghost</label>
         <input type="range" id="ghostSize" min="0.2" max="2.5" step="0.05" value="1.00">
         <span id="ghostSizeVal" style="color:var(--accent2);min-width:28px">1.00</span>
+      </div>
+      <div class="smooth-row">
+        <label>score</label>
+        <input type="range" id="scoreSpeed" min="60" max="900" step="30" value="360">
+        <span id="scoreSpeedVal" style="color:var(--accent2);min-width:28px">360</span>
       </div>
     </div>
   </div>
@@ -956,14 +959,14 @@
   </div>
 </div>
 
-<!-- Top-center: spell buffer + notification + tier-1 notation -->
+<!-- Top-center: spell buffer + notification (rolling piano-roll lives in
+     #rolling-score, full-viewport background behind cube-canvas) -->
 <div class="ovl ovl-tc">
   <div class="spell-row">
     <div class="spell-buffer" id="spell-buffer"></div>
     <div class="spell-notification" id="spell-notification"></div>
     <div class="spell-partials" id="spell-partials" style="display:none"></div>
   </div>
-  <div class="notation-strip empty" id="notation-strip"></div>
 </div>
 
 <!-- Top-right: rotate controls + gizmo slot + status -->
@@ -2110,7 +2113,13 @@ function updateState(state, move) {
 let spellBook = [];
 let spellNotificationTimeout = null;
 
-function updateV2State(state) {
+// Move log — dashboard-side FIFO of the last RECENT_MOVES_MAX moves the
+// performer has executed (independent of the engine's `state.spellBuffer`,
+// which clears on its own 2 s timeout / spell-fire).
+const RECENT_MOVES_MAX = 8;
+const recentMoves = [];
+
+function updateV2State(state, move) {
   // Scramble
   if (typeof state.scrambleFactor === 'number') {
     const sf = state.scrambleFactor;
@@ -2155,27 +2164,34 @@ function updateV2State(state) {
     document.getElementById('turn-rate-val').textContent = state.turnRate.toFixed(1) + ' t/s';
   }
 
-  // Spell buffer visualization
-  if (state.spellBuffer) {
+  // Move log — dashboard-side FIFO of the last RECENT_MOVES_MAX moves the
+  // performer has executed. Decoupled from the engine's `state.spellBuffer`
+  // (which clears on its own 2 s timeout / spell-fire) so the visible strip
+  // stays stable: each new turn pushes one move and drops the oldest, no
+  // empty-line flashes. Match highlighting still uses `state.spellPartials`
+  // and applies to the trailing N entries — both arrays are time-ordered
+  // so the "last N matched" overlay lines up regardless of length.
+  if (move) {
+    recentMoves.push(move);
+    if (recentMoves.length > RECENT_MOVES_MAX) recentMoves.shift();
+  }
+  {
     const bufEl = document.getElementById('spell-buffer');
-    // Find which moves in the buffer are part of a partial match
     const matchedIndices = new Set();
     if (state.spellPartials && state.spellPartials.length > 0) {
-      // Highlight the trailing N moves that match the best partial
       const best = state.spellPartials.reduce((a, b) =>
         (b.matched / b.total) > (a.matched / a.total) ? b : a
       );
-      const start = state.spellBuffer.length - best.matched;
-      for (let i = start; i < state.spellBuffer.length; i++) {
+      const start = recentMoves.length - best.matched;
+      for (let i = start; i < recentMoves.length; i++) {
         matchedIndices.add(i);
       }
     }
-
     bufEl.innerHTML = '';
-    for (let i = 0; i < state.spellBuffer.length; i++) {
+    for (let i = 0; i < recentMoves.length; i++) {
       const el = document.createElement('span');
       el.className = 'spell-buffer-move' + (matchedIndices.has(i) ? ' matched' : '');
-      el.textContent = state.spellBuffer[i];
+      el.textContent = recentMoves[i];
       bufEl.appendChild(el);
     }
   }
@@ -2242,182 +2258,555 @@ function handleSolveEvent() {
 }
 
 // ============================================================
-// Phase E tier 2 — rolling score from SWAM MIDI echo (landed 2026-04-23)
+// Phase E tier 2 rev B (2026-04-24) — rolling piano-roll from SWAM MIDI echo
 //
-// The Max bridge mirrors every noteon/noteoff it emits to the relay as
-// OSC /xk/midi/noteon|noteoff on UDP 57122; the relay forwards each as a
-// WS `midi_echo` message. We pair noteons to noteoffs by (voice, pitch),
-// record the measured duration, and transcribe the last NOTATION_MAX
-// completed notes onto a bass-clef staff. Keyswitches are excluded on
-// the Max side, so this stream is exactly the score-audible output.
+// The Max bridge mirrors every noteon/noteoff/panic it emits to the relay as
+// OSC /xk/midi/{noteon,noteoff,panic} on UDP 57122; the relay forwards each
+// as a WS `midi_echo` message with `{kind, voice, pitch, velocity, complex}`.
+// We render a continuous-time canvas where the right edge is "now" and notes
+// scroll left at ROLL_PX_PER_SEC; pitch is on the Y axis (cello range
+// C2..C6, 48 semitones); a note paints from its onsetMs to its offsetMs (or
+// to the right edge if still sounding). Note colour follows SWAM complex —
+// pizz/arco/harmonic/gliss/trem each get their own hue. Adjacent same-voice
+// notes in C5/C6/C7 are joined by a quadratic curve so the audible
+// portamento has a visible analogue.
 //
-// Tier 3 will replace the echo with a TS-generated note-list (zero-drift,
-// face-articulation glyphs restored) once the Max→TS phrase migration
-// lands — see docs/todo.md Phase B + Phase E tier 3.
+// Rev B replaces the rev A VexFlow bass-clef staff: the staff quantised
+// duration into 5 buckets and laid notes out by nominal width, throwing
+// away the actual elapsed timing the performer hears. The roll trades
+// classical-notation legibility for time-accurate motion + gliss support.
+// Tier 3 will switch the data source from the Max echo to a TS-generated
+// note-list once the phrase library migration lands (Phase B + tier 3).
 // ============================================================
 
-const NOTATION_MAX = 16;              // rolling window of completed notes
-const PENDING_MAX_AGE_MS = 45000;     // force-drop notes stuck pending >45s
+// CSS-px scroll speed. Visible time window is derived from canvas width
+// (wider screen → more history visible). Mutable so the dashboard slider
+// can retune live; persisted in localStorage so the user's choice survives
+// reloads.
+let ROLL_PX_PER_SEC = 360;
+const ROLL_MIN_MIDI     = 36;          // C2 — bottom of cello range
+const ROLL_MAX_MIDI     = 84;          // C6 — top of practical cello range
+const ROLL_PITCH_RANGE  = ROLL_MAX_MIDI - ROLL_MIN_MIDI;   // 48 semitones
+// Pitch-axis insets (CSS px). The canvas itself stays full-viewport so the
+// background scrolls under everything, but the pitch axis is restricted to
+// the inner rectangle so high notes (~C6) don't render under the title /
+// spell-buffer / cam-controls strip and low notes (~C2) don't render
+// under the sieve piano-roll. Tune if those overlay heights change.
+const ROLL_TOP_INSET_PX    = 70;       // .ovl-tl title + .ovl-tc spell row + .ovl-tr cam strip
+const ROLL_BOTTOM_INSET_PX = 80;       // .ovl-bottom (sieve-strip 52 + 6+10 padding + breathing room)
+const PENDING_MAX_AGE_MS = 45000;      // force-complete notes stuck >45s
+const GLISS_GAP_MS      = 80;          // max same-voice gap to draw a gliss curve
+const GLISS_COMPLEXES   = new Set([5, 6, 7]);
 
-const pendingMidiNotes = new Map();   // key "voice:pitch" → { pitch, velocity, voice, onsetMs }
-const completedMidiNotes = [];        // rolling buffer of { pitch, velocity, voice, onsetMs, durationMs }
+// Per-complex colour. Index 0 (= unknown / pre-init / KS) gets a neutral
+// grey so a few stray notes from a stale state aren't misread as pizz.
+const COMPLEX_COLOR = {
+  0: '#888899',
+  1: '#f3a83b',  // C1 pizz       — amber
+  2: '#3b82f6',  // C2 arco       — cobalt
+  3: '#60a5fa',  // C3 arco       — paler cobalt (distinct from C2 in dense passages)
+  4: '#22d3ee',  // C4 harmonic   — cyan
+  5: '#c084fc',  // C5 gliss      — magenta
+  6: '#a855f7',  // C6 gliss      — deeper magenta (sieve-walker)
+  7: '#d8b4fe',  // C7 gliss      — paler magenta
+  8: '#e11d48',  // C8 trem near-bridge — crimson
+};
 
-const NOTE_NAMES_LOWER = ['c','c#','d','d#','e','f','f#','g','g#','a','a#','b'];
+// FIFO queue per (voice, pitch). The bridge legitimately emits overlapping
+// noteons for the same pitch (C8 trem rebows the same mainPitch every
+// iteration; the same companion pitch is reused across a whole phrase;
+// any humanPitch collision in C2/C3/C4 produces the same key on consecutive
+// iterations). A single-entry Map silently dropped the older noteon, so the
+// deferred noteoff 20 ms after the next iteration's overlap paired with the
+// *new* entry — the original phrase iteration showed up as a 20 ms blip and
+// most of its rendered duration was lost. FIFO pairing matches what the
+// bridge actually sends: oldest noteon pairs with first noteoff for that key.
+const activeMidiNotes = new Map();     // "voice:pitch" → Array<{ pitch, velocity, voice, complex, onsetMs }>
+const finishedMidiNotes = [];          // { pitch, velocity, voice, complex, onsetMs, offsetMs }
 
-/** MIDI note number → VexFlow key string ("c#/4" etc.). Only sharps — we
- *  have no enharmonic context from raw MIDI. Flat-spelling is a tier-3
- *  concern (the TS phrase generator can choose). */
-function midiToVexKey(midi) {
-  const clamped = Math.max(0, Math.min(127, midi|0));
-  const pc = ((clamped % 12) + 12) % 12;
-  const oct = Math.floor(clamped / 12) - 1;
-  return `${NOTE_NAMES_LOWER[pc]}/${oct}`;
+let rollCanvas = null;
+let rollCtx    = null;
+let rollDpr    = 1;
+
+function initRollingScore() {
+  rollCanvas = document.getElementById('rolling-score');
+  if (!rollCanvas) return;
+  rollCtx = rollCanvas.getContext('2d');
+  resizeRollingScore();
+  window.addEventListener('resize', resizeRollingScore);
+  requestAnimationFrame(drawRollingScore);
 }
 
-/** Measured note duration (ms) → VexFlow duration code. Cutoffs assume a
- *  ~90 BPM perceived tempo; we quantise to five buckets since SWAM phrases
- *  range from ~80 ms pizz flicks to multi-second drones. No bar lines, no
- *  meter — FormatAndDraw lays notes out by nominal width. */
-function midiDurationToVex(durationMs) {
-  if (!Number.isFinite(durationMs) || durationMs <= 0) return '16';
-  if (durationMs < 180)   return '16';   // sixteenth: short pizz rebow
-  if (durationMs < 380)   return '8';    // eighth: quick attack
-  if (durationMs < 900)   return 'q';    // quarter: standard bow
-  if (durationMs < 2500)  return 'h';    // half: sustained bow
-  return 'w';                             // whole: drone (tie-pending; tier 3)
+function resizeRollingScore() {
+  if (!rollCanvas) return;
+  rollDpr = Math.max(1, window.devicePixelRatio || 1);
+  // Full-viewport background layer — pitch axis spans the whole height,
+  // time axis spans the whole width.
+  const cssW = window.innerWidth;
+  const cssH = window.innerHeight;
+  rollCanvas.style.width  = cssW + 'px';
+  rollCanvas.style.height = cssH + 'px';
+  rollCanvas.width  = Math.round(cssW * rollDpr);
+  rollCanvas.height = Math.round(cssH * rollDpr);
 }
 
-/** Velocity (0-127) → dynamic marking. Six bands aligned with SWAM's
- *  perceived loudness curve. */
-function velocityToDynamic(v) {
-  if (v < 28)  return 'pp';
-  if (v < 52)  return 'p';
-  if (v < 74)  return 'mp';
-  if (v < 96)  return 'mf';
-  if (v < 114) return 'f';
-  return 'ff';
+function midiToY(pitch, h) {
+  // Map [ROLL_MIN_MIDI, ROLL_MAX_MIDI] into the *inner* y range so notes
+  // never paint under the top bar (title / spell-buffer / cam strip) or
+  // the bottom sieve strip. h is canvas.height in device px; the insets
+  // are CSS px → multiply by rollDpr.
+  const clamped = Math.max(ROLL_MIN_MIDI, Math.min(ROLL_MAX_MIDI, pitch));
+  const norm = (clamped - ROLL_MIN_MIDI) / ROLL_PITCH_RANGE;
+  const topDev    = ROLL_TOP_INSET_PX    * rollDpr;
+  const bottomDev = ROLL_BOTTOM_INSET_PX * rollDpr;
+  const innerH    = Math.max(1, h - topDev - bottomDev);
+  return topDev + (1 - norm) * innerH;
 }
 
-/** Build a VexFlow StaveNote from one completed MIDI event. */
-function midiToStaveNote(VF, evt, showDynamic) {
-  const key = midiToVexKey(evt.pitch);
-  const duration = midiDurationToVex(evt.durationMs);
-  const note = new VF.StaveNote({ keys: [key], duration, clef: 'bass' });
+function timeToX(tMs, nowMs, w) {
+  const dt = nowMs - tMs;
+  return w - (dt / 1000) * ROLL_PX_PER_SEC * rollDpr;
+}
 
-  // Accidental glyph (VexFlow 4 doesn't auto-derive from key names).
-  if (key.indexOf('#') >= 0) {
-    note.addModifier(new VF.Accidental('#'), 0);
+// ============================================================
+// Brush palette — one rendering style per SWAM complex
+//
+// Each /xk/voice complex has a distinct sound; the rolling score should let
+// you read the technique at a glance, not just the colour. Rather than ship
+// raster brush textures, each style is a small procedural canvas routine
+// chosen to *evoke* the matching Photoshop brush family from
+// docs/brushes.png. Mapping (locked unless we revisit):
+//
+//   C1 pizz   → 15. Spatter             (percussive plucks → fine dots)
+//   C2 arco   → 18. Rough Wash          (breathy bowed cloud → translucent bands)
+//   C3 arco   → 19. Watercolor          (held painterly drone → defined body + pooling blobs)
+//   C4 harm   → 14. Airbrush Hard Round (bell overtone → radial-gradient halo)
+//   C5 wild   → 35. Calligraphy         (sweeping fluid pitch → variable-width sweep)
+//   C6 sieve  → 11. Ink                 (deliberate stepwise drawn line)
+//   C7 drift  → 27. Smoke               (wispy ephemeral wandering → multi-layer stroke)
+//   C8 trem   → 7. Chalk                (scratchy bridge friction → gritty textured band)
+//
+// Gliss complexes (C5/C6/C7) bypass the per-note brush dispatch entirely:
+// each gliss "chain" (a maximal run of same-voice, same-complex notes within
+// GLISS_GAP_MS of each other) is rendered as one stroked Path2D in the chain
+// pass below, so the alternating horizontal-segment / slant-transition
+// pattern reads as one continuous brush stroke with no visible junctions.
+// Non-gliss complexes get chunkier shapes so each technique stays visually
+// distinct.
+// ============================================================
+
+// Brush vertical dimensions are expressed as multiples of `rollRowH` (= the
+// device-px height of one semitone in the visible pitch range). This keeps
+// brushes proportional to the available pitch density: a 1.45-row chalk band
+// is always 1.45 semitones tall regardless of viewport. Without this scaling,
+// fixed CSS-px brushes (e.g. 28-px chalk band) covered ~1.4 rows on a 1080p
+// monitor but ~2 rows on a 13" MacBook (smaller innerHeight → smaller row),
+// which read as "everything is way too big" on smaller screens.
+//
+// Time-axis dimensions (note-width, dot density along note duration, slant
+// stretch) stay in CSS px — they're about temporal density, not pitch density.
+//
+// `ROLL_BRUSH_SCALE` is a single global multiplier for tuning. Bump up for
+// chunkier brushes everywhere, down for thinner. (1.0 matches the original
+// absolute-CSS look on 1080p / 1× DPR; 1.4 is the current thicker default
+// for legibility in dense passages.)
+const ROLL_BRUSH_SCALE = 1.4;
+let   rollRowH         = 19;     // device-px per semitone — recomputed each frame in drawRollingScore
+
+// Stable per-note RNG. Brushes use scattered dots / specks; without a stable
+// seed they'd scintillate every frame. Hash the immutable note identity
+// (voice, pitch, onsetMs) into a mulberry32 stream that returns the same
+// sequence every redraw, so a given pizz cluster always looks the same as
+// it scrolls past.
+function noteSeed(evt) {
+  let s = ((evt.voice | 0) * 73856093) ^
+          ((evt.pitch | 0) * 19349663) ^
+          ((evt.onsetMs | 0) * 83492791);
+  return { s: s >>> 0 };
+}
+function lcg(ref) {
+  ref.s = (ref.s + 0x6D2B79F5) | 0;
+  let t = ref.s;
+  t = Math.imul(t ^ t >>> 15, t | 1);
+  t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+}
+
+// `bu(factor)` returns a brush vertical dimension in device px, scaled to the
+// current row-height and the global brush-scale knob. Use for everything
+// pitch-axis sized: band heights, dot/blob radii, vertical scatter.
+const bu = (f) => rollRowH * f * ROLL_BRUSH_SCALE;
+
+// ── C1 Spatter — pizzicato plucks ──────────────────────────────────────
+function brushSpatter(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const seed = noteSeed(evt);
+  const dotCount = Math.max(12, Math.min(60, Math.floor(w / (2.2 * rollDpr))));
+  const spreadH = bu(1.15);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha;
+  for (let i = 0; i < dotCount; i++) {
+    const px = x + lcg(seed) * w;
+    const py = y + (lcg(seed) - 0.5) * spreadH;
+    const r  = bu(0.08 + lcg(seed) * 0.13);
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Heavier blobs for the pluck centres
+  for (let i = 0; i < 5; i++) {
+    const px = x + lcg(seed) * w;
+    const py = y + (lcg(seed) - 0.5) * bu(0.4);
+    const r  = bu(0.18 + lcg(seed) * 0.21);
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── C2 Rough Wash — bowed legato cloud ─────────────────────────────────
+function brushRoughWash(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const bandH = bu(1.45);
+  // Vertical-fade gradient — soft "breathy" edge without raster blur
+  const grad = ctx.createLinearGradient(0, y - bandH, 0, y + bandH);
+  grad.addColorStop(0,   'rgba(0,0,0,0)');
+  grad.addColorStop(0.5, color);
+  grad.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = grad;
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.fillRect(x, y - bandH, w, bandH * 2);
+  // Solid core
+  const coreH = bu(0.5);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha * 0.8;
+  ctx.fillRect(x, y - coreH / 2, w, coreH);
+  ctx.globalAlpha = 1;
+}
+
+// ── C3 Watercolor — hovering flat ──────────────────────────────────────
+function brushWatercolor(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const bodyH = bu(1.0);
+  const seed = noteSeed(evt);
+  ctx.fillStyle = color;
+  // Soft halo
+  ctx.globalAlpha = alpha * 0.25;
+  ctx.fillRect(x, y - bodyH, w, bodyH * 2);
+  // Defined body
+  ctx.globalAlpha = alpha * 0.85;
+  ctx.fillRect(x, y - bodyH / 2, w, bodyH);
+  // Paint pooling blobs
+  ctx.globalAlpha = alpha * 0.6;
+  const blobCount = 2 + Math.floor(w / (35 * rollDpr));
+  for (let i = 0; i < blobCount; i++) {
+    const px = x + (0.1 + lcg(seed) * 0.8) * w;
+    const r = bu(0.3 + lcg(seed) * 0.3);
+    ctx.beginPath();
+    ctx.arc(px, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── C4 Airbrush Hard Round — harmonic atom ─────────────────────────────
+function brushAirbrush(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const radius = bu(1.15);
+  // Capsule of overlapping radial gradients so a long harmonic still reads
+  // as a continuous halo rather than a chain of dots.
+  const stepCount = Math.max(2, Math.floor(w / (radius * 0.6)));
+  ctx.globalAlpha = alpha * 0.75;
+  for (let i = 0; i < stepCount; i++) {
+    const px = x + (stepCount === 1 ? w / 2 : (i / (stepCount - 1)) * w);
+    const grad = ctx.createRadialGradient(px, y, 0, px, y, radius);
+    grad.addColorStop(0,    color);
+    grad.addColorStop(0.45, color);
+    grad.addColorStop(1,    'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(px, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── C8 Chalk — sul-pont tremolo grit ───────────────────────────────────
+function brushChalk(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const bandH = bu(1.35);
+  const seed = noteSeed(evt);
+  // Translucent base — chalk press
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.fillRect(x, y - bandH / 2, w, bandH);
+  // Scattered specks — chalk grit (slot density is time-axis: stays in CSS px;
+  // speck size is pitch-axis: scales with rowHeight)
+  ctx.globalAlpha = alpha;
+  const slotCount = Math.floor(w / (1.4 * rollDpr));
+  for (let i = 0; i < slotCount; i++) {
+    if (lcg(seed) < 0.5) continue;  // ~50% slot occupancy
+    const px = x + (i / Math.max(1, slotCount)) * w + lcg(seed) * 2 * rollDpr;
+    const py = y + (lcg(seed) - 0.5) * bandH * 1.1;
+    const sw = bu(0.08 + lcg(seed) * 0.13);
+    const sh = bu(0.08 + lcg(seed) * 0.10);
+    ctx.fillRect(px, py, sw, sh);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Fallback for complex 0 (unknown / pre-init / KS leak)
+function brushHardRound(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const rowH = bu(0.72);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha;
+  ctx.fillRect(x, y - rowH / 2, w, rowH);
+  ctx.globalAlpha = 1;
+}
+
+// Gliss complexes (C5/C6/C7) deliberately have no entry — drawNote skips
+// them and the chain pass renders each gliss phrase as a single Path2D so
+// the rect bodies and slant transitions read as one continuous brush stroke.
+const COMPLEX_BRUSH = {
+  0: brushHardRound,
+  1: brushSpatter,
+  2: brushRoughWash,
+  3: brushWatercolor,
+  4: brushAirbrush,
+  8: brushChalk,
+};
+
+function drawNote(ctx, evt, x0, x1, y, alpha) {
+  if (x1 < 0) return;
+  if (GLISS_COMPLEXES.has(evt.complex)) return;  // handled by chain pass
+  const color = COMPLEX_COLOR[evt.complex] || COMPLEX_COLOR[0];
+  const brush = COMPLEX_BRUSH[evt.complex] || brushHardRound;
+  brush(ctx, x0, x1, y, color, alpha, evt);
+}
+
+// ── Gliss chain renderer ────────────────────────────────────────────────
+// A "chain" is a maximal run of gliss-complex notes that share the same
+// voice + complex AND whose adjacent gaps are ≤ GLISS_GAP_MS. Each chain is
+// drawn as a single stroked Path2D with lineJoin='round' so the alternating
+// horizontal-segment / slant pattern reads as one continuous brush stroke
+// — no visible junctions. The path walks every note's exclusive-sounding
+// region (horizontal at its pitch) and bridges the overlap/gap to the next
+// note (slant from prev pitch to next pitch).
+function buildGlissChains(nowMs, w, h) {
+  const groups = new Map();  // "voice:complex" → Array<{evt, x0, x1, y}>
+  const push = (evt, x0, x1, y) => {
+    const k = `${evt.voice}:${evt.complex}`;
+    let arr = groups.get(k);
+    if (!arr) { arr = []; groups.set(k, arr); }
+    arr.push({ evt, x0, x1, y });
+  };
+  for (const evt of finishedMidiNotes) {
+    if (!GLISS_COMPLEXES.has(evt.complex)) continue;
+    push(evt, timeToX(evt.onsetMs, nowMs, w), timeToX(evt.offsetMs, nowMs, w), midiToY(evt.pitch, h));
+  }
+  for (const queue of activeMidiNotes.values()) {
+    for (const evt of queue) {
+      if (!GLISS_COMPLEXES.has(evt.complex)) continue;
+      push(evt, timeToX(evt.onsetMs, nowMs, w), w, midiToY(evt.pitch, h));
+    }
+  }
+  const chains = [];
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => a.evt.onsetMs - b.evt.onsetMs);
+    let chain = null;
+    for (let i = 0; i < arr.length; i++) {
+      const node = arr[i];
+      const prev = i > 0 ? arr[i - 1] : null;
+      const prevOff = prev ? (prev.evt.offsetMs ?? nowMs) : -Infinity;
+      const gapMs = prev ? node.evt.onsetMs - prevOff : 0;
+      if (!chain || gapMs > GLISS_GAP_MS) {
+        chain = {
+          complex: node.evt.complex,
+          color:   COMPLEX_COLOR[node.evt.complex] || COMPLEX_COLOR[0],
+          nodes:   [],
+        };
+        chains.push(chain);
+      }
+      chain.nodes.push(node);
+    }
+  }
+  return chains;
+}
+
+function drawGlissChain(ctx, chain) {
+  const { complex, color, nodes } = chain;
+  if (nodes.length === 0) return;
+  // Gliss factor (0.85) is intentionally larger than the non-gliss base
+  // brush thicknesses so the slide chain reads as the dominant gesture in
+  // dense passages — the whole point of gliss is the contour. With
+  // ROLL_BRUSH_SCALE = 1.4 the resulting stroke is ~1.2 row-heights tall.
+  const lineW = bu(0.85);
+
+  // One stroked polyline. For nodes [n0, n1, ..., nN-1]:
+  //   moveTo(n0.x0, n0.y)
+  //   for each pair (ni, ni+1):
+  //     lineTo(min(ni.x1, ni+1.x0), ni.y)   ← horizontal across ni's exclusive region
+  //     lineTo(max(ni.x1, ni+1.x0), ni+1.y) ← slant across the overlap/gap to ni+1's pitch
+  //   lineTo(nN-1.x1, nN-1.y)               ← finish horizontal across the last note
+  // lineJoin='round' smooths every corner, so the chain reads as one fluid stroke.
+  const strokePath = (dy, w, alpha) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = w;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.moveTo(nodes[0].x0, nodes[0].y + dy);
+    for (let i = 0; i < nodes.length; i++) {
+      const n = nodes[i];
+      const next = nodes[i + 1];
+      if (next) {
+        ctx.lineTo(Math.min(n.x1, next.x0), n.y + dy);
+        ctx.lineTo(Math.max(n.x1, next.x0), next.y + dy);
+      } else {
+        ctx.lineTo(n.x1, n.y + dy);
+      }
+    }
+    ctx.stroke();
+  };
+
+  // C7 smoke: faint halo strokes above and below the main path. Drawn first
+  // so the main stroke layers over them.
+  if (complex === 7) {
+    const haloOffset = lineW * 1.2;
+    strokePath(-haloOffset, lineW * 0.5, 0.22);
+    strokePath(+haloOffset, lineW * 0.5, 0.22);
+  }
+  strokePath(0, lineW, 0.95);
+  ctx.globalAlpha = 1;
+}
+
+function drawRollingScore() {
+  if (!rollCanvas || !rollCtx) {
+    requestAnimationFrame(drawRollingScore);
+    return;
+  }
+  const w = rollCanvas.width;
+  const h = rollCanvas.height;
+  const nowMs = performance.now();
+  // Recompute the brush sizing unit (device-px per semitone) from the current
+  // viewport so brushes scale with the available pitch density. Floor at
+  // 4 device px so brushes don't vanish on absurdly small windows.
+  const innerHDev = Math.max(48 * rollDpr, h - (ROLL_TOP_INSET_PX + ROLL_BOTTOM_INSET_PX) * rollDpr);
+  rollRowH = Math.max(4 * rollDpr, innerHDev / ROLL_PITCH_RANGE);
+  // Visible time window depends on canvas width (in CSS px); cull anything
+  // that's already scrolled off the left edge plus a small grace.
+  const visibleSec = (w / rollDpr) / ROLL_PX_PER_SEC;
+  const horizonMs = nowMs - visibleSec * 1000;
+
+  rollCtx.clearRect(0, 0, w, h);
+
+  // Cull finished notes that have scrolled fully off the left edge
+  while (finishedMidiNotes.length && finishedMidiNotes[0].offsetMs < horizonMs - 500) {
+    finishedMidiNotes.shift();
   }
 
-  if (showDynamic) {
-    const dyn = new VF.Annotation(velocityToDynamic(evt.velocity))
-      .setVerticalJustification(VF.Annotation.VerticalJustify.BOTTOM)
-      .setFont('Times', 11, 'italic');
-    note.addModifier(dyn, 0);
+  // Notes — finished first (lower z), then in-flight on top.
+  // Per-complex brush rendering via drawNote → COMPLEX_BRUSH dispatch.
+  for (const evt of finishedMidiNotes) {
+    const x0 = timeToX(evt.onsetMs,  nowMs, w);
+    const x1 = timeToX(evt.offsetMs, nowMs, w);
+    const y  = midiToY(evt.pitch, h);
+    const alpha = 0.55 + 0.45 * Math.min(1, evt.velocity / 110);
+    drawNote(rollCtx, evt, x0, x1, y, alpha);
   }
-  return note;
-}
-
-/** Rebuild the SVG from the current buffer. Called on every completed
- *  note; VexFlow handles 16 notes at 60fps easily on modern hardware. */
-function renderNotation() {
-  const host = document.getElementById('notation-strip');
-  if (!host) return;
-
-  const notes = completedMidiNotes.slice(-NOTATION_MAX);
-  host.classList.toggle('empty', notes.length === 0);
-  host.innerHTML = '';
-  if (notes.length === 0) return;
-
-  const VF = window.Vex?.Flow || window.VexFlow;
-  if (!VF) return;
-
-  const width = Math.max(420, Math.min(960, notes.length * 48 + 100));
-  const height = 110;
-
-  const renderer = new VF.Renderer(host, VF.Renderer.Backends.SVG);
-  renderer.resize(width, height);
-  const ctx = renderer.getContext();
-
-  const stave = new VF.Stave(10, 10, width - 20).addClef('bass');
-  stave.setContext(ctx).draw();
-
-  // Dynamic annotations on every 4th note only — placing one under every
-  // note clutters the strip at dense phrase activity. First note + every
-  // 4th thereafter gives a readable per-phrase contour.
-  const staveNotes = notes.map((evt, i) => midiToStaveNote(VF, evt, i === 0 || i % 4 === 0));
-
-  try {
-    VF.Formatter.FormatAndDraw(ctx, stave, staveNotes);
-  } catch (e) {
-    // VexFlow occasionally throws on pathological duration sequences;
-    // keep the strip alive, log for diagnosis.
-    console.warn('[notation] FormatAndDraw failed:', e?.message || e);
+  for (const queue of activeMidiNotes.values()) {
+    for (const evt of queue) {
+      const x0 = timeToX(evt.onsetMs, nowMs, w);
+      const y  = midiToY(evt.pitch, h);
+      const alpha = 0.7 + 0.3 * Math.min(1, evt.velocity / 110);
+      drawNote(rollCtx, evt, x0, w, y, alpha);
+    }
   }
+
+  // Gliss chains — each (voice, complex) chain of consecutive gliss notes
+  // is drawn as a single Path2D so junctions are seamless and the line
+  // reads as one fluid brush stroke.
+  const chains = buildGlissChains(nowMs, w, h);
+  for (const chain of chains) drawGlissChain(rollCtx, chain);
+
+  requestAnimationFrame(drawRollingScore);
 }
 
 function handleMidiEcho(data) {
   if (!data || !data.kind) return;
 
   if (data.kind === 'panic') {
-    pendingMidiNotes.clear();
+    activeMidiNotes.clear();
     return;
   }
 
   const key = `${data.voice}:${data.pitch}`;
 
   if (data.kind === 'noteon') {
-    pendingMidiNotes.set(key, {
-      pitch: data.pitch,
+    let queue = activeMidiNotes.get(key);
+    if (!queue) { queue = []; activeMidiNotes.set(key, queue); }
+    queue.push({
+      pitch:    data.pitch,
       velocity: data.velocity,
-      voice: data.voice,
-      onsetMs: performance.now(),
+      voice:    data.voice,
+      complex:  data.complex | 0,
+      onsetMs:  performance.now(),
     });
     return;
   }
 
   if (data.kind === 'noteoff') {
-    const pending = pendingMidiNotes.get(key);
-    if (!pending) return;              // stray noteoff (lost UDP noteon) — skip
-    pendingMidiNotes.delete(key);
-
-    completedMidiNotes.push({
-      pitch: pending.pitch,
+    const queue = activeMidiNotes.get(key);
+    if (!queue || queue.length === 0) return;  // stray noteoff (lost UDP noteon) — skip
+    const pending = queue.shift();             // FIFO — oldest noteon pairs first
+    if (queue.length === 0) activeMidiNotes.delete(key);
+    finishedMidiNotes.push({
+      pitch:    pending.pitch,
       velocity: pending.velocity,
-      voice: pending.voice,
-      onsetMs: pending.onsetMs,
-      durationMs: performance.now() - pending.onsetMs,
+      voice:    pending.voice,
+      complex:  pending.complex,
+      onsetMs:  pending.onsetMs,
+      offsetMs: performance.now(),
     });
-    while (completedMidiNotes.length > NOTATION_MAX * 2) completedMidiNotes.shift();
-    renderNotation();
   }
 }
 
-// Sweep pending notes periodically. A stuck entry (lost noteoff UDP, browser
-// reconnect mid-phrase) would otherwise haunt the map forever. After
-// PENDING_MAX_AGE_MS we force-complete it so the note still lands on the
-// staff with its accumulated duration.
+// Watchdog: a stuck active note (UDP loss on the noteoff side, or relay
+// reconnect mid-phrase) would otherwise sustain forever on the canvas. After
+// PENDING_MAX_AGE_MS we force-finalise the queue's oldest entry so the
+// rectangle stops growing. Walks every per-key queue.
 setInterval(() => {
   const now = performance.now();
-  let flushed = 0;
-  for (const [key, pending] of pendingMidiNotes) {
-    if (now - pending.onsetMs > PENDING_MAX_AGE_MS) {
-      pendingMidiNotes.delete(key);
-      completedMidiNotes.push({
-        pitch: pending.pitch,
+  for (const [key, queue] of activeMidiNotes) {
+    while (queue.length > 0 && now - queue[0].onsetMs > PENDING_MAX_AGE_MS) {
+      const pending = queue.shift();
+      finishedMidiNotes.push({
+        pitch:    pending.pitch,
         velocity: pending.velocity,
-        voice: pending.voice,
-        onsetMs: pending.onsetMs,
-        durationMs: now - pending.onsetMs,
+        voice:    pending.voice,
+        complex:  pending.complex,
+        onsetMs:  pending.onsetMs,
+        offsetMs: now,
       });
-      flushed++;
     }
-  }
-  if (flushed > 0) {
-    while (completedMidiNotes.length > NOTATION_MAX * 2) completedMidiNotes.shift();
-    renderNotation();
+    if (queue.length === 0) activeMidiNotes.delete(key);
   }
 }, 5000);
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initRollingScore);
+} else {
+  initRollingScore();
+}
 
 // Tilt and spin are derived from gyro quaternion client-side
 // (faster than waiting for relay to compute + broadcast at 60Hz)
@@ -2493,7 +2882,7 @@ function wsConnect() {
       const msg = JSON.parse(evt.data);
       if (msg.type === 'state') {
         updateState(msg.data, msg.move);
-        updateV2State(msg.data);
+        updateV2State(msg.data, msg.move);
         // computeLocalExpression runs off gyro_tick only (see its handler).
       } else if (msg.type === 'gyro_state') {
         pendingGyroState = msg.data;
@@ -2501,7 +2890,7 @@ function wsConnect() {
           gyroThrottleFrame = requestAnimationFrame(() => {
             if (pendingGyroState) {
               updateState(pendingGyroState, null);
-              updateV2State(pendingGyroState);
+              updateV2State(pendingGyroState, null);
               pendingGyroState = null;
             }
             gyroThrottleFrame = null;
@@ -2625,6 +3014,26 @@ gyroSmoothSlider.addEventListener('input', () => {
   const val = parseFloat(gyroSmoothSlider.value);
   gyroSmoothVal.textContent = val.toFixed(2);
   wsSend({ type: 'set_gyro_smoothing', value: val });
+});
+
+// Rolling-score scroll speed (CSS px / sec). Drives ROLL_PX_PER_SEC.
+// Persisted in localStorage. Lower = slower scroll = more history visible
+// (notes are wider per ms); higher = faster scroll = sharper temporal feel.
+const scoreSpeedSlider = document.getElementById('scoreSpeed');
+const scoreSpeedValEl  = document.getElementById('scoreSpeedVal');
+function applyScoreSpeed(val) {
+  ROLL_PX_PER_SEC = val;
+  scoreSpeedValEl.textContent = String(val | 0);
+}
+const savedScoreSpeed = parseFloat(localStorage.getItem('scoreSpeed'));
+if (isFinite(savedScoreSpeed) && savedScoreSpeed >= 60 && savedScoreSpeed <= 900) {
+  scoreSpeedSlider.value = String(savedScoreSpeed | 0);
+  applyScoreSpeed(savedScoreSpeed);
+}
+scoreSpeedSlider.addEventListener('input', () => {
+  const val = parseFloat(scoreSpeedSlider.value);
+  applyScoreSpeed(val);
+  localStorage.setItem('scoreSpeed', String(val));
 });
 
 // Ghost cube size — uniform scale around origin (cube's center), so the

@@ -155,9 +155,12 @@ export class XenaKubeEngine {
       const match = spellMatches[i];
       this.modeManager.applySpell(match);
       this.voiceEngine.setMode(this.modeManager.mode.voiceMode);
-      // niklas — V1 ↔ V2 path toggle. EngineMode lives on the engine, not
-      // on ModeManager, so the flip happens here. See docs/revision_roadmap.md D19.
-      if (match.spell.effect === 'niklas') {
+      // sexy-move — V1 ↔ V2 path toggle. EngineMode lives on the engine, not
+      // on ModeManager, so the flip happens here. Reassigned from niklas
+      // 2026-04-24 (user preference: niklas keeps only its harmonic-ping
+      // accent; sexy-move now drives the V mode swap so the V-axis is reachable
+      // via a 4-move trigger instead of the 7-move commutator).
+      if (match.spell.effect === 'sexy-move') {
         this.mode.path = this.mode.path === 'V1' ? 'V2' : 'V1';
       }
       for (const listener of this.spellListeners) listener(match);

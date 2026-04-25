@@ -395,10 +395,14 @@ const midiEchoServer = new OscServer(MIDI_ECHO_PORT, '127.0.0.1', () => {
 
 midiEchoServer.on('message', (msg) => {
   // node-osc delivers [address, ...args]. Map to our WS schema.
+  // 4th atom `complex` (0..8) added 2026-04-24 — old patches that haven't
+  // reloaded the v8 will send 3 atoms; `msg[4]|0` resolves undefined → 0
+  // and the dashboard treats 0 as the neutral colour, so backwards-compat
+  // is implicit during a single reload window.
   const address = msg[0];
   let data = null;
-  if (address === OSC.MIDI_NOTEON)       data = { kind: 'noteon',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0 };
-  else if (address === OSC.MIDI_NOTEOFF) data = { kind: 'noteoff', voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0 };
+  if (address === OSC.MIDI_NOTEON)       data = { kind: 'noteon',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
+  else if (address === OSC.MIDI_NOTEOFF) data = { kind: 'noteoff', voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
   else if (address === OSC.MIDI_PANIC)   data = { kind: 'panic' };
   else return;
 

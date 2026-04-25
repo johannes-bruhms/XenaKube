@@ -41,7 +41,10 @@ export class ModeManager {
 
     switch (match.spell.effect) {
       case 'sexy-move':
-        this.mode.voiceMode = this.mode.voiceMode === 'sequential' ? 'polyphonic' : 'sequential';
+        // V1 ↔ V2 path toggle is handled in engine.ts (EngineMode.path lives
+        // there, not on PerformanceMode). The old voiceMode toggle moved out
+        // 2026-04-24 (user reassigned the V-mode swap to sexy-move; if a
+        // sequential/polyphonic toggle is needed elsewhere, wire it here).
         break;
       case 'sune':
         // Detection stub — freeze effect removed 2026-04-18. Effect TBD.
@@ -60,9 +63,9 @@ export class ModeManager {
         this.mode.palette = 'default';
         break;
       case 'niklas':
-        // V1 ↔ V2 path toggle is handled in the engine (EngineMode.path lives
-        // there, not on PerformanceMode). See engine.ts onTurn and
-        // docs/revision_roadmap.md D19.
+        // No mode change. Niklas now keeps only its CTRL harmonic-ping accent
+        // (handled in max/xk_swam.js handleSpell). The V mode toggle moved to
+        // sexy-move 2026-04-24.
         break;
     }
 
