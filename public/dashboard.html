@@ -16,6 +16,18 @@
     --warm: #ff6644;
     --gold: #ffcc00;
     --active-glow: rgba(0, 255, 136, 0.25);
+    /* Shared layout geometry. The sieve strip (right) and rolling-score
+       canvas (full-viewport background) both reference these so notes
+       emerge from the matching sieve bin without drifting on resize.
+       Tuned to titl22ed: left column ~30% in portrait / capped wider in
+       landscape; sieve wide enough that pitch labels (C2..C6) read
+       cleanly inside the strip. */
+    --roll-top-inset: 70px;
+    --roll-bottom-inset: 80px;
+    --sieve-strip-w: clamp(86px, 9vw, 170px);
+    --left-col-w: clamp(280px, 30vw, 500px);
+    --br-cluster-w: clamp(160px, 11vw, 220px);
+    --slider-color: var(--gold);
   }
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body { width: 100%; height: 100%; overflow: hidden; }
@@ -26,7 +38,32 @@
     position: relative;
   }
 
-  /* Full-viewport cube canvas — background layer */
+  /* 2D overlay canvas for the white K→sieve and C→sieve "triangle leg"
+     lines. Sits ABOVE the cube + sieve glow halos but BELOW the title /
+     state / cluster overlays, so a line drawn from a 3D K-vertex inside
+     the cube can pass cleanly to the right-edge sieve cell without being
+     covered by the sieve background, while UI panels still occlude it as
+     expected. Pointer-events off — purely decorative. */
+  #line-overlay {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  /* Full-viewport cube canvas — background layer.
+     Explicit width/height matter: a <canvas> is a replaced element with
+     intrinsic 300×150 HTML attrs, and `position: fixed` with only inset
+     coords (no width/height) lets the browser fall back to those intrinsics
+     in some Chrome paths. That makes Three.js initialise camera.aspect at
+     2.0 (300/150) and the cube collapses to ~21% of canvas width — exactly
+     the regression in fucked.png. Forcing full-viewport dimensions sizes
+     the drawing buffer correctly on first paint. The cube renders at the
+     viewport centre (slightly offset from work-area centre because the
+     left column is wider than the right sieve, but always at full size). */
   #cube-canvas {
     position: fixed;
     inset: 0;
@@ -45,64 +82,133 @@
   }
   .ovl > * { pointer-events: auto; }
 
-  .ovl-tl { top: 16px; left: 20px; width: 480px; max-height: calc(100vh - 120px); display: flex; flex-direction: column; gap: 18px; overflow-y: auto; scrollbar-width: none; font-size: 22px; }
+  /* Top-left column — title, conn-row, mode pills, K/C cards. Single column,
+     proportional width, natural font sizes (no zoom hack — sized directly so
+     the rendered metrics match the rest of the HUD). */
+  .ovl-tl {
+    top: 12px;
+    left: 14px;
+    width: var(--left-col-w);
+    max-height: calc(100vh - 24px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    font-size: 13px;
+  }
   .ovl-tl::-webkit-scrollbar { display: none; }
-  .ovl-tc { top: 16px; left: 50%; transform: translateX(-50%); text-align: center; max-width: 60vw; pointer-events: none; }
-  .ovl-tr { top: 16px; right: 20px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; }
-  /* Size tweaks: top-left column children shrunk to 50%; right-side controls enlarged 50% */
-  .ovl-tl .ovl-section,
-  .ovl-tl .mode-row,
-  .ovl-tl .active-cards { zoom: 0.5; }
 
-  /* Bottom-left overlay — state + expression panels stacked naturally
-   * above the piano-roll. Key decisions:
-   *   • Wrapper is position: fixed (bottom-anchored above sieve strip),
-   *     NO zoom — Chrome's `zoom` scales `bottom` on fixed elements,
-   *     which would pull the wrapper into the sieve strip.
-   *   • Each child carries its own `zoom: 0.5` while sitting in natural
-   *     flex flow (not position: fixed). This sidesteps the
-   *     zoom+position:fixed containing-block quirk that caused the
-   *     earlier "title overlaps top row" bug.
-   *   • Adding/removing state rows just grows the wrapper upward — no
-   *     magic-number bottom anchors. */
+  /* Top-right — spell buffer + spell notification (compact, matches left
+     column typography). Right-aligned column that cannot exceed cluster
+     width. */
+  .ovl-tr {
+    top: 12px;
+    right: calc(var(--sieve-strip-w) + 14px);
+    max-width: 32vw;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    text-align: right;
+    pointer-events: none;
+    font-size: 13px;
+  }
+
+  /* Bottom-left — STATE panel + permutation. Sibling of .ovl-tl so the
+     left edge stays aligned but the bottom anchor is independent of the
+     title block's height. */
   .ovl-bl {
     position: fixed;
-    left: 20px;
-    bottom: 110px;            /* clears the piano-roll strip (~90px) with padding */
-    width: 480px;
+    left: 14px;
+    bottom: 14px;
+    width: var(--left-col-w);
     z-index: 3;
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    max-height: calc(100vh - 240px);
+    gap: 8px;
+    max-height: calc(100vh - 380px);
     overflow-y: auto;
     scrollbar-width: none;
+    font-size: 13px;
   }
   .ovl-bl::-webkit-scrollbar { display: none; }
-  .ovl-bl .state-rows,
-  .ovl-bl .expression-panel { zoom: 0.5; }
-  .ovl-bl .state-rows { display: flex; flex-direction: column; gap: 4px; }
-  .ovl-tr .cube-rotate-ctrl { zoom: 1.5; }
-  .ovl-bottom { position: fixed; bottom: 0; left: 0; right: 0; z-index: 2; padding: 6px 12px 10px; pointer-events: none; }
+  .ovl-bl .state-rows { display: flex; flex-direction: column; gap: 2px; }
+
+  /* Right-side vertical sieve strip — pitch C2 at bottom, C6 at top.
+     Span exactly matches the rolling-score's pitch-axis insets so a note
+     of pitch P emerges from sieve cell (P − 36). */
+  .ovl-sieve-right {
+    position: fixed;
+    top: var(--roll-top-inset);
+    bottom: var(--roll-bottom-inset);
+    right: 0;
+    width: var(--sieve-strip-w);
+    z-index: 1;
+    pointer-events: auto;
+    background: rgba(0, 0, 0, 0.20);
+    border-left: 1px solid rgba(0, 204, 255, 0.18);
+    overflow: hidden;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  }
+
+  /* Bottom-right cluster — gizmo + rotate toggles + smooth/ghost/score
+     sliders. Sits ON TOP of the sieve strip with NO background fill so the
+     sieve bins remain visible (and tickable) through the cluster. */
+  .ovl-br {
+    position: fixed;
+    bottom: 14px;
+    right: 0;
+    width: var(--br-cluster-w);
+    padding: 0 10px 0 10px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    background: transparent;
+    pointer-events: none;
+  }
+  .ovl-br > * { pointer-events: auto; }
+  .gizmo-wrap {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    position: relative;
+    margin: 0 auto;
+  }
+  .gizmo-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+  }
+
   .ovl-section { display: flex; flex-direction: column; gap: 6px; }
 
   h1.title {
-    font-size: 60px;
+    font-size: 46px;
     font-weight: 700;
     color: var(--accent);
     letter-spacing: 3px;
+    line-height: 1;
+    margin: 2px 0 6px;
   }
   .conn-row {
     display: flex;
     flex-direction: column;
-    align-items: flex-start;
+    align-items: stretch;
     gap: 6px;
-    margin-top: 8px;
+    margin-top: 4px;
+  }
+  .conn-row .btn-row {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+    flex-wrap: wrap;
   }
   .conn-row input {
-    padding: 7px 12px;
-    font-size: 22px;
-    width: 360px;
+    padding: 5px 9px;
+    font-size: 13px;
+    width: 100%;
     border-radius: 3px;
     border: 1px solid var(--border);
     background: rgba(10, 10, 15, 0.5);
@@ -111,8 +217,8 @@
     letter-spacing: 1px;
   }
   .conn-row button, .ctrl-btn {
-    padding: 8px 20px;
-    font-size: 22px;
+    padding: 5px 12px;
+    font-size: 13px;
     font-weight: 600;
     cursor: pointer;
     background: transparent;
@@ -124,12 +230,12 @@
   }
   .conn-row button:hover, .ctrl-btn:hover { color: var(--text); border-color: var(--dim); }
   .conn-row button.connected { color: var(--accent); border-color: var(--accent); }
-  #cube-status { font-size: 22px; color: var(--dim); }
+  #cube-status { font-size: 13px; color: var(--dim); }
   #cube-status.ok { color: var(--accent); }
   #cube-status.err { color: var(--warm); }
 
   .ws-status-inline {
-    font-size: 22px;
+    font-size: 13px;
     color: var(--dim);
   }
   .ws-dot {
@@ -150,12 +256,12 @@
   .header-status .val { color: var(--text); }
 
   .panel-title {
-    font-size: 22px;
+    font-size: 12px;
     font-weight: 700;
     letter-spacing: 1.5px;
     color: var(--accent2);
     text-transform: uppercase;
-    margin-bottom: 12px;
+    margin-bottom: 6px;
   }
 
   .cube-rotate-ctrl {
@@ -166,17 +272,18 @@
     padding: 0;
     border: none;
     user-select: none;
+    justify-content: flex-end;
   }
   .cube-rotate-ctrl .cr-label {
-    font-size: 9px;
+    font-size: 12px;
     color: var(--dim);
     text-transform: uppercase;
     letter-spacing: 1px;
-    margin-right: 2px;
+    margin-right: 4px;
   }
   .cube-rotate-ctrl button {
-    padding: 3px 8px;
-    font-size: 10px;
+    padding: 4px 10px;
+    font-size: 14px;
     font-family: monospace;
     font-weight: 600;
     background: transparent;
@@ -193,18 +300,18 @@
   }
 
   /* State rows (left overlay, transparent) */
-  .state-rows { display: flex; flex-direction: column; gap: 3px; }
+  .state-rows { display: flex; flex-direction: column; gap: 2px; }
   .state-row {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 6px 0;
-    font-size: 24px;
+    padding: 3px 0;
+    font-size: 13px;
     background: transparent;
-    gap: 10px;
+    gap: 8px;
   }
   .state-label { color: var(--dim); text-transform: lowercase; letter-spacing: 0.5px; }
-  .state-val { font-weight: 600; color: var(--text); font-size: 22px; }
+  .state-val { font-weight: 600; color: var(--text); font-size: 13px; }
   .state-val.accent { color: var(--accent); }
   .state-val.accent2 { color: var(--accent2); }
   .state-val.warm { color: var(--warm); }
@@ -306,22 +413,23 @@
     display: block;
     border-color: var(--accent);
     background: rgba(0, 255, 136, 0.10);
-    box-shadow: 0 0 12px var(--active-glow);
+    box-shadow: 0 0 10px var(--active-glow);
     padding: 8px 12px;
-    width: 160px;
+    width: 116px;
     align-self: flex-start;
   }
   .vertex-card.active .intensity-bar { display: none; }
   .vertex-label {
-    font-size: 36px;
+    font-size: 28px;
     font-weight: 700;
     color: var(--accent);
-    margin-bottom: 6px;
+    margin-bottom: 3px;
+    line-height: 1;
   }
   .vertex-param {
-    font-size: 27px;
+    font-size: 14px;
     color: var(--text);
-    line-height: 1.3;
+    line-height: 1.35;
     white-space: nowrap;
   }
   .vertex-param .val { color: var(--accent); font-weight: 600; }
@@ -342,14 +450,15 @@
   }
 
   .complex-num {
-    font-size: 39px;
+    font-size: 28px;
     font-weight: 700;
-    margin-bottom: 6px;
+    margin-bottom: 3px;
+    line-height: 1;
   }
   .complex-name {
-    font-size: 22px;
+    font-size: 12px;
     color: var(--dim);
-    line-height: 1.3;
+    line-height: 1.35;
   }
 
   /* Complex type colors */
@@ -362,85 +471,86 @@
   .ct-7 { border-color: #ff44cc; color: #ff44cc; }
   .ct-8 { border-color: #cccccc; color: #cccccc; }
 
-  /* Sieve — piano roll */
+  /* Sieve — vertical piano-roll on the right edge. Each .sieve-cell is one
+     semitone (49 cells, C2..C6); the stack lives in column-reverse so cell
+     index 0 (C2) sits at the bottom and index 48 (C6) at the top, matching
+     the rolling-score's pitch axis. Octave-C cells host an inline label.
+     The flex container MUST be `.sieve-strip` itself (the immediate parent
+     of the cells). Putting flex on `.ovl-sieve-right` does nothing for the
+     cells because `.sieve-strip` sits between them — that bug collapsed
+     non-octave cells to 0 px and let only the 5 labelled octave cells
+     show, unevenly stacked at the bottom. */
   .sieve-strip {
-    display: flex;
-    gap: 0;
-    height: 52px;
-    align-items: stretch;
-    pointer-events: auto;
-    border-radius: 3px;
-    overflow: hidden;
-    background: rgba(0, 0, 0, 0.35);
-    border: 1px solid rgba(0, 204, 255, 0.25);
-  }
-  .sieve-cell {
-    flex: 1;
-    min-width: 0;
-    position: relative;
+    width: 100%;
     height: 100%;
-    border-right: 1px solid rgba(0, 0, 0, 0.4);
-    transition: background 0.2s, box-shadow 0.2s;
+    display: flex;
+    flex-direction: column-reverse;   /* iteration order C2..C6 → bottom..top */
+    gap: 0;
   }
-  /* White keys — default */
   .sieve-cell {
-    background: rgba(200, 220, 235, 0.10);
+    flex: 1 1 0;
+    min-height: 0;
+    position: relative;
+    width: 100%;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.30);
+    background: rgba(200, 220, 235, 0.06);
+    transition: background 0.18s, box-shadow 0.18s, color 0.18s;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding-left: 8px;
+    color: var(--dim);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    line-height: 1;
   }
-  /* Black keys — darker, slightly shorter (top band) */
   .sieve-cell.black {
     background: rgba(0, 0, 0, 0.55);
   }
-  .sieve-cell.black::after {
-    content: '';
-    position: absolute;
-    top: 0; left: 15%; right: 15%;
-    height: 62%;
-    background: rgba(0, 0, 0, 0.75);
-    border-radius: 0 0 2px 2px;
-    pointer-events: none;
-  }
-  /* Octave C gets a left divider line */
   .sieve-cell.octave-start {
-    border-left: 1px solid rgba(0, 204, 255, 0.35);
+    border-top: 1px solid rgba(0, 204, 255, 0.30);
+    color: var(--accent2);
   }
   .sieve-cell.active {
     background: var(--accent2);
-    box-shadow: 0 0 12px var(--accent2), inset 0 0 8px rgba(255,255,255,0.3);
+    box-shadow: inset 0 0 6px rgba(255,255,255,0.30);
+    color: var(--bg);
   }
-  .sieve-cell.active::after {
-    background: var(--accent2);
+  .sieve-cell.active.octave-start {
+    color: var(--bg);
   }
-  .sieve-cell.active .sieve-bar {
-    background: var(--accent2);
+
+  /* Note-emanation glow — fully JS-driven via the --glow-opacity custom
+     property so the envelope can match the playing technique:
+       • sustained bow / harmonic   → held at peak with subtle flicker for
+         the full sounding duration, then exponential release
+       • staccato pizz              → no flicker, peak-boosted by velocity,
+         very short release — a punchy snap on the cell
+       • tremolo (C8)               → fast flicker matching the bow rate
+       • gliss (C5/C6/C7)           → smooth hold, no flicker, fast release
+     Brushes can spread ±1–2 cells around a note; the glow stays anchored
+     to the exact cell the MIDI pitch belongs to, so it's the diagnostic
+     for "did the bridge actually emit this cell?" independent of brush
+     bleed or active-sieve state. The ::after layer's box-shadow stays at
+     fixed colour/blur — only opacity is animated, which Chrome composites
+     on the GPU without re-layout. */
+  .sieve-cell {
+    overflow: visible;
   }
-  .sieve-bar {
+  .sieve-cell::after {
+    content: '';
     position: absolute;
-    bottom: 0;
-    left: 0;
-    right: 0;
-    height: 0;
-    background: transparent;
-    transition: height 0.3s;
+    inset: 0;
+    pointer-events: none;
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow:
+      inset 0 0 14px rgba(255, 255, 255, 0.85),
+      0 0 22px rgba(0, 204, 255, 0.85),
+      0 0 44px rgba(0, 204, 255, 0.45);
+    opacity: var(--glow-opacity, 0);
+    will-change: opacity;
   }
-  .sieve-labels {
-    display: flex;
-    gap: 0;
-    margin-top: 3px;
-    height: 14px;
-  }
-  .sieve-labels span {
-    flex: 1;
-    text-align: center;
-    font-size: 11px;
-    font-weight: 700;
-    color: var(--dim);
-    line-height: 14px;
-    letter-spacing: 0.5px;
-  }
-  .sieve-labels span.octave-label {
-    color: var(--accent2);
-  }
-  .sieve-labels span.active { color: var(--accent); }
 
   /* Hidden (JS still writes to these) */
   .log-panel, .gyro-panel, .sequence-panel, .vertices-panel, .complexes-panel, .spell-panel { display: none !important; }
@@ -475,7 +585,7 @@
   /* Permutation display */
   .perm-display {
     display: flex;
-    gap: 4px;
+    gap: 3px;
     margin-top: 2px;
     flex-wrap: nowrap;
     width: 100%;
@@ -483,14 +593,14 @@
   .perm-slot {
     flex: 1;
     min-width: 0;
-    height: 44px;
+    height: 24px;
     background: rgba(10, 10, 15, 0.5);
     border: 1px solid var(--border);
     border-radius: 3px;
     display: flex;
     align-items: center;
     justify-content: center;
-    font-size: 21px;
+    font-size: 12px;
     font-weight: 600;
     color: var(--accent);
     transition: all 0.3s;
@@ -509,41 +619,32 @@
 
   /* === V2 Panels === */
 
-  /* Spell buffer (top-center, transparent) */
+  /* Spell area (top-right, compact, right-aligned to match left column).
+     The persistent .spell-notification is hidden in the redesign — every
+     spell fire pushes a transient .spell-toast into .spell-history (now
+     anchored just below the move-buffer, so toasts pop up and disappear
+     in the same top-right column as the moves log). The DOM node stays
+     so handleSpellEvent's writes don't NPE. */
   .spell-row {
     display: flex;
     flex-direction: column;
     gap: 4px;
-    align-items: center;
+    align-items: flex-end;
+    pointer-events: none;
   }
   .spell-notification {
-    font-size: 18px;
-    font-weight: 700;
-    color: var(--gold);
-    letter-spacing: 3px;
-    text-transform: uppercase;
-    min-height: 22px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    justify-content: center;
-  }
-  .spell-notification.active {
-    animation: spell-flash 1.5s ease-out forwards;
-  }
-  @keyframes spell-flash {
-    0% { color: #fff; text-shadow: 0 0 12px var(--gold), 0 0 24px var(--gold); }
-    100% { color: var(--gold); text-shadow: none; }
+    display: none;
   }
   .spell-buffer {
     display: flex;
-    gap: 10px;
+    gap: 8px;
     flex-wrap: wrap;
-    justify-content: center;
+    justify-content: flex-end;
+    font-size: 16px;
   }
   .spell-buffer-move {
     padding: 0;
-    font-size: 18px;
+    font-size: 16px;
     font-weight: 600;
     background: transparent;
     border: none;
@@ -579,12 +680,12 @@
   .mode-row {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 4px;
     align-items: flex-start;
   }
   .mode-badge {
-    padding: 7px 16px;
-    font-size: 22px;
+    padding: 4px 10px;
+    font-size: 13px;
     font-weight: 700;
     border-radius: 3px;
     letter-spacing: 0.5px;
@@ -645,16 +746,16 @@
     100% { color: var(--gold); background: rgba(255, 204, 0, 0.12); border-color: var(--gold); box-shadow: none; }
   }
   .turn-rate-val {
-    font-size: 22px;
+    font-size: 13px;
     color: var(--dim);
     font-variant-numeric: tabular-nums;
-    min-width: 100px;
-    text-align: right;
+    min-width: 60px;
+    text-align: left;
   }
   .scramble-wrap {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 6px;
     margin-left: auto;
   }
   .scramble-label {
@@ -664,8 +765,8 @@
     letter-spacing: 1px;
   }
   .scramble-bar-outer {
-    width: 150px;
-    height: 10px;
+    width: 90px;
+    height: 7px;
     background: rgba(10,10,15,0.5);
     border: 1px solid var(--border);
     border-radius: 3px;
@@ -679,117 +780,82 @@
     transition: width 0.3s, background 0.3s;
   }
   .scramble-val {
-    font-size: 22px;
+    font-size: 13px;
     font-weight: 600;
     color: var(--text);
-    min-width: 56px;
+    min-width: 36px;
   }
 
-  /* Expression overlay (now in left column) */
-  .expression-panel {
-    background: transparent;
-    padding: 0;
-    border-top: 1px solid var(--border);
-    padding-top: 10px;
-  }
-  .expr-grid {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-  }
-  .expr-item {
+  /* Expression display rows (TILT/SPIN/DEVIATION/SCRAMBLE) — DOM kept so
+     existing JS write-throughs don't crash, but the panel is hidden in the
+     redesign. */
+  .expression-panel { display: none; }
+
+  /* Bottom-right slider rows. Sit transparently over the sieve strip; the
+     slider track + accent + numeric value all use --slider-color (gold) so
+     they remain readable against active sieve cells (which themselves are
+     bright cyan). Font size matches the rotate-toggle buttons (14px). */
+  .br-slider-row {
     display: flex;
     align-items: center;
     gap: 8px;
-    background: transparent;
-    padding: 2px 0;
-  }
-  .expr-label {
-    font-size: 22px;
-    color: var(--dim);
-    text-transform: uppercase;
-    letter-spacing: 1px;
-    flex: 0 0 180px;
-  }
-  .expr-value {
-    font-size: 27px;
-    font-weight: 600;
-    color: var(--accent);
+    font-size: 14px;
+    color: var(--text);
     font-family: monospace;
-    min-width: 90px;
   }
-  .expr-bar-wrap {
+  .br-slider-row label {
+    flex: 0 0 auto;
+    color: var(--text);
+    letter-spacing: 0.5px;
+    min-width: 48px;
+  }
+  .br-slider-row input[type="range"] {
     flex: 1;
-    height: 3px;
-    background: var(--border);
-    border-radius: 2px;
-    overflow: hidden;
-    display: none;
-  }
-  .expr-bar {
-    height: 100%;
-    width: 0%;
-    background: var(--accent2);
-    border-radius: 2px;
-    transition: width 0.1s;
-  }
-  .expr-controls {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    margin-bottom: 10px;
-    max-width: 480px;
-  }
-  .expr-controls button {
-    padding: 9px 20px;
-    font-size: 22px;
-    font-family: monospace;
-    font-weight: 600;
+    min-width: 0;
+    accent-color: var(--slider-color);
     background: transparent;
-    color: var(--accent);
-    border: 1px solid var(--accent);
-    border-radius: 3px;
-    cursor: pointer;
-    letter-spacing: 1px;
-    align-self: flex-start;
   }
-  .expr-controls .smooth-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    font-size: 22px;
-    color: var(--dim);
-  }
-  .expr-controls .smooth-row input[type="range"] {
-    flex: 1;
-    accent-color: var(--accent2);
+  .br-slider-row .slider-val {
+    flex: 0 0 auto;
+    color: var(--slider-color);
+    font-weight: 700;
+    min-width: 40px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
   }
 
-  /* Spell history toast */
+  /* Spell-history toast — top-right, just below the move-buffer + spell-row.
+     Toasts slide in from the right, hold ~1.4 s, then slide back out
+     fading. Stack vertically for rapid-fire spells. Pointer-events off so
+     they never block the cube-rotate / sieve / gizmo cluster underneath. */
   .spell-history {
     position: fixed;
-    top: 60px;
-    right: 16px;
+    top: 50px;
+    right: calc(var(--sieve-strip-w) + 14px);
     z-index: 100;
     display: flex;
     flex-direction: column;
+    align-items: flex-end;
     gap: 4px;
     pointer-events: none;
   }
   .spell-toast {
-    padding: 6px 14px;
-    font-size: 12px;
+    padding: 5px 12px;
+    font-size: 14px;
     font-weight: 700;
     color: var(--bg);
     background: var(--gold);
     border-radius: 4px;
     animation: toast-in 2s ease-out forwards;
     white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(255, 204, 0, 0.35);
+    pointer-events: none;
   }
   @keyframes toast-in {
-    0% { opacity: 1; transform: translateX(0); }
-    70% { opacity: 1; }
-    100% { opacity: 0; transform: translateX(20px); }
+    0%   { opacity: 0; transform: translateX(28px); }
+    14%  { opacity: 1; transform: translateX(0); }
+    70%  { opacity: 1; transform: translateX(0); }
+    100% { opacity: 0; transform: translateX(28px); }
   }
 
   /* No data overlay */
@@ -830,36 +896,20 @@
 
 <canvas id="rolling-score"></canvas>
 <canvas id="cube-canvas"></canvas>
+<canvas id="line-overlay"></canvas>
 
 <div class="spell-history" id="spell-history"></div>
 
-<!-- Top-left: everything that lives on the left edge -->
+<!-- Top-left: title + connect/reset/zero row + mode pills + active K/C cards -->
 <div class="ovl ovl-tl">
   <div class="ovl-section">
     <h1 class="title">XENAKUBE</h1>
     <div class="conn-row">
       <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
-      <div style="display:flex;gap:8px;align-items:center;">
-        <button id="connectBtn">Connect Cube</button>
+      <div class="btn-row">
+        <button id="connectBtn">Connect</button>
         <button id="resetBtnVisible" class="ctrl-btn" title="Re-sync cube (tell it 'you are solved') + reset S4 engine state. Use after physically solving.">Reset</button>
-      </div>
-    </div>
-    <div class="expr-controls">
-      <button id="zeroBtn">Zero Gyro</button>
-      <div class="smooth-row">
-        <label>smooth</label>
-        <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.50">
-        <span id="gyroSmoothVal" style="color:var(--accent2);min-width:28px">0.50</span>
-      </div>
-      <div class="smooth-row">
-        <label>ghost</label>
-        <input type="range" id="ghostSize" min="0.2" max="2.5" step="0.05" value="1.00">
-        <span id="ghostSizeVal" style="color:var(--accent2);min-width:28px">1.00</span>
-      </div>
-      <div class="smooth-row">
-        <label>score</label>
-        <input type="range" id="scoreSpeed" min="60" max="900" step="30" value="360">
-        <span id="scoreSpeedVal" style="color:var(--accent2);min-width:28px">360</span>
+        <button id="zeroBtn" class="ctrl-btn" title="Capture rest pose for engine + visual zero">Zero</button>
       </div>
     </div>
   </div>
@@ -872,16 +922,15 @@
     <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
   </div>
 
-  <!-- Active vertex + complex card (moved from bottom-left) -->
+  <!-- Active K + C cards (only the active pair render; legacy 8-grids hidden). -->
   <div class="active-cards">
     <div class="vertex-grid" id="vertex-grid"></div>
     <div class="complex-grid" id="complex-grid"></div>
   </div>
 </div>
 
-<!-- Bottom-left overlay — state + expression panels stacked above the
-     piano-roll. Sibling of .ovl-tl (NOT a child) so the layout doesn't
-     fight position:fixed + zoom interactions inside the top column. -->
+<!-- Bottom-left: STATE panel + permutation. Expression display rows are
+     hidden in the redesign (DOM kept for legacy JS write-throughs). -->
 <div class="ovl ovl-bl">
   <div class="state-rows">
     <div class="panel-title">State</div>
@@ -932,26 +981,24 @@
     </div>
   </div>
 
-  <div class="expression-panel">
-    <div class="panel-title">Expression</div>
+  <!-- Expression panel — hidden in the redesign. Kept as DOM nodes so the
+       JS that writes #expr-tilt / #expr-spin / #expr-dev / #expr-scramble
+       and the bars don't NPE during gyro updates. -->
+  <div class="expression-panel" aria-hidden="true">
     <div class="expr-grid">
       <div class="expr-item">
-        <div class="expr-label">Tilt</div>
         <div class="expr-value" id="expr-tilt">0.50</div>
         <div class="expr-bar-wrap"><div class="expr-bar" id="expr-tilt-bar"></div></div>
       </div>
       <div class="expr-item">
-        <div class="expr-label">Spin</div>
         <div class="expr-value" id="expr-spin">0.00</div>
         <div class="expr-bar-wrap"><div class="expr-bar" id="expr-spin-bar"></div></div>
       </div>
       <div class="expr-item">
-        <div class="expr-label">Deviation</div>
         <div class="expr-value" id="expr-dev">0.00</div>
         <div class="expr-bar-wrap"><div class="expr-bar" id="expr-dev-bar"></div></div>
       </div>
       <div class="expr-item">
-        <div class="expr-label">Scramble</div>
         <div class="expr-value" id="expr-scramble">0.00</div>
         <div class="expr-bar-wrap"><div class="expr-bar" id="expr-scramble-bar"></div></div>
       </div>
@@ -959,9 +1006,9 @@
   </div>
 </div>
 
-<!-- Top-center: spell buffer + notification (rolling piano-roll lives in
-     #rolling-score, full-viewport background behind cube-canvas) -->
-<div class="ovl ovl-tc">
+<!-- Top-right: spell buffer + spell notification (compact, right-aligned;
+     anchored just left of the sieve strip so it never collides with it). -->
+<div class="ovl ovl-tr">
   <div class="spell-row">
     <div class="spell-buffer" id="spell-buffer"></div>
     <div class="spell-notification" id="spell-notification"></div>
@@ -969,23 +1016,44 @@
   </div>
 </div>
 
-<!-- Top-right: rotate controls + gizmo slot + status -->
-<div class="ovl ovl-tr">
+<!-- Right edge: vertical sieve strip. 49 cells (C2..C6) stacked
+     column-reverse so cell index 0 sits at the bottom. Each cell hosts an
+     inline pitch label that's only filled in for octave-C cells. The sieve
+     strip's vertical extent is exactly the rolling-score's pitch-axis
+     range, so a note of pitch P emerges from cell (P − 36). -->
+<div class="ovl ovl-sieve-right">
+  <div class="sieve-strip" id="sieve-strip"></div>
+</div>
+
+<!-- Bottom-right cluster: rotation gizmo + cam/live/ghost/rotate toggles +
+     smooth/ghost/score sliders. Transparent panel sits OVER the sieve so
+     the bins remain visible (and tickable) through it. Slider track + value
+     colors = --slider-color (gold) for legibility against bright cyan
+     active sieve cells. -->
+<div class="ovl ovl-br">
   <div class="cube-rotate-ctrl" id="rotate-ctrl">
-    <span class="cr-label" style="font-size:9px;color:var(--accent2);font-weight:700;text-transform:uppercase;letter-spacing:1.5px;margin-right:2px">rotate</span>
+    <span class="cr-label">rotate</span>
     <button class="cr-btn active" data-target="camera">cam</button>
     <button class="cr-btn" data-target="live">live</button>
     <button class="cr-btn" data-target="ghost">ghost</button>
     <button class="cr-reset" title="reset selected view">&#x21ba;</button>
   </div>
-  <!-- gizmo canvas is injected here by JS at top:56px right:20px -->
-  <div style="height:210px"></div>
-</div>
-
-<!-- Bottom: sieve strip, full width -->
-<div class="ovl-bottom">
-  <div class="sieve-strip" id="sieve-strip"></div>
-  <div class="sieve-labels" id="sieve-labels"></div>
+  <div class="gizmo-wrap" id="gizmo-wrap"></div>
+  <div class="br-slider-row">
+    <label>smooth</label>
+    <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.50">
+    <span class="slider-val" id="gyroSmoothVal">0.50</span>
+  </div>
+  <div class="br-slider-row">
+    <label>ghost</label>
+    <input type="range" id="ghostSize" min="0.2" max="2.5" step="0.05" value="1.00">
+    <span class="slider-val" id="ghostSizeVal">1.00</span>
+  </div>
+  <div class="br-slider-row">
+    <label>score</label>
+    <input type="range" id="scoreSpeed" min="60" max="900" step="30" value="360">
+    <span class="slider-val" id="scoreSpeedVal">360</span>
+  </div>
 </div>
 
 <!-- Hidden elements kept for JS compatibility -->
@@ -1319,14 +1387,30 @@ const liveViewOffset = new THREE.Quaternion(0, 0, 0, 1);
 const ghostViewOffset = new THREE.Quaternion(0, 0, 0, 1);
 let rotateTarget = 'camera'; // 'camera' | 'live' | 'ghost'
 
-// ---- Rotation Gizmo (separate mini-canvas, bottom-right corner) ----
+// ---- Rotation Gizmo (mini-canvas, mounted inside the bottom-right cluster
+// `.gizmo-wrap` so it sizes proportionally with the cluster instead of being
+// pinned to fixed pixel coordinates). ----
 const gizmoCanvas = document.createElement('canvas');
 gizmoCanvas.width = 200; gizmoCanvas.height = 200;
-gizmoCanvas.style.cssText = 'position:fixed;top:56px;right:20px;width:200px;height:200px;z-index:3;touch-action:none;border-radius:50%;cursor:grab;';
-document.body.appendChild(gizmoCanvas);
+gizmoCanvas.style.cssText = 'touch-action:none;border-radius:50%;cursor:grab;';
+const gizmoMount = document.getElementById('gizmo-wrap') || document.body;
+gizmoMount.appendChild(gizmoCanvas);
 
 const gizmoRenderer = new THREE.WebGLRenderer({ canvas: gizmoCanvas, antialias: true, alpha: true });
 gizmoRenderer.setPixelRatio(window.devicePixelRatio);
+
+// Resize the gizmo's drawing buffer to match the cluster-driven CSS size so
+// the rendered gizmo stays sharp on layout changes (window resize, portrait
+// vs landscape). Without this the canvas internal resolution stays at the
+// initial 200×200 and stretches blurrily on large viewports.
+function resizeGizmo() {
+  const r = gizmoCanvas.getBoundingClientRect();
+  if (r.width > 0 && r.height > 0) {
+    gizmoRenderer.setSize(r.width, r.height, false);
+  }
+}
+window.addEventListener('resize', resizeGizmo);
+requestAnimationFrame(resizeGizmo);
 const gizmoScene = new THREE.Scene();
 const gizmoCamera = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
 gizmoCamera.position.set(3, 2.5, 3);
@@ -1585,13 +1669,39 @@ document.getElementById('zeroBtn').addEventListener('click', () => {
   wsSend({ type: 'zero_gyro' });
 });
 
+// Auto-fit ensures the cube + K/C labels stay visible in any viewport
+// shape. In portrait the canvas is taller than wide, so the horizontal
+// FOV (= 2·atan(tan(fovy/2)·aspect)) shrinks; without auto-fit the cube
+// (radius √3 ≈ 1.73 from origin) overflows the sides on a 1080-wide
+// portrait. We push the camera back conservatively — only outward, never
+// closer — so the user can still wheel-zoom in if they want.
+const FIT_RADIUS = 1.95;     // cube √3 + small buffer for labels
+function fitCameraToAspect(aspect) {
+  const halfFov = camera.fov * Math.PI / 360;
+  const tanHalf = Math.tan(halfFov);
+  const distV = FIT_RADIUS / tanHalf;
+  const distH = FIT_RADIUS / (tanHalf * aspect);
+  const minDist = Math.max(distV, distH);
+  const cur = camera.position.length();
+  if (cur < minDist - 0.01) {
+    camera.position.normalize().multiplyScalar(minDist);
+    if (typeof controls !== 'undefined' && controls) controls.update();
+  }
+}
+
 function resizeCube() {
   const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;   // layout not settled yet
   renderer.setSize(rect.width, rect.height, false);
-  camera.aspect = rect.width / rect.height;
+  const aspect = rect.width / rect.height;
+  camera.aspect = aspect;
   camera.updateProjectionMatrix();
+  fitCameraToAspect(aspect);
 }
 resizeCube();
+// Re-fire on the next paint in case GBCR returned 0 on the synchronous
+// call (replaced-element layout sometimes settles after the first frame).
+requestAnimationFrame(resizeCube);
 window.addEventListener('resize', resizeCube);
 
 const calibratedGyro = new THREE.Quaternion();
@@ -1846,28 +1956,26 @@ for (let i = 0; i < 8; i++) {
 }
 
 const sieveStrip = document.getElementById('sieve-strip');
-const sieveLabelsEl = document.getElementById('sieve-labels');
 const SIEVE_RANGE = 49;
 const sieveCells = [];
 // Black-key semitone offsets (C#, D#, F#, G#, A#)
 const BLACK_KEYS = new Set([1, 3, 6, 8, 10]);
+// Iteration order is C2..C6 (i = 0..48). The strip uses
+// `flex-direction: column-reverse` so the lowest pitch (C2) renders at the
+// bottom and the highest (C6) at the top, matching the rolling-score's
+// pitch axis. Each cell hosts an inline label that's only filled in for
+// octave-C cells (visual scale anchor — non-octave cells stay unlabelled).
 for (let i = 0; i < SIEVE_RANGE; i++) {
   const cell = document.createElement('div');
   const pc = i % 12;
-  const classes = ['sieve-cell'];
-  if (BLACK_KEYS.has(pc)) classes.push('black');
-  if (pc === 0) classes.push('octave-start');
-  cell.className = classes.join(' ');
-  cell.innerHTML = '<div class="sieve-bar"></div>';
+  const baseClasses = ['sieve-cell'];
+  if (BLACK_KEYS.has(pc)) baseClasses.push('black');
+  if (pc === 0) baseClasses.push('octave-start');
+  cell._baseClass = baseClasses.join(' ');
+  cell.className = cell._baseClass;
+  if (pc === 0) cell.textContent = semitoneName(i);
   sieveStrip.appendChild(cell);
   sieveCells.push(cell);
-
-  const lbl = document.createElement('span');
-  if (pc === 0) {
-    lbl.textContent = semitoneName(i);
-    lbl.classList.add('octave-label');
-  }
-  sieveLabelsEl.appendChild(lbl);
 }
 
 const permDisplay = document.getElementById('s-perm');
@@ -2047,10 +2155,8 @@ function updateState(state, move) {
   const activeSet = new Set(state.sieve);
   for (let i = 0; i < SIEVE_RANGE; i++) {
     const isActive = activeSet.has(i);
-    sieveCells[i].className = 'sieve-cell' + (isActive ? ' active' : '');
-    sieveCells[i].querySelector('.sieve-bar').style.height = isActive ? '100%' : '0';
-    const lbl = sieveLabelsEl.children[i];
-    if (lbl) lbl.className = isActive ? 'active' : '';
+    const cell = sieveCells[i];
+    cell.className = cell._baseClass + (isActive ? ' active' : '');
   }
 
   // currentGyro / hasGyro are driven solely by the gyro_tick handler, which
@@ -2287,15 +2393,35 @@ let ROLL_PX_PER_SEC = 360;
 const ROLL_MIN_MIDI     = 36;          // C2 — bottom of cello range
 const ROLL_MAX_MIDI     = 84;          // C6 — top of practical cello range
 const ROLL_PITCH_RANGE  = ROLL_MAX_MIDI - ROLL_MIN_MIDI;   // 48 semitones
-// Pitch-axis insets (CSS px). The canvas itself stays full-viewport so the
+// Pitch-axis insets (CSS px). The canvas stays full-viewport so the
 // background scrolls under everything, but the pitch axis is restricted to
-// the inner rectangle so high notes (~C6) don't render under the title /
-// spell-buffer / cam-controls strip and low notes (~C2) don't render
-// under the sieve piano-roll. Tune if those overlay heights change.
-const ROLL_TOP_INSET_PX    = 70;       // .ovl-tl title + .ovl-tc spell row + .ovl-tr cam strip
-const ROLL_BOTTOM_INSET_PX = 80;       // .ovl-bottom (sieve-strip 52 + 6+10 padding + breathing room)
+// the inner rectangle so high notes (~C6) don't render under the spell row
+// and low notes (~C2) don't render under the bottom-right gizmo cluster.
+// These MUST match the .ovl-sieve-right CSS top/bottom values exactly so
+// each MIDI pitch lines up vertically with its sieve cell.
+const ROLL_TOP_INSET_PX    = 70;
+const ROLL_BOTTOM_INSET_PX = 80;
+// Right-side inset = current sieve-strip width. The "now" line of the
+// rolling score is anchored to the sieve's LEFT edge so notes appear to
+// emerge from their matching pitch bin and scroll left across the cube
+// area. Recomputed each resize from the live element's bounding box, so
+// the proportional sieve width (clamp(72px, 7.5vw, 150px)) drives the
+// score's right-edge inset automatically. Default until first measure
+// matches the clamp's lower bound.
+let ROLL_RIGHT_INSET_CSS_PX = 90;
 const PENDING_MAX_AGE_MS = 45000;      // force-complete notes stuck >45s
-const GLISS_GAP_MS      = 80;          // max same-voice gap to draw a gliss curve
+// Same-voice gap threshold below which two consecutive gliss notes are
+// treated as one continuous slide and joined into a single chain. Bridge
+// emits two distinct slide modes:
+//   • glissOverlap (true slide, same string) — noteon NEW arrives BEFORE
+//     noteoff OLD. The dashboard sees this as gap < 0 → always chains.
+//   • leapStep (cross-string leap, NOT a slide) — clean noteoff → 50 ms
+//     gap (LEAP_GAP_MS in xk_swam.js) → noteon. The dashboard MUST NOT
+//     chain these or every C5 wild-gliss leap would draw as a slant
+//     instead of a clean break.
+// Threshold sits well under the 50 ms leap gap so leaps split the chain,
+// while overlapping (negative-gap) slides always chain.
+const GLISS_GAP_MS      = 25;
 const GLISS_COMPLEXES   = new Set([5, 6, 7]);
 
 // Per-complex colour. Index 0 (= unknown / pre-init / KS) gets a neutral
@@ -2348,24 +2474,40 @@ function resizeRollingScore() {
   rollCanvas.style.height = cssH + 'px';
   rollCanvas.width  = Math.round(cssW * rollDpr);
   rollCanvas.height = Math.round(cssH * rollDpr);
+  // Pull the sieve strip's actual rendered width as the right-edge inset.
+  // Sieve sizing is `clamp(72px, 7.5vw, 150px)` — proportional, so the
+  // measured value tracks layout changes (resize, portrait flip, etc.).
+  const sieveEl = document.querySelector('.ovl-sieve-right');
+  if (sieveEl) {
+    const r = sieveEl.getBoundingClientRect();
+    if (r.width > 0) ROLL_RIGHT_INSET_CSS_PX = r.width;
+  }
 }
 
+// Pitch P sits at the CENTER of sieve cell (P − 36). The strip has 49 cells
+// dividing the inner pitch axis (h − top − bottom) into 49 equal vertical
+// bins, so cell i's center is at top + (48.5 − i) · innerH / 49. Continuous
+// pitches (gliss interpolation) smoothly traverse the bins.
 function midiToY(pitch, h) {
-  // Map [ROLL_MIN_MIDI, ROLL_MAX_MIDI] into the *inner* y range so notes
-  // never paint under the top bar (title / spell-buffer / cam strip) or
-  // the bottom sieve strip. h is canvas.height in device px; the insets
-  // are CSS px → multiply by rollDpr.
   const clamped = Math.max(ROLL_MIN_MIDI, Math.min(ROLL_MAX_MIDI, pitch));
-  const norm = (clamped - ROLL_MIN_MIDI) / ROLL_PITCH_RANGE;
+  const i = clamped - ROLL_MIN_MIDI;
   const topDev    = ROLL_TOP_INSET_PX    * rollDpr;
   const bottomDev = ROLL_BOTTOM_INSET_PX * rollDpr;
   const innerH    = Math.max(1, h - topDev - bottomDev);
-  return topDev + (1 - norm) * innerH;
+  return topDev + (48.5 - i) * innerH / 49;
+}
+
+// Right-edge of the rolling score (the "now" line) is the sieve strip's
+// LEFT edge in device px. Notes painted with x ≥ rightEdge are off-screen
+// behind the sieve and not visible; active notes draw from `x0` to the
+// rightEdge instead of all the way to the canvas's `w`.
+function rollRightEdge(w) {
+  return w - ROLL_RIGHT_INSET_CSS_PX * rollDpr;
 }
 
 function timeToX(tMs, nowMs, w) {
   const dt = nowMs - tMs;
-  return w - (dt / 1000) * ROLL_PX_PER_SEC * rollDpr;
+  return rollRightEdge(w) - (dt / 1000) * ROLL_PX_PER_SEC * rollDpr;
 }
 
 // ============================================================
@@ -2612,10 +2754,11 @@ function buildGlissChains(nowMs, w, h) {
     if (!GLISS_COMPLEXES.has(evt.complex)) continue;
     push(evt, timeToX(evt.onsetMs, nowMs, w), timeToX(evt.offsetMs, nowMs, w), midiToY(evt.pitch, h));
   }
+  const rightEdge = rollRightEdge(w);
   for (const queue of activeMidiNotes.values()) {
     for (const evt of queue) {
       if (!GLISS_COMPLEXES.has(evt.complex)) continue;
-      push(evt, timeToX(evt.onsetMs, nowMs, w), w, midiToY(evt.pitch, h));
+      push(evt, timeToX(evt.onsetMs, nowMs, w), rightEdge, midiToY(evt.pitch, h));
     }
   }
   const chains = [];
@@ -2641,22 +2784,87 @@ function buildGlissChains(nowMs, w, h) {
   return chains;
 }
 
-function drawGlissChain(ctx, chain) {
+// SWAM Cello portamento time per gliss complex, ms-per-semitone (matches
+// CC 5 values the bridge writes in xk_swam.js). Mirrors the constant of
+// the same name used by the white-line endpoint in drawLineOverlay so
+// the leg and the drawn chain plot the SAME pitch curve at every frame.
+const GLISS_PORTAMENTO_MS_PER_SEMITONE = { 5: 50, 6: 80, 7: 115 };
+function _glissChainDur(fromP, toP, complex) {
+  const interval = Math.abs(toP - fromP);
+  const perSemi = GLISS_PORTAMENTO_MS_PER_SEMITONE[complex] || 80;
+  return Math.max(80, Math.min(2000, interval * perSemi));
+}
+// Cubic smoothstep — same ease used by the white triangle leg.
+function _glissEase(t) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t * t * (3 - 2 * t);
+}
+
+// Replay the bridge's pitch trajectory for one gliss chain. Each segment is
+// an in-flight or completed SWAM portamento: { t0, dur, p0, p1 }. Reading
+// pitchAt(t) walks the most-recent segment containing t and applies
+// smoothstep — so a portamento that gets RETARGETED mid-flight by the next
+// noteon (which the bridge does constantly, because MIN_GLISS_SPACING_MS
+// of 200 ms is shorter than most SWAM portamentos) cleanly hands off the
+// current interpolated pitch as the next segment's start, exactly as
+// SWAM's Mono Poly Release portamento would. The result is the audible
+// pitch curve, drawable as a smooth polyline.
+function _glissPitchAt(t, segs) {
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const s = segs[i];
+    if (t >= s.t0) {
+      if (s.dur <= 0) return s.p1;
+      const f = Math.min(1, (t - s.t0) / s.dur);
+      return s.p0 + (s.p1 - s.p0) * _glissEase(f);
+    }
+  }
+  return segs[0].p0;
+}
+function _buildGlissSegments(nodes) {
+  const segs = [];
+  if (nodes.length === 0) return segs;
+  // First note: stationary at p0 (no portamento yet).
+  segs.push({ t0: nodes[0].evt.onsetMs, dur: 0, p0: nodes[0].evt.pitch, p1: nodes[0].evt.pitch });
+  for (let i = 1; i < nodes.length; i++) {
+    const n = nodes[i].evt;
+    const startT = n.onsetMs;
+    // Pitch handed off from the prior portamento at the moment this
+    // noteon arrives — this is what SWAM's portamento engine would itself
+    // be at when retargeted, so the visual curve matches the audio.
+    const pitchAtStart = _glissPitchAt(startT, segs);
+    segs.push({
+      t0: startT,
+      dur: _glissChainDur(pitchAtStart, n.pitch, n.complex),
+      p0:  pitchAtStart,
+      p1:  n.pitch,
+    });
+  }
+  return segs;
+}
+
+function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
   const { complex, color, nodes } = chain;
   if (nodes.length === 0) return;
-  // Gliss factor (0.85) is intentionally larger than the non-gliss base
-  // brush thicknesses so the slide chain reads as the dominant gesture in
-  // dense passages — the whole point of gliss is the contour. With
-  // ROLL_BRUSH_SCALE = 1.4 the resulting stroke is ~1.2 row-heights tall.
+  const segs = _buildGlissSegments(nodes);
   const lineW = bu(0.85);
 
-  // One stroked polyline. For nodes [n0, n1, ..., nN-1]:
-  //   moveTo(n0.x0, n0.y)
-  //   for each pair (ni, ni+1):
-  //     lineTo(min(ni.x1, ni+1.x0), ni.y)   ← horizontal across ni's exclusive region
-  //     lineTo(max(ni.x1, ni+1.x0), ni+1.y) ← slant across the overlap/gap to ni+1's pitch
-  //   lineTo(nN-1.x1, nN-1.y)               ← finish horizontal across the last note
-  // lineJoin='round' smooths every corner, so the chain reads as one fluid stroke.
+  // Sample the audible pitch trajectory across the chain's full X span
+  // and stroke as a polyline. Because pitch is computed from the segment
+  // model (not from per-note flat bodies + slant transitions), the result
+  // is one continuous smoothstep wave through every slide — no sharp
+  // 90° corners between body and transition, no narrow Bezier squeezed
+  // into the bridge's 20 ms overlap window. Sample density of 3 device
+  // px is dense enough that lineJoin: 'round' makes the polyline
+  // visually smooth without bezier overhead.
+  const startX = nodes[0].x0;
+  const endX   = nodes[nodes.length - 1].x1;
+  const span   = Math.max(1, endX - startX);
+  const samplePx = 3 * rollDpr;
+  const numSamples = Math.max(2, Math.ceil(span / samplePx));
+  const pxPerMs = ROLL_PX_PER_SEC * rollDpr / 1000;
+  const rightEdge = rollRightEdge(canvasW);
+
   const strokePath = (dy, w, alpha) => {
     ctx.strokeStyle = color;
     ctx.lineWidth   = w;
@@ -2664,22 +2872,19 @@ function drawGlissChain(ctx, chain) {
     ctx.lineJoin    = 'round';
     ctx.globalAlpha = alpha;
     ctx.beginPath();
-    ctx.moveTo(nodes[0].x0, nodes[0].y + dy);
-    for (let i = 0; i < nodes.length; i++) {
-      const n = nodes[i];
-      const next = nodes[i + 1];
-      if (next) {
-        ctx.lineTo(Math.min(n.x1, next.x0), n.y + dy);
-        ctx.lineTo(Math.max(n.x1, next.x0), next.y + dy);
-      } else {
-        ctx.lineTo(n.x1, n.y + dy);
-      }
+    for (let i = 0; i <= numSamples; i++) {
+      const x = startX + span * i / numSamples;
+      const t = nowMs - (rightEdge - x) / pxPerMs;
+      const p = _glissPitchAt(t, segs);
+      const y = midiToY(p, canvasH);
+      if (i === 0) ctx.moveTo(x, y + dy);
+      else         ctx.lineTo(x, y + dy);
     }
     ctx.stroke();
   };
 
-  // C7 smoke: faint halo strokes above and below the main path. Drawn first
-  // so the main stroke layers over them.
+  // C7 smoke: faint halo strokes above and below the main path. Drawn
+  // first so the main stroke layers over them.
   if (complex === 7) {
     const haloOffset = lineW * 1.2;
     strokePath(-haloOffset, lineW * 0.5, 0.22);
@@ -2723,12 +2928,13 @@ function drawRollingScore() {
     const alpha = 0.55 + 0.45 * Math.min(1, evt.velocity / 110);
     drawNote(rollCtx, evt, x0, x1, y, alpha);
   }
+  const rightEdge = rollRightEdge(w);
   for (const queue of activeMidiNotes.values()) {
     for (const evt of queue) {
       const x0 = timeToX(evt.onsetMs, nowMs, w);
       const y  = midiToY(evt.pitch, h);
       const alpha = 0.7 + 0.3 * Math.min(1, evt.velocity / 110);
-      drawNote(rollCtx, evt, x0, w, y, alpha);
+      drawNote(rollCtx, evt, x0, rightEdge, y, alpha);
     }
   }
 
@@ -2736,22 +2942,490 @@ function drawRollingScore() {
   // is drawn as a single Path2D so junctions are seamless and the line
   // reads as one fluid brush stroke.
   const chains = buildGlissChains(nowMs, w, h);
-  for (const chain of chains) drawGlissChain(rollCtx, chain);
+  for (const chain of chains) drawGlissChain(rollCtx, chain, nowMs, w, h);
 
   requestAnimationFrame(drawRollingScore);
 }
+
+// ---- Sieve-cell emanation glow ---------------------------------------------
+// The glow envelope follows the actual noteon→noteoff window so each cell's
+// pulse "speaks" the technique:
+//   • sustained held note  → glow holds at peak with a subtle flicker for the
+//                            full sounding duration, then exponential release
+//   • staccato pizz        → no flicker, peak-boosted by velocity, short
+//                            release; bright snap on the cell
+//   • tremolo (C8)         → fast flicker matching the bow tremolo rate
+//   • gliss (C5/C6/C7)     → smooth hold, no flicker, fast release
+//
+// `peakBoost` multiplies the velocity-derived base peak (clamped to 1.0).
+// `flickerHz` / `flickerDepth` set the during-sustain modulation (depth 0
+// disables flicker entirely). `releaseMs` is the exp-decay time-constant
+// after noteoff. Profiles per SWAM complex; index 0 = unknown.
+const COMPLEX_GLOW = {
+  0: { flickerHz: 4.0,  flickerDepth: 0.12, peakBoost: 1.00, releaseMs: 380 },
+  1: { flickerHz: 0.0,  flickerDepth: 0.00, peakBoost: 1.45, releaseMs: 130 },  // pizz   — punchy snap
+  2: { flickerHz: 4.5,  flickerDepth: 0.18, peakBoost: 1.00, releaseMs: 420 },  // bow    — breathing cloud
+  3: { flickerHz: 3.0,  flickerDepth: 0.10, peakBoost: 0.95, releaseMs: 600 },  // sust   — long held flat
+  4: { flickerHz: 7.5,  flickerDepth: 0.22, peakBoost: 1.20, releaseMs: 380 },  // harm   — bright twinkle
+  5: { flickerHz: 0.0,  flickerDepth: 0.00, peakBoost: 1.00, releaseMs: 280 },  // gliss  — smooth hold
+  6: { flickerHz: 0.0,  flickerDepth: 0.00, peakBoost: 1.00, releaseMs: 280 },  // gliss
+  7: { flickerHz: 1.5,  flickerDepth: 0.10, peakBoost: 0.95, releaseMs: 350 },  // smoke  — slow waver
+  8: { flickerHz: 13.0, flickerDepth: 0.40, peakBoost: 1.05, releaseMs: 240 },  // trem   — fast bow-rate flicker
+};
+// Shortest perceivable on-state for a near-instant note (bridge can emit
+// noteon→noteoff within a frame for very short pizz). Without this floor
+// a 1-frame note paints, decays, and disappears within the same vsync.
+const GLOW_MIN_VISIBLE_MS = 90;
+// Per-cell glow state. cellGlows.get(i) → { onsetMs, peak, flickerHz,
+// flickerDepth, releaseMs, sustaining, releaseStart, refCount }. refCount
+// tracks how many concurrent voices are holding this cell so the release
+// only kicks in when the last voice lifts.
+const cellGlows = new Map();
+
+function _glowCellIdx(pitch) {
+  if (typeof pitch !== 'number' || !isFinite(pitch)) return -1;
+  return Math.max(0, Math.min(SIEVE_RANGE - 1, (pitch | 0) - 36));
+}
+
+function startGlow(pitch, velocity, complex) {
+  const i = _glowCellIdx(pitch);
+  if (i < 0) return;
+  const profile = COMPLEX_GLOW[complex] || COMPLEX_GLOW[0];
+  const v = Math.max(0, Math.min(127, +velocity || 0)) / 110;
+  // sqrt() for perceptual linearity at low velocities; floor 0.45 so
+  // even a pp note has a visible glow.
+  const peakBase = Math.min(1, 0.45 + 0.55 * Math.sqrt(v));
+  const peak = Math.min(1, peakBase * profile.peakBoost);
+  const now = performance.now();
+  const existing = cellGlows.get(i);
+  if (existing) {
+    existing.peak = Math.max(existing.peak, peak);
+    existing.onsetMs = now;                      // reset flicker phase
+    existing.flickerHz = profile.flickerHz;      // newest voice's profile wins
+    existing.flickerDepth = profile.flickerDepth;
+    existing.releaseMs = profile.releaseMs;
+    existing.sustaining = true;
+    existing.refCount = (existing.refCount || 0) + 1;
+    return;
+  }
+  cellGlows.set(i, {
+    onsetMs: now,
+    peak,
+    flickerHz: profile.flickerHz,
+    flickerDepth: profile.flickerDepth,
+    releaseMs: profile.releaseMs,
+    sustaining: true,
+    releaseStart: 0,
+    refCount: 1,
+  });
+}
+
+function endGlow(pitch) {
+  const i = _glowCellIdx(pitch);
+  if (i < 0) return;
+  const g = cellGlows.get(i);
+  if (!g) return;
+  g.refCount = Math.max(0, (g.refCount || 0) - 1);
+  if (g.refCount > 0) return;
+  if (g.sustaining) {
+    g.sustaining = false;
+    // Defer the release start so the cell stays lit at peak for at least
+    // GLOW_MIN_VISIBLE_MS — covers single-frame staccatos that would
+    // otherwise be inaudible to the eye.
+    const minRelease = g.onsetMs + GLOW_MIN_VISIBLE_MS;
+    g.releaseStart = Math.max(performance.now(), minRelease);
+  }
+}
+
+function clearAllGlows() {
+  cellGlows.clear();
+  for (let i = 0; i < sieveCells.length; i++) {
+    sieveCells[i].style.removeProperty('--glow-opacity');
+  }
+}
+
+function tickGlows() {
+  const now = performance.now();
+  let toDelete = null;
+  for (const [i, g] of cellGlows) {
+    let intensity;
+    if (g.sustaining || now < g.releaseStart) {
+      // Held — peak with optional flicker. Use |sin| so the modulation
+      // never drops below (1 - depth) — a held note shouldn't blink off,
+      // only ripple.
+      const dt = (now - g.onsetMs) / 1000;
+      const flicker = g.flickerDepth > 0
+        ? (1 - g.flickerDepth) + g.flickerDepth * Math.abs(Math.sin(2 * Math.PI * g.flickerHz * dt))
+        : 1;
+      intensity = g.peak * flicker;
+    } else {
+      // Exponential release. tau ≈ releaseMs · 0.7 → ~99% decay at 3·tau.
+      const dt = now - g.releaseStart;
+      const k = Math.exp(-dt / (g.releaseMs * 0.7));
+      intensity = g.peak * k;
+      if (intensity < 0.004) {
+        if (!toDelete) toDelete = [];
+        toDelete.push(i);
+        continue;
+      }
+    }
+    sieveCells[i].style.setProperty('--glow-opacity', intensity.toFixed(3));
+  }
+  if (toDelete) {
+    for (const i of toDelete) {
+      cellGlows.delete(i);
+      sieveCells[i].style.removeProperty('--glow-opacity');
+    }
+  }
+  requestAnimationFrame(tickGlows);
+}
+requestAnimationFrame(tickGlows);
+// ---- /Sieve-cell emanation glow --------------------------------------------
+
+// ---- Triangle leg lines (K → sieve cell, C → sieve cell) -------------------
+// For every active note, two white lines extend from the active K-vertex and
+// its nearest ghost C-vertex out to the left edge of the matching sieve cell.
+// Combined with the existing K↔C 3D line they form a triangle per note;
+// double-stops produce two triangles sharing the K↔C edge. The triangle
+// morphs in real-time:
+//   • K and C positions move as the cube rotates (gyro / view-offset)
+//   • Sieve endpoint moves as the active note's pitch changes
+//   • For C5/C6/C7 gliss: the endpoint smoothly interpolates between
+//     consecutive noteons over GLISS_INTERP_MS so the leg slides cell-to-
+//     cell at SWAM's portamento rate instead of jumping at the discrete
+//     MIDI rate
+//   • Lines are white at full alpha during sustain, fade with the same
+//     exp-release τ as the cell glow after noteoff (lifetime modes a + c
+//     unified — line stays full-bright while held, then decays in lockstep
+//     with the cell glow envelope)
+const lineOverlay = document.getElementById('line-overlay');
+const lineCtx = lineOverlay.getContext('2d');
+let lineDpr = 1;
+
+function resizeLineOverlay() {
+  lineDpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssW = window.innerWidth;
+  const cssH = window.innerHeight;
+  lineOverlay.style.width  = cssW + 'px';
+  lineOverlay.style.height = cssH + 'px';
+  lineOverlay.width  = Math.round(cssW * lineDpr);
+  lineOverlay.height = Math.round(cssH * lineDpr);
+  refreshSieveRect();
+}
+
+// Per-note line state. Mirrors activeMidiNotes' lifecycle but is its own
+// array so we can keep drawing fade-out lines after noteoff (matching the
+// cell-glow release tail). Each entry carries the gliss interpolation
+// parameters so a single line can slide its endpoint between cells.
+const lineNotes = [];
+// SWAM Cello portamento time per gliss complex (CC 5 value, ms-per-semitone).
+// The bridge writes these once at setup (xk_swam.js COMPLEX table); SWAM
+// itself scales the slide duration linearly with the MIDI interval per its
+// docs ("Portamento Time: 0–2000 ms (scaled by MIDI interval)"). So the
+// audible slide for a given (complex, interval) pair is ~ table[complex] ·
+// |toPitch − fromPitch| ms — exactly what we want the visual leg to track.
+// C5 wild gliss = fastest, C7 drift = slowest.
+const PORTAMENTO_MS_PER_SEMITONE = { 5: 50, 6: 80, 7: 115 };
+
+// Cubic smoothstep — the natural ease-in-out curve SWAM Cello's portamento
+// traces. Mirrored exactly by drawGlissChain's _glissEase so the white
+// triangle leg endpoint and the rolling-score chain plot the SAME Y at
+// the same time.
+function easeSlide(t) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t * t * (3 - 2 * t);
+}
+
+function predictGlissDuration(fromPitch, toPitch, complex) {
+  const interval = Math.abs(toPitch - fromPitch);
+  if (interval === 0) return 0;          // same-pitch retrigger → instant
+  const perSemi = PORTAMENTO_MS_PER_SEMITONE[complex] || 80;
+  return Math.min(2000, interval * perSemi);
+}
+
+// Compute the displayed pitch of an in-flight line at time `now`. Used by
+// startLine to pick the most-accurate fromPitch for a continuing gliss
+// (SWAM aborts in-progress slides when a new noteon arrives, retargeting
+// from wherever the audible pitch had reached — we mirror that visually).
+function _displayedPitch(ln, now) {
+  if (ln.animDurMs <= 0) return ln.toPitch;
+  const t = Math.min(1, Math.max(0, (now - ln.animStartMs) / ln.animDurMs));
+  return ln.fromPitch + (ln.toPitch - ln.fromPitch) * easeSlide(t);
+}
+
+// C1 pizzicato is the ONLY complex with a release fade (mirrors the
+// physical pluck — string vibrates briefly after the finger lifts). Fade
+// duration scales with velocity: a fff pluck rings longer than a pp pluck.
+// All other complexes snap the line off the moment noteoff arrives.
+const PIZZ_FADE_MIN_MS = 100;
+const PIZZ_FADE_MAX_MS = 420;
+
+// Find the live (sustaining) gliss line for this voice+complex, if any.
+// For gliss complexes, this presence/absence IS the slide-vs-leap
+// discriminator: a true slide's overlapping noteons mean the previous
+// line is still alive when the new noteon arrives; a leap's clean
+// noteoff has already removed it. No auxiliary tracker needed.
+function _findGlissLine(voice, complex) {
+  for (let i = lineNotes.length - 1; i >= 0; i--) {
+    const ln = lineNotes[i];
+    if (ln.isGliss && ln.voice === voice && ln.complex === complex) return ln;
+  }
+  return null;
+}
+
+// True if any active MIDI note for (voice, complex) is currently sounding.
+// Called from endLine AFTER handleMidiEcho's queue.shift, so it reflects
+// the post-noteoff state — used to decide whether a gliss chain is over.
+function _glissStillSounding(voice, complex) {
+  for (const queue of activeMidiNotes.values()) {
+    for (const evt of queue) {
+      if (evt.voice === voice && evt.complex === complex) return true;
+    }
+  }
+  return false;
+}
+
+function startLine(voice, pitch, velocity, complex, key) {
+  const now = performance.now();
+
+  // === GLISS PATH ===
+  // ONE persistent lineNote per (voice, complex) for the lifetime of the
+  // gliss chain. Each new noteon either RETARGETS that line's slide
+  // (existing line found → it's an overlap = a true slide) or, if no live
+  // line exists, STARTS a fresh one with NO ramp time (no live line means
+  // either the chain's first noteon or a leap with a clean prior noteoff
+  // — both should snap to the new pitch instantly, since there's no
+  // audible portamento).
+  if (GLISS_COMPLEXES.has(complex)) {
+    const existing = _findGlissLine(voice, complex);
+    if (existing) {
+      // Slide — pitch handoff at the currently-displayed value (mirrors
+      // SWAM's portamento-engine retarget: it slides from wherever the
+      // audible pitch was at the moment the new noteon arrived).
+      const fromPitch = _displayedPitch(existing, now);
+      existing.fromPitch  = fromPitch;
+      existing.toPitch    = pitch;
+      existing.animStartMs = now;
+      existing.animDurMs   = predictGlissDuration(fromPitch, pitch, complex);
+    } else {
+      // Leap or chain-start — instant snap, no animation at all.
+      lineNotes.push({
+        isGliss: true,
+        voice, complex,
+        fromPitch: pitch, toPitch: pitch,
+        animStartMs: now, animDurMs: 0,
+        sustaining: true,
+        fadeMs: 0,
+        releaseStartMs: 0,
+      });
+    }
+    return;
+  }
+
+  // === NON-GLISS PATH ===
+  // One lineNote per MIDI noteon; pizz fade only on C1.
+  const v = Math.max(0, Math.min(127, +velocity || 0));
+  const fadeMs = (complex === 1)
+    ? PIZZ_FADE_MIN_MS + (PIZZ_FADE_MAX_MS - PIZZ_FADE_MIN_MS) * Math.min(1, v / 110)
+    : 0;
+  lineNotes.push({
+    isGliss: false,
+    voice, complex, key,
+    fromPitch: pitch, toPitch: pitch,
+    animStartMs: now, animDurMs: 0,
+    sustaining: true,
+    fadeMs,
+    releaseStartMs: 0,
+  });
+}
+
+function endLine(voice, pitch, complex, key) {
+  // === GLISS PATH ===
+  // Drop the persistent lineNote ONLY when the chain has truly ended
+  // (no more same-voice/same-complex notes sounding). A slide's overlap
+  // means one noteoff fires while another noteon is still active, but
+  // the line should keep tracking through the full chain.
+  if (GLISS_COMPLEXES.has(complex)) {
+    if (_glissStillSounding(voice, complex)) return;
+    for (let i = 0; i < lineNotes.length; i++) {
+      const ln = lineNotes[i];
+      if (ln.isGliss && ln.voice === voice && ln.complex === complex) {
+        lineNotes.splice(i, 1);
+        return;
+      }
+    }
+    return;
+  }
+
+  // === NON-GLISS PATH ===
+  // Per-noteon match by `key`. C1 fades; everything else snaps off.
+  for (let i = 0; i < lineNotes.length; i++) {
+    const ln = lineNotes[i];
+    if (!ln.isGliss && ln.key === key && ln.voice === voice && ln.sustaining) {
+      if (ln.fadeMs > 0) {
+        ln.sustaining = false;
+        ln.releaseStartMs = performance.now();
+      } else {
+        lineNotes.splice(i, 1);
+      }
+      return;
+    }
+  }
+}
+
+function clearAllLines() {
+  lineNotes.length = 0;
+}
+
+// Sieve strip rect cached per resize. Cell positions interpolate from the
+// rect alone (cells distribute uniformly via flex), so we don't pay 49
+// getBoundingClientRect calls per frame — just one for the strip on
+// layout changes.
+let _sieveRect = null;
+function refreshSieveRect() {
+  const el = document.querySelector('.ovl-sieve-right');
+  _sieveRect = el ? el.getBoundingClientRect() : null;
+}
+window.addEventListener('resize', resizeLineOverlay);
+requestAnimationFrame(refreshSieveRect);
+
+function sieveCellLeftEdgePos(pitch) {
+  if (!_sieveRect || _sieveRect.height === 0) return null;
+  const clamped = Math.max(36, Math.min(84, pitch));
+  const i = clamped - 36;       // continuous semitone index 0..48
+  return {
+    x: _sieveRect.left,
+    y: _sieveRect.top + (48.5 - i) * _sieveRect.height / 49,
+  };
+}
+
+const _projVec = new THREE.Vector3();
+function projectWorldToScreen(worldVec) {
+  _projVec.copy(worldVec).project(camera);   // NDC: each axis in [-1, 1]
+  return {
+    x: (_projVec.x * 0.5 + 0.5) * window.innerWidth,
+    y: (1 - (_projVec.y * 0.5 + 0.5)) * window.innerHeight,
+  };
+}
+
+const _kLineWorld = new THREE.Vector3();
+const _cLineWorld = new THREE.Vector3();
+const _cTmpWorld  = new THREE.Vector3();
+
+function drawLineOverlay() {
+  const w = lineOverlay.width;
+  const h = lineOverlay.height;
+  lineCtx.clearRect(0, 0, w, h);
+
+  if (lineNotes.length === 0) {
+    requestAnimationFrame(drawLineOverlay);
+    return;
+  }
+
+  // Project active K-vertex and the geometrically-nearest ghost C-vertex.
+  // Mirrors the kcLine logic in animateCube so the 3D K↔C line and the
+  // 2D K→sieve / C→sieve lines all converge at the same K and C points.
+  cubeGroup.updateMatrixWorld(true);
+  ghostGroup.updateMatrixWorld(true);
+  vertexMeshes[currentActiveK].getWorldPosition(_kLineWorld);
+  let bestDist2 = Infinity;
+  for (let c = 0; c < 8; c++) {
+    ghostVertMeshes[c].getWorldPosition(_cTmpWorld);
+    const d2 = _kLineWorld.distanceToSquared(_cTmpWorld);
+    if (d2 < bestDist2) {
+      bestDist2 = d2;
+      _cLineWorld.copy(_cTmpWorld);
+    }
+  }
+  const kScreen = projectWorldToScreen(_kLineWorld);
+  const cScreen = projectWorldToScreen(_cLineWorld);
+
+  const now = performance.now();
+  let toRemove = null;
+
+  lineCtx.lineWidth = 2.2 * lineDpr;
+  lineCtx.lineCap = 'round';
+  lineCtx.lineJoin = 'round';
+
+  for (let li = 0; li < lineNotes.length; li++) {
+    const ln = lineNotes[li];
+
+    // Pizz fade. Other complexes have fadeMs=0 so this branch is a no-op
+    // for them (they were already removed by endLine's splice).
+    let opacity = 1;
+    if (!ln.sustaining) {
+      const dt = now - ln.releaseStartMs;
+      if (dt >= ln.fadeMs) {
+        if (!toRemove) toRemove = [];
+        toRemove.push(li);
+        continue;
+      }
+      const fadeT = dt / ln.fadeMs;
+      opacity = 1 - fadeT * fadeT;            // ease-out quadratic decay
+    }
+
+    // Gliss interpolation with cubic-smoothstep easing — matches a
+    // cellist's physical slide curve (slow grip → mid acceleration →
+    // settle); duration from predictGlissDuration() so the leg's vertical
+    // position matches the audio's portamento at every frame.
+    let pitch = ln.toPitch;
+    if (ln.animDurMs > 0) {
+      const tRaw = (now - ln.animStartMs) / ln.animDurMs;
+      const tClamp = Math.min(1, Math.max(0, tRaw));
+      pitch = ln.fromPitch + (ln.toPitch - ln.fromPitch) * easeSlide(tClamp);
+    }
+
+    const cellPos = sieveCellLeftEdgePos(pitch);
+    if (!cellPos) continue;
+
+    const sx = cellPos.x * lineDpr;
+    const sy = cellPos.y * lineDpr;
+    const kx = kScreen.x * lineDpr, ky = kScreen.y * lineDpr;
+    const cx = cScreen.x * lineDpr, cy = cScreen.y * lineDpr;
+
+    lineCtx.strokeStyle = 'rgba(255, 255, 255, ' + opacity.toFixed(3) + ')';
+
+    // Triangle legs are always STRAIGHT — the curve the user wants lives in
+    // the rolling-score gliss chain (drawGlissChain), not here.
+    lineCtx.beginPath();
+    lineCtx.moveTo(kx, ky);
+    lineCtx.lineTo(sx, sy);
+    lineCtx.stroke();
+
+    lineCtx.beginPath();
+    lineCtx.moveTo(cx, cy);
+    lineCtx.lineTo(sx, sy);
+    lineCtx.stroke();
+  }
+
+  if (toRemove) {
+    for (let i = toRemove.length - 1; i >= 0; i--) {
+      lineNotes.splice(toRemove[i], 1);
+    }
+  }
+
+  requestAnimationFrame(drawLineOverlay);
+}
+resizeLineOverlay();
+requestAnimationFrame(drawLineOverlay);
+// ---- /Triangle leg lines ---------------------------------------------------
 
 function handleMidiEcho(data) {
   if (!data || !data.kind) return;
 
   if (data.kind === 'panic') {
     activeMidiNotes.clear();
+    clearAllGlows();
+    clearAllLines();
     return;
   }
 
   const key = `${data.voice}:${data.pitch}`;
 
   if (data.kind === 'noteon') {
+    startGlow(data.pitch, data.velocity, data.complex | 0);
+    startLine(data.voice, data.pitch, data.velocity, data.complex | 0, key);
     let queue = activeMidiNotes.get(key);
     if (!queue) { queue = []; activeMidiNotes.set(key, queue); }
     queue.push({
@@ -2769,6 +3443,8 @@ function handleMidiEcho(data) {
     if (!queue || queue.length === 0) return;  // stray noteoff (lost UDP noteon) — skip
     const pending = queue.shift();             // FIFO — oldest noteon pairs first
     if (queue.length === 0) activeMidiNotes.delete(key);
+    endGlow(pending.pitch);                    // start cell-glow release
+    endLine(pending.voice, pending.pitch, pending.complex, key);
     finishedMidiNotes.push({
       pitch:    pending.pitch,
       velocity: pending.velocity,
@@ -2789,6 +3465,8 @@ setInterval(() => {
   for (const [key, queue] of activeMidiNotes) {
     while (queue.length > 0 && now - queue[0].onsetMs > PENDING_MAX_AGE_MS) {
       const pending = queue.shift();
+      endGlow(pending.pitch);                  // also release the cell glow
+      endLine(pending.voice, pending.pitch, pending.complex, key);
       finishedMidiNotes.push({
         pitch:    pending.pitch,
         velocity: pending.velocity,
@@ -3126,7 +3804,7 @@ connectBtn.addEventListener('click', async () => {
         activeCube = null;
         cubeStatus.textContent = 'disconnected';
         cubeStatus.className = 'err';
-        connectBtn.textContent = 'Connect Cube';
+        connectBtn.textContent = 'Connect';
         connectBtn.classList.remove('connected');
         connectBtn.disabled = false;
         revertCubeConnectView();

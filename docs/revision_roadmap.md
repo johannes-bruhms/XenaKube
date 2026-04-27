@@ -438,6 +438,199 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 
 **Verification**: land on any non-gliss complex → overlapping turns audibly sustain as a two-string texture rather than each note cutting the previous. Land on C5 / C6 / C7 → gliss phrases still slide (D34 prerequisite preserved via `MONO_POLY_RELEASE` which keeps the single monophonic line the portamento engine needs). The Bow Polyphony selector in the SWAM GUI should visibly jump between option 3 (Double/Hold) and option 1 (Mono Poly Release) as complexes change.
 
+### D52 — Wild gliss slides have no per-event attack; decouple "slide intent" (velocity) from "attack character" via Bow Pressure Accent (CC 18) *(RESOLVED 2026-04-27)*
+
+**Defect** (continuation of the D50 thread): D50 v2 capped slide velocity at 22 to keep portamento engaged (per Velocity → P.MaxTime, raising velocity shrinks portamento time toward zero). At vel 22 SWAM treats slide noteOns as bow continuations — the slide is audible but the *attack moment* is not. Combined with D51's ~60% slide / ~40% leap mix, only the leaps (LEAP_VEL=70) deliver audible attack-events; slides arrive as smooth tone changes. Wild gliss still feels under-articulated even with D49's WILD_MIN_COUNT=8 floor.
+
+**Architectural diagnosis** (carried over from D50 v2 lessons): velocity is overloaded — it carries both "this is a slide" (low vel → max portamento time) and would-be "this slide has attack character" (high vel → audible attack). SWAM's UI provides a dedicated decoupling path: **Expressivity → Bow Pressure Accent**, controlled by CC 18, MIDI-Learned in `xenakube_2.swam`. A brief CC 18 spike at each slide noteOn applies per-event attack pressure with **zero impact on velocity → portamento engagement**.
+
+**Fix** (the deferred D50 v2 follow-up, now landed):
+
+1. **`WILD_GLISS_BPA = 80`** constant — moderate spike value (sexy-move uses 110, u-perm 100). Tunable upward for harder attack character, downward for gentler.
+
+2. **`BPA_RESET_MS = 30`** — schedules CC 18 = 0 reset 30 ms after the spike, well before the next ≥ MIN_GLISS_SPACING_MS = 200 ms gliss event. Spikes cannot stack across slides.
+
+3. **`glissNote(inst, pitch, vel, accent)`** — new optional `accent` arg. When non-zero and `HAS_BOW_PRESS_ACCENT` is true, `ccForce(inst, CC.BOW_PRESS_ACCENT, accent)` snaps CC 18 just before `legatoNoteOverlap` fires the noteOn, then a `scheduleAt(inst, BPA_RESET_MS, …)` Task resets CC 18 to 0.
+
+4. **`glissStep(inst, sourcePitch, targetPitch, minLeap, glissVel, accent)`** — forwards `accent` only on the slide branch (`glissNote`); the leap branch (`leapStep`) ignores it because LEAP_VEL=70 already produces a clear attack on the cross-string note.
+
+5. **`phraseC5`** passes `WILD_GLISS_BPA` as the accent. C6 / C7 omit it and retain their gentle bow-continuation slide character.
+
+6. **Steal safety**: `cancelPhrase` always calls `ccForce(inst, CC.BOW_PRESS_ACCENT, 0)` regardless of whether a reset task was pending. A steal landing between the spike and its scheduled reset cancels the reset Task; without the explicit unconditional clear, CC 18 = 80 would leak into the next voice and produce an unintended initial accent on the new phrase's first noteOn.
+
+**Why CC 18 cleanly avoids the D50 v1 failure mode**: CC 18 doesn't go through SWAM's portamento-time pipeline at all. The Velocity → P.MaxTime control reads only the noteOn velocity byte; CC 18 lands on Expressivity → Bow Pressure Accent, an independent acoustic-modeling parameter. Slide velocity stays at 22 (max portamento time), CC 18 spike adds the attack character. Two orthogonal channels, two orthogonal effects.
+
+**Audible verification**:
+- C5 wild gliss now has audible per-slide attack moments alongside the existing leap attacks. The ~60/40 slide/leap mix from D51 reads as ~100% attacks instead of ~40%.
+- C6 ord gliss / C7 drift gliss unchanged — they keep their continuous-bow slide character.
+- Sexy-move and u-perm BPA spikes (their existing 110 / 100 spikes via `setupComplex`) still fire normally — the `cancelPhrase` clear runs once per voice, not on every CC 18 write, so the spell-level accents are unaffected.
+
+**Tunables**:
+- `WILD_GLISS_BPA = 80` — headline knob. Raise to push wild gliss attacks harder; lower for gentler character. Stays within 0–127.
+- `BPA_RESET_MS = 30` — reset latency. Increase only if the next gliss event ever lands closer than the current 200 ms spacing (D45) — at that point a longer reset risks lingering pressure into the next slide.
+
+**Lessons (kept for future-me)**:
+- When two effects share a single MIDI byte (here velocity → both slide-engagement and attack-character), and the SWAM UI exposes a separate parameter for one of them, wiring the dedicated parameter is almost always cleaner than tuning the overloaded one. D50 v1 → D50 v2 → D52 walked exactly this path: tried to tune velocity (broke portamento), retreated to a conservative velocity (no attack), then added the dedicated parameter (both work).
+- Steal-clear unconditional, not just when a reset task exists. Cheap insurance; prevents a one-line regression in `cancelPhrase` from silently re-introducing a leak that's audible only on rapid voice steals.
+
+---
+
+### D51 — Leap-alternation strict N=1 reduces wild gliss audible attack density; relax to N=2 *(RESOLVED 2026-04-27)*
+
+**Defect** (continuation of D50 thread): D48's strict "every leap immediately followed by a slide" rule shifts the slide/leap distribution to ~67%/33% (Markov stationary). Combined with SWAM's MPR mode where slides at vel-18 are bow continuations (~no audible attack) and leaps at vel-70 are discrete attacks, only ~33% of events register as audible attack-events vs ~50% pre-D48. User: "twice as many notes / density" pre-D48.
+
+**Fix**: relax the leap-alternation rule from N=1 (strict) to N=2 (allow up to 2 consecutive leaps before forcing a slide). New constant `MAX_CONSECUTIVE_LEAPS = 2`. `glissStep` condition changed from `inst.lastWasLeap && !sameString(...)` to `(inst.consecutiveLeapCurrent | 0) >= MAX_CONSECUTIVE_LEAPS && !sameString(...)`. Phrase anchor no longer seeds the counter — `inst.consecutiveLeapCurrent = 0` at phrase start so the first event after the anchor is fully natural. The dramatic anchor → leap opening that was part of pre-D48 wild character returns. The egregious 3+ leap chains the user originally complained about ("consecutive non-gliss notes") are still prevented.
+
+**Markov shift**:
+- N=1: ~67% slides, ~33% leaps. ~33% audible attacks.
+- N=2: states {0, 1 prev leap}. From 0 leaps: P(slide)=P(leap)=0.5. From 1 leap: P(slide)=P(leap)=0.5 (still natural, since 1 < N). From 2 leaps: forced slide. Stationary works out to ~60% slides, ~40% leaps. ~40% audible attacks.
+- Pre-D48: ~50% slides, ~50% leaps. ~50% audible attacks.
+
+So N=2 doesn't fully restore pre-D48 density, but moves halfway there. Combined with D50 v2 (slide vel 22 instead of 18), D49 (count floor 8 instead of 1), and D52 (Bow Pressure Accent on every slide noteOn), the perceived density and per-event audibility improve materially without breaking portamento.
+
+**Telemetry**: `GLISS RUN FAIL` log threshold updated from `> 1` to `> MAX_CONSECUTIVE_LEAPS`. Runs of 1 or 2 consecutive leaps are normal; only 3+ trigger the FAIL log (only happens when `nudgeToSameString` returns null at extreme range corners).
+
+**Tunable**: `MAX_CONSECUTIVE_LEAPS = 2` is the headline knob.
+- N=1 (strict): original D48, every leap forces slide.
+- N=2 (current): balanced, allows leap pairs.
+- N=3+: looser, more leap-clusters; risks reintroducing the "consecutive non-gliss notes" bug.
+
+---
+
+### D50 — Wild gliss slide velocity tuning *(v1 ATTEMPTED + REVERTED 2026-04-27, v2 RESOLVED 2026-04-27)*
+
+**Defect**: D48 leap-alternation produced ~67% slides at vel 18, which SWAM's MPR treats as bow continuations (no audible re-attack). User: "twice as many notes / density" pre-D48 — perceived attack rate roughly halved.
+
+**v1 attempt (REVERTED same day)**: `WILD_GLISS_VEL = 55` based on the wrong hypothesis that SWAM portamento engages on overlap alone (with velocity only controlling bow attack intensity). User report after listening: "the vst is just playing straight notes with consecutive leaps, with absolutely no portamento of any kind." Reverted in full.
+
+**Root cause of v1 failure (discovered via user-shared SWAM screenshots)**: `docs/swam-menu-screenshots/swam-advanced-midi-menu.png` shows SWAM Cello's Advanced→MIDI menu with **"Portamento Control: Velocity (P.MaxTime)"** selected. Slide noteOn velocity directly scales the portamento time toward zero. The original `GLISS_VEL = 18` sat near the bottom of that scale (max portamento time); vel 55 shrunk portamento time enough that slides became audibly indistinguishable from discrete note changes. The screenshots were the missing piece — the SWAM reference docs (`docs/swam_cello_reference.md`) didn't surface this dependency clearly.
+
+**v2 fix (current implementation)**: cautious bump to `WILD_GLISS_VEL = 22`. Just 4 units above default; should keep portamento time near max while adding marginal slide-target audibility. If 22 still preserves portamento and is too tame, can creep to 24, 26, etc. — listening test confirms.
+
+**The deeper fix (now landed as D52, see entry above)**: Bow Pressure Accent (CC 18, MIDI-Learned in `xenakube_2.swam` to SWAM Expressivity → Bow Pressure Accent). Brief CC 18 spikes on each slide noteOn add audible per-event attack emphasis with **zero impact on velocity → portamento engagement**, decoupling "slide intent" (velocity → SWAM portamento) from "attack character" (bow pressure spike). D50 v2's `WILD_GLISS_VEL = 22` is retained as the conservative slide velocity; D52 carries the attack character on top. If wild gliss still feels under-articulated, raise `WILD_GLISS_BPA = 80` rather than `WILD_GLISS_VEL` — the latter would re-trigger the v1 portamento collapse.
+
+**Lessons (kept for future-me)**:
+- SWAM domain knowledge requires verification *against the actual SWAM UI* before tuning parameters whose values look "extreme" (like vel 18). The reference doc (`docs/swam_cello_reference.md`) covers the canonical CC mappings but doesn't always document plugin-internal coupling like Velocity → P.MaxTime.
+- When a tuning fix breaks something else (here: vel bump broke portamento), the root cause discovery often comes from inspecting the plugin UI, not the bridge code. User-shared screenshots saved this debugging session.
+- Decouple where possible: per-event attack character should be its own parameter (Bow Pressure Accent CC 18), not shared with the slide-intent signal (velocity). SWAM's design supports this — the bridge wired it as **D52** the same day this entry's "deferred" note was written.
+
+---
+
+### D49 — Wild gliss (C5) sometimes produces a single gliss because face envelope's isSingle collapses count to 1 *(RESOLVED 2026-04-26)*
+
+**Defect** (user report 2026-04-26 after D48 v2 landed): "i am still getting sometimes just a single gliss for a 'wild gliss' which is unacceptable. 'wild gliss' by definition cannot be 'wild' if it's a single gliss, and xenakis never treated it as such either. at first, i thought maybe when c5 is paired with a k-vertex with a D=1.0 or otherwise low might influence the gliss frequency/density, but it does not seem to be the case. i had a D=1.5 produce several rapid wild gliss, while sometimes a C5 with a K-vertex with D=2.5 produce only two gliss. does the turn rate (t/s) affect the density?"
+
+**Trace**:
+- `phraseC5` had `var requestedCount = Math.max(1, faceShapedCount(inst, 4, 9, true));`
+- `faceShapedCount(inst, 4, 9, true)`: when `inst.faceEnvProfile.isSingle` is true (faces with envelope ∈ {pluck, stab, drone} → U, B, D, R, D', B'), returns 1 unconditionally. Otherwise returns `phraseCount(inst, 4, 9)` possibly multiplied by countMult (burst face = 1.8).
+- `phraseCount(inst, 4, 9)` scales by intensity density (`INTENSITY_MAP[intensity].density`: 0.6–1.7) and K-vertex density (`dMult = clamp(0.6 + inst.density × 0.25, 0.6, 1.8)`).
+
+So C5 paired with one of the 6 isSingle faces → `requestedCount = max(1, 1) = 1` → anchor + 1 glissStep = 2 audible notes = 1 audible glissando. The user's observation `D=1.5 → many gliss / D=2.5 → 2 gliss` mapped onto face envelope, not D — face was the dominant variable. K-vertex density was being overridden by the isSingle face collapse.
+
+**Why this is wrong**: wildness is C5's *complex identity*, not something the face can soften. Pluck/stab/drone face envelopes are about *articulation shape* (short percussive vs sustained) and they already apply `durationBias` (short for pluck/stab, long for drone) and `releaseMult` (drone gets long release). They should not also collapse the salvo down to a single event — that's a different musical decision (timbre/articulation vs density) and reduces wild gliss to non-wild for half the cube.
+
+**Fix**: new `WILD_MIN_COUNT` constant (initial value 4, bumped same session through 6 → 8 after listening tests still felt under-dense); `phraseC5` uses `Math.max(WILD_MIN_COUNT, faceShapedCount(inst, 4, 9, true))`. Current value is **8**. Wildness now defies the isSingle collapse and any low-intensity floor. Pluck face on C5 = a short percussive *salvo* of glissandi (8+ events packed into a short durationBias-shrunk window) instead of a single isolated slide. Drone face on C5 = a long sustained salvo (8+ events spread across a durationBias-stretched window). The face still shapes the salvo's *envelope* via velCurve and durationBias; it just can't reduce its event count below wild.
+
+For non-isSingle faces, the floor only kicks in when intensity + K-D would otherwise produce <8 events (e.g., `p` intensity + low D). High-D + high-intensity wild gliss is unaffected — `phraseCount` returns rrand(4–11ish) which routinely exceeds the floor at high intensity, and the burst face countMult (1.8) pushes it higher.
+
+**Turn-rate question (also user-asked)**: turn rate currently sets `state.regime` ('contemplative' / 'conversational' / 'burst') which is consumed by `REGIME_EXPR_RAMP_MULT` (CC 11 ramp speed) and `REGIME_ATTACK_MULT` (attack ramp speed), and by `phraseC2`'s `hi = state.regime === "burst" ? 6 : 5` density boost. Regime does NOT modulate gliss complex event count. Could be wired in as a future regime-density coupling for burst-mode wild gliss extra density, but not necessary to address the floor problem.
+
+**Audible verification**:
+- Wild gliss on any face produces ≥8 events. With D51 leap-alternation tolerance N=2, that's ~5 audible glissandi per phrase plus interspersed leaps — very wild.
+- Pluck face C5: short percussive salvo of glissandi (was: single anchor + slide).
+- Drone face C5: long sustained salvo (was: single anchor + slide stretched over duration).
+- Stab face C5: accented short salvo with hot first note (`accent-first` velCurve still applied).
+- High-D + ff intensity: still maximally dense (8–11+ events from natural phraseCount, with burst face countMult pushing higher; `glissSchedule` clips when MIN_GLISS_SPACING_MS × N exceeds the phrase tail).
+
+**Tunable**: `WILD_MIN_COUNT = 8` is the headline knob. Raise for even denser wild salvos; lower with caution — values below ~6 risk re-introducing the "single isolated slide on isSingle face" feel that motivated this fix. `glissSchedule` still truncates the count if MIN_GLISS_SPACING_MS × N can't fit in the phrase tail (so very short stolen-phrase voices clip below the floor naturally).
+
+---
+
+### D48 — Wild gliss contains "several non-gliss notes in a row" because back-to-back leaps slip through `glissStep` *(RESOLVED v2 2026-04-26 after revert + clarification + re-implementation)*
+
+**Defect** (user report 2026-04-26): "wild gliss should ONLY contain glissandi. large leaps are allowed, but upon making a leap, it should be the start of a new glissando. currently, that is not the case — sometimes wild gliss contains several notes in a row that are not gliss."
+
+**Mechanism**: `phraseC5` schedules `glissStep` calls every ≥200 ms (D45 spacing). Each `glissStep` evaluates `sameString(source, target)` and dispatches either `glissNote` (overlap → SWAM portamento → audible slide) or `leapStep` (noteOff → 50 ms gap → noteOn → discrete note change, **no slide**). For C5 with `MIN_LEAP = 8` and full cello range `pickPitch` (`register: { lo:36, hi:89 }`), random pitch transitions frequently cross strings — and after a leap the next `pickPitch` outcome is also often cross-string from the leap target, producing a chain of discrete leap notes with no slide content between them.
+
+**v1 attempt (REVERTED 2026-04-26 same day)**: enforce the user's stated rule literally — "every leap (and the phrase anchor) is immediately followed by a slide." Implementation:
+- `nudgeToSameString(sourcePitch, preferTarget, minLeap)` helper picks a pitch on one of source's strings, ≥ minLeap from source, prefer-direction toward the random target. Always picked the lowest-indexed string from `CELLO_STRINGS` when source sat on multiple strings.
+- `glissStep` checks `inst.lastWasLeap && !sameString(...)` and replaces target with the nudge before dispatch.
+- `inst.lastWasLeap = inst.glissExpected` seeded at phrase start in `handleVoice` so the first event is forced to slide.
+- `consecutiveLeapMax` telemetry promoted to `GLISS RUN FAIL` if back-to-back leap slipped past the nudge.
+
+**v1 user report**: "after whatever you just did, the wild gliss only performs a single gliss. i really liked everything about what it was doing before, just wanted to rectify the incorrect behavior. now it is basically lobotomized." Suspected cause: the always-pick-lowest-indexed-string behavior of `nudgeToSameString` biased trajectory toward the lower strings in the multi-string overlap zones (50–55 = C/G/D; 57–62 = G/D/A), narrowing C5's pitch range to feel monotone. Reverted in full.
+
+**Clarification round** (user follow-up 2026-04-26, with concrete example): "to answer your question, i don't want to be so specific in order to stay faithful to xenakis' stochastic spirit, but basically every note in 'wild gliss' should be gliding to or from somewhere. so to give a singular possibility of an example would be like, [it begins with a gliss down from a note, which gliss back up to another note, leaps to a much higher note but begins gliss down immediately, leaps back up again, only to gliss down immediately to another note, then gliss back up from that note]."
+
+The example confirms the intended rule precisely: every note has a slide relationship (source or target). Anchor → slide. Slide → slide. Leap → forced slide on leap-target's string. Leap allowed but always leads into a new slide. Same logic as v1 — the user did want the literal rule. The "lobotomized" perception was specifically about the trajectory narrowing, not about the rule itself.
+
+**v2 fix (current implementation)**: same logic as v1 with one refinement aimed at the trajectory issue.
+
+1. **`nudgeToSameString` candidate-string shuffle**. Collects all `CELLO_STRINGS` entries that contain `sourcePitch`, Fisher-Yates shuffles them, then runs the two-pass directional search across the shuffled order. Multi-string sources (50–55, 57–62 overlap zones) now distribute their nudge target across all valid strings instead of always defaulting to the lowest-indexed one. Trajectory broadens accordingly.
+
+2. **`glissStep` post-leap branch** (unchanged from v1). Before the same-string dispatch, check `inst.lastWasLeap && !sameString(sourcePitch, p)`. If true, call `nudgeToSameString(sourcePitch, p, minLeap)` and replace `p` with the result (when non-null).
+
+3. **`lastWasLeap` state machine** (unchanged from v1). After a slide, clears `lastWasLeap` and resets `consecutiveLeapCurrent`. After a leap, sets `lastWasLeap = true` and increments `consecutiveLeapCurrent`. `consecutiveLeapMax = max(prev, current)` tracks the longest run.
+
+4. **Phrase-start seed** (unchanged from v1). `inst.lastWasLeap = inst.glissExpected` ensures the first `glissStep` after the anchor is forced to slide — the user's example confirmed the anchor should be followed by a slide ("it begins with a gliss down from a note").
+
+5. **D48 invariant** (per CLAUDE.md Recurring-Bug Discipline). `scheduleRelease`'s natural-end task examines `inst.consecutiveLeapMax`. If `> 1`, promotes to `GLISS RUN FAIL inst N CX face=F slides=S leaps=L consecLeapMax=M dur=D`. Only happens when `nudgeToSameString` returned null at extreme cello-range corners.
+
+**Audible verification**:
+- C5 wild-gliss matches the user's example trajectory: anchor → slide → (possibly more slides or a leap) → if leap, immediately new slide on leap-target's string → continues. Every leap punctuates the start of a new gliss run.
+- The wild character (frequent dramatic leaps, wide pitch range) is preserved because leaps fire freely on any natural cross-string `pickPitch` outcome.
+- Multi-string source pitches no longer cluster trajectory on one string — the candidate-string shuffle broadens the slide target distribution.
+- C6 sieve gliss (`MIN_LEAP = 1`) and C7 drift gliss (small intervals): no audible change. Most pitch transitions are within-string for sieve walks / small drifts.
+
+**Lessons learned (kept for future-me)**:
+- The user's stated rule was correct on first telling; v1 failed not because the rule was wrong but because of an implementation quirk (lowest-indexed-string bias) that produced an unintended trajectory narrowing. The takeaway isn't "don't enforce literal rules" — it's "audit any tie-breaker that might bias output distributions before shipping."
+- When a user reports a perceived regression with strong language ("lobotomized"), reverting to gather more info is correct — but be specific about *which* aspect of the design is suspect, so the re-attempt can target the actual cause rather than guessing across a wide design space.
+
+---
+
+### D47 — Sustained phrases lack expression fluidity; per-phrase 3-stage envelope flattens into a uniform hump-then-sag *(RESOLVED 2026-04-26 — Phase 1)*
+
+**Defect** (user report 2026-04-25): "the phrases lack certain fluidity… i would like a gradually increasing or decreasing expression that transcends individual notes. i think currently, each note gets a cc11 value and there's just a flat ramp time between every note, but i would like a gradually increasing or decreasing expression."
+
+The user's mental model was slightly off (CC 11 is per-voice, not per-note — `stepVelScale` shapes per-note MIDI velocity but CC 11 has always been per-voice), but the *audible problem* was real: every phrase had the same envelope silhouette regardless of K-vertex, complex, face, or path. `scheduleExprEnvelope` ramps to `peak × env.attack` immediately, peaks at 25% of duration, sags to `peak × env.sustain` at 70%. The 3-stage shape is identical phrase to phrase; only the absolute heights vary by intensity / face envelope coefficients. Audibly: "each phrase has its own little swell," never "this phrase is a long line approaching its peak." Sustained-bowed complexes (C2 cloud, C3 hovering flat, C8 trem) suffered most — their character relies on continuous bow control over time.
+
+**Root cause**: the 3-stage envelope was front-loading every phrase's peak at 25% then drifting downward. Even when the K-dynamic (`inst.peakExpr` from `INTENSITY_MAP`) correctly raised the ceiling, that ceiling was hit too early to serve as a *directional target* the listener could anticipate. The K-dynamic became a transient peak, not a destination or origin.
+
+**Fix (Phase 1 of multi-phase rework)**: replace the 3-stage envelope, *for sustained multi-note complexes only* (C2, C3, C4, C8), with a single linear ramp across the full phrase duration. Direction (cresc / dim) comes from the face envelope.
+
+1. **`schedulePhraseArc(inst, peakExpr, dir, durMs)`** — `ccForce` snaps CC 11 to start value (`peakExpr × ARC_FLOOR` for cresc, `peakExpr × ARC_CEIL` for dim); a single `rampCC` walks the rest. Voice steal cancels the ramp via existing `cancelPhrase → cancelCCRamp(CC.EXPRESSION)` plumbing — no new steal handling needed. `REGIME_EXPR_RAMP_MULT` still applies (contemplative stretches the arc, burst tightens it).
+
+2. **`phraseArcDirection(inst)`** — face envelope dispatch. `swell` (L, F, F') → cresc; `fade` (U', L') → dim; `burst` (R') → dim; `pluck`/`stab`/`drone` (isSingle) → null (caller falls back to `scheduleExprEnvelope`). Yields a natural 3 cresc / 3 dim split across the 6 multi-note faces, self-balancing without hand-tuning the FACE_SIGNATURES table.
+
+3. **Scope dispatch in `handleVoice`**: `ARC_COMPLEXES = {2, 3, 4, 8}` gates the new path. Gliss complexes (C5/C6/C7) skip — slide trajectory already owns the phrase contour. C1 pizz skips — single one-shot, no arc. Single-note faces (isSingle envelopes) on otherwise-arc-eligible complexes also fall back — one note doesn't need a contour.
+
+4. **Tunables**: `ARC_FLOOR = 0.30`, `ARC_CEIL = 1.00` (fractions of `inst.peakExpr`). Headline knob is `ARC_FLOOR` — raise if cresc-start feels too quiet (kills SWAM's bow excitation at low expr values), lower if swell range feels compressed.
+
+5. **D47 invariant** (per CLAUDE.md Recurring-Bug Discipline). The arc is a silent-failure surface: a regression in another helper writing CC 11 mid-phrase would silently cancel the ramp with no audible bug report. `inst.phraseArcDir` / `phraseArcStart` / `phraseArcEnd` stash the intent at schedule time; `scheduleRelease`'s natural-end task asserts `ccCache[CC.EXPRESSION]` reached `phraseArcEnd` within ±8 (~6%). On miss: `ARC FAIL inst N CX face=F dir=cresc landed=L want=W off=O dur=D`. On hit: `inst N CX arc=cresc 38->127 dur=2.50`. Stolen voices clear `phraseArcDir` via the next voice's snapshot — only natural ends reach the assertion.
+
+**Why faceEnvelope and not the alternatives** (full discussion in `docs/research_notes.md` § Phrase Dynamic Arcs):
+
+- **Tetra-orbit parity** rejected: already spent on `harmonicsForC4` (V1+even = OCT, V1+odd = OCT_5TH, V2+even = OCT_5TH, V2+odd = CTRL); doubling onto expression direction tangles two unrelated mappings on the same axis. Performers can't perceive orbit parity directly mid-performance.
+- **Sexy-move toggle** (regime flip) rejected as sole driver: sexy-move already has two jobs (V1↔V2 path toggle + bow-pressure accent ping); a third job couples path and dynamic so they can never be decoupled. Exploratory non-CFOP play wouldn't trigger it for long stretches. Loses face-identity reinforcement.
+- **Sexy-move coin flip** rejected outright: random direction strips both per-face predictability AND per-regime semantics (less Xenakian, more dice).
+- **Face envelope** chosen: clean 3 cresc / 3 dim split across multi-note faces; reinforces Temporal Identity directly (L vs L' now differ in dynamic *direction*, not just motion / articulation); performer agency through face choice; Phase 2 chain detection layers naturally on top.
+
+**Steal balance (why no protective hold)**: the user observed that cresc-cut-short and dim-cut-short are symmetric — across a stream of turns, half of each truncation type. They average to natural breath, not a bug. So `schedulePhraseArc` ramps over the full duration without an early-peak hold; truncation is a feature.
+
+**Audible verification**:
+- Turn L (swell, sustained articulation): hear a long bow-pressure swell building toward the K-dynamic over the full phrase, instead of a quick swell-to-25%-then-sag.
+- Turn L' (fade, release articulation): inverse — fade from K-dynamic back to soft over the full phrase.
+- Same K-vertex on different faces produces audibly different *shapes*, not just different *peaks*.
+- C2 cloud / C3 hovering / C8 trem benefit most — continuous bow control is their character.
+- C5/C6/C7 gliss unchanged — slide trajectory was the dominant gesture there.
+- C1 pizz unchanged — one-shot, no arc.
+
+**Tradeoff (acknowledged)**: faceEnvelope is *deterministic per face* — after enough playing, L always swells and U' always fades. The detail (pitch via K_i, timbre via C_i, K-dynamic level, regime tempo, double-stops, sieve walk) still varies, so phrases are never identical, but the *direction* is predictable. This is the right tradeoff for an instrument with a forward model.
+
+**Phase 2 (deferred — adaptive multi-turn arc chaining)**: the user wants phrase shapes that span multiple turns ("ONE crescendo/diminuendo THROUGH the four materials") without becoming a limiting factor. Design captured: when consecutive same-direction face-envelope voices arrive within a tight gap (~< 1 s onset-to-onset), the new voice's CC 11 starts where the previous ended instead of restarting at floor. Arcs *emerge* organically from coherent face-envelope sequences; break naturally on opposite-direction face, isSingle face, or pause. Reuses entire Phase 1 envelope code — only adds chain-state tracking (`state.lastVoiceEndMs`, `state.lastArcDir`, `state.lastArcCC11`). See `docs/todo.md` and `docs/research_notes.md` § Phrase Dynamic Arcs for full spec.
+
+---
+
 ### D46 — Cross-string gliss puts SWAM into a half-engaged portamento state that doesn't match the audible leap *(RESOLVED 2026-04-24)*
 
 **Defect** (user report): even after D42–D45 cleaned up the bridge-side gliss path, some C5 wild-gliss phrases still played as leaps instead of slides. The user accepted the leaps musically — but observed that SWAM's GUI didn't reflect them properly, suggesting the MIDI wasn't being interpreted the way the bridge intended.

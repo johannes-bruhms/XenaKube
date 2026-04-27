@@ -374,3 +374,72 @@ Without these, rapid repetitions sound mechanical. The ±15% range is small enou
 ### Solve Arc
 
 Scramble factor as macro parameter: scramble 1.0 (start) = pressed bowing near bridge, heavy vibrato, tense. Scramble 0.0 (solved) = clean bow position, steady, pure tone. The solve IS the musical resolution — a decrescendo from noise to clarity.
+
+## Phrase Dynamic Arcs (Phase 1 — D47, 2026-04-26)
+
+### The fluidity problem
+
+The pre-D47 expression envelope (`scheduleExprEnvelope`) ramped CC 11 in three fixed stages: `peak × env.attack` immediately, `peak × env.peak` at 25% of duration, `peak × env.sustain` at 70%. Per-note MIDI velocity was independently shaped by `stepVelScale` (cresc / dim / accent-first / fade per face envelope), so the *content inside* a phrase varied in dynamic, but the *bow-pressure / expression arc* of every phrase had the same hump-then-sag silhouette regardless of K-vertex, complex, or face. Audibly: "each phrase has its own little swell," never "this phrase is a long line approaching its peak." Sustained-bowed complexes (C2 cloud, C3 hovering flat, C8 trem) suffered most because their character relies on continuous bow control over time.
+
+User report (2026-04-25): "the phrases lack certain fluidity… i would like a gradually increasing or decreasing expression that transcends individual notes."
+
+### The Phase 1 fix — face-envelope-driven cresc / dim per phrase
+
+Replace the 3-stage envelope, *for sustained multi-note complexes only* (C2, C3, C4, C8), with a single linear ramp across the full phrase duration:
+
+- **swell faces** (L, F, F') → **cresc**: CC 11 starts at `peakExpr × ARC_FLOOR` (0.30) and walks to `peakExpr × ARC_CEIL` (1.00) over the full duration.
+- **fade faces** (U', L') → **dim**: CC 11 starts at `peakExpr × ARC_CEIL` and walks down to `peakExpr × ARC_FLOOR`.
+- **burst face** (R') → **dim**: the iterative flurry reads as energy releasing rather than accumulating; pairs naturally with R-stab as the right-pan percussive family.
+- **isSingle envelopes** (pluck/stab/drone) → no arc — the face collapses the phrase to one note via `faceShapedCount`, so directionality is moot. Falls back to `scheduleExprEnvelope`.
+- **gliss complexes** (C5/C6/C7) → no arc — the slide trajectory already owns the phrase's contour. Falls back to `scheduleExprEnvelope`.
+- **null face** (non-face moves: half-turns, diagram advance) → falls back to `scheduleExprEnvelope`.
+
+`peakExpr` is the K-dynamic ceiling already baked from `INTENSITY_MAP[intensity].expr × pathScale × ENV_PROFILE[envelope].peakMult` in `handleVoice`. So *cresc TO K-dynamic* and *dim FROM K-dynamic* are the literal endpoints, not approximations.
+
+### Why faceEnvelope and not the alternatives
+
+Three drivers were considered before settling on faceEnvelope:
+
+1. **Tetra-orbit parity** (even=cresc, odd=dim). Mathematically perfect 50/50 split, deterministic per S4 element. Rejected because (a) tetra-orbit is already spent on `harmonicsForC4` (V1+even = OCT, V1+odd = OCT_5TH, V2+even = OCT_5TH, V2+odd = CTRL); doubling it onto expression direction tangles two unrelated mappings on the same axis. (b) Performers can't easily perceive orbit parity mid-performance — it's derived from S4 history rather than directly from the move just turned. The forward model (the cube's *predictability*) suffers.
+
+2. **Sexy-move toggle** (each sexy-move flips a global cresc↔dim regime). Performative and natural to the CFOP solving rhythm — sexy-moves are F2L pair insertions, structural beats. Rejected as the *sole* driver because (a) sexy-move already has two jobs (V1↔V2 path toggle + bow-pressure accent ping); a third job couples path and dynamic so they can never be decoupled. (b) Exploratory non-CFOP play may not produce sexy-moves for long stretches, leaving direction frozen. (c) Loses face-identity reinforcement entirely. Worth revisiting later as an *amplifier* on top of faceEnvelope (a global polarity-flip overlay) rather than a replacement. The coin-flip variant was rejected outright — random direction strips both per-face predictability AND per-regime semantics, leaving binary noise without form (less Xenakian, more dice).
+
+3. **Face envelope** (chosen). Counts cleanly across the multi-note faces: 3 swell (L, F, F') + 2 fade (U', L') + 1 burst (R'→dim) = **3 cresc / 3 dim**, self-balancing without hand-tuning. Reinforces Temporal Identity directly — L and L' now differ in dynamic *direction* (swell vs fade), making the primed/unprimed pair audible as a dynamic mirror in addition to the existing motion / articulation contrast. Performers gain compositional agency — choosing swell-heavy vs fade-heavy face sequences becomes a deliberate move.
+
+The acknowledged tradeoff: faceEnvelope is *deterministic per face*. After enough playing, L always swells and U' always fades — there's no surprise in the *direction*. The detail (pitch via K_i, timbre via C_i, K-dynamic level, regime tempo, double-stops, sieve walk) still varies, so the phrase is never the same twice. This is the right tradeoff for an instrument with a forward model.
+
+### Steal balance — why no protective hold
+
+A naive concern about cresc-to-K is that the loudest moment lands at the *end* of the phrase, vulnerable to voice steal: a fast turn cuts the climax just before it sounds. The user's observation rebutted this cleanly: across a stream of turns, half are cresc and half are dim. Cresc-cut-short loses its climax; dim-cut-short loses its decay tail. Both feel like natural breath — the truncations are symmetric, and across enough turns the effect averages out musically. So `schedulePhraseArc` ramps over the *full* duration without an early-peak hold; truncation is a feature, not a bug.
+
+### Multi-turn arcs (Phase 2 design — not yet implemented)
+
+User question (2026-04-26): "ideally i want these phrase shapes to take place through multiple turns… ONE crescendo/diminuendo THROUGH the four materials, but i'm not sure how that would work and i'm not sure how to set that up so that it doesn't become a limiting factor."
+
+The "non-limiting" constraint rules out spell-bounded arcs (sexy-move opens, sexy-move closes — too coarse and decoupled from the face being turned) and count-bounded arcs (every N turns is one arc — N is arbitrary, has no musical meaning). The deepest answer is **adaptive chaining**: arcs *emerge* from coherent face-envelope sequences without any new spell, counter, or trigger.
+
+**The rule** (Phase 2 spec): if a new voice arrives within a tight onset-to-onset window (~< 1.0 s) of the previous voice AND its face envelope produces the *same arc direction*, the new voice's CC 11 starts at *wherever the previous voice ended* (carried via `state.lastArcCC11`) instead of restarting at `ARC_FLOOR`. The arc continues until either (a) the next turn's face envelope has the opposite direction, (b) the gap exceeds the window, or (c) the next turn is an isSingle face (pluck/stab/drone — natural caesuras break chains).
+
+Concretely, the user's example `[K6-C3][K7-C4][K5-C7][K2-C3]`: whether this is one continuous arc, two short arcs, or four independent phrases depends entirely on **which face produced each turn** and **how tightly they were spaced**. If the four turns were L F F' L (all swell, all <1 s apart), one continuous cresc spans them — each voice's K-dynamic varies (K6, K7, K5, K2 each have their own peak height) but the expression line passes through them rather than restarting. If they were L F D L', the arc breaks at D (stab-isSingle) and resumes after.
+
+**Why this satisfies "non-limiting":**
+- Default behavior is unchanged — single voices use the per-phrase Phase 1 arc.
+- Chains form only under specific organic conditions; most playing won't trigger them.
+- Performer breaks chains trivially — any opposite-direction face, any isSingle face, any pause.
+- No max chain length, but natural breakers occur often enough in normal play that arcs of 8+ would be rare and *deliberate*.
+- The Phase 2 change reuses the entire Phase 1 envelope code — only the start value carries over. ~30 lines of additional state, zero new spells, zero performer overhead.
+
+**Two design choices to settle when Phase 2 lands:**
+- Onset-to-onset gap window (start with 1.0 s, tune from listening).
+- Does R' burst chain into its preceding swell (forming a Bartók-arch cresc-into-burst-into-dim) or break the chain (treating burst as accent caesura)? Lean *chain-and-flip*: R' continues the previous swell-cresc into its own burst-dim, producing one arch shape across both phrases.
+
+### Implementation surface
+
+Phase 1 (this entry):
+- `max/xk_swam.js`: `ARC_FLOOR` / `ARC_CEIL` / `ARC_COMPLEXES` constants; `phraseArcDirection(inst)` and `schedulePhraseArc(inst, peakExpr, dir, durMs)` helpers; dispatch in `handleVoice` choosing arc vs legacy 3-stage envelope per `(complexType, faceEnvelope)`; `inst.phraseArcDir` / `phraseArcStart` / `phraseArcEnd` instance fields; natural-end FAIL telemetry in `scheduleRelease` (`ARC FAIL` / per-phrase `arc=cresc 38->127` log).
+- `CLAUDE.md` Bridge Invariants table gains a D47 row and Mapping Cheatsheet bullet.
+
+Phase 2 (deferred):
+- `state.lastVoiceEndMs`, `state.lastArcDir`, `state.lastArcCC11` for chain tracking.
+- `schedulePhraseArc` reads carry-over startVal when chain conditions met.
+- Telemetry: per-chain log line summarising chain length, total arc range, breaker reason.

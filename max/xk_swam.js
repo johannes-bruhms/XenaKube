@@ -392,6 +392,25 @@ function makeInstance(id) {
 		glissLeapCount: 0,
 		glissExpected: false,
 
+		// D48 leap-alternation telemetry. Every leap (and the phrase anchor)
+		// must be followed by a same-string slide; lastWasLeap is the state
+		// machine glissStep reads to decide whether to nudge the target onto
+		// source's string. consecutiveLeapMax records the longest run of
+		// back-to-back leaps in the phrase — only > 1 when nudgeToSameString
+		// returned null at extreme range corners. scheduleRelease's offT
+		// promotes to "GLISS RUN FAIL" when maxRun > 1.
+		lastWasLeap: false,
+		consecutiveLeapCurrent: 0,
+		consecutiveLeapMax: 0,
+
+		// D47 phrase-arc telemetry. schedulePhraseArc stashes the intent;
+		// scheduleRelease's natural-end task asserts ccCache[CC.EXPRESSION]
+		// reached phraseArcEnd within ±8. phraseArcDir = null means no arc
+		// is pending (legacy 3-stage envelope path or never-armed).
+		phraseArcDir: null,    // 'cresc' | 'dim' | null
+		phraseArcStart: 0,
+		phraseArcEnd: 0,
+
 		// KS sync guard
 		ksForceCount: 0,
 		forceKS: false,
@@ -686,6 +705,12 @@ function cancelPhrase(inst, preserveLegatoTail) {
 
 	cancelCCRamp(inst, CC.EXPRESSION);
 
+	// D52 — clear any in-flight Bow Pressure Accent spike whose scheduled
+	// reset task got cancelled above. Without this, a steal mid-spike could
+	// leak CC 18 = 80 into the next voice, producing an unintended initial
+	// accent on the new phrase's first noteOn.
+	if (HAS_BOW_PRESS_ACCENT) ccForce(inst, CC.BOW_PRESS_ACCENT, 0);
+
 	if (preserveLegatoTail && inst.activeNotes.length > 0) {
 		var tail = inst.activeNotes[inst.activeNotes.length - 1];
 		for (var j = 0; j < inst.activeNotes.length - 1; j++) {
@@ -719,11 +744,22 @@ function scheduleRelease(inst, dur) {
 		if (inst.glissExpected) {
 			var slides = inst.glissOverlapCount | 0;
 			var leaps  = inst.glissLeapCount    | 0;
+			var maxRun = inst.consecutiveLeapMax | 0;
 			if (slides + leaps < 1) {
 				log("GLISS FAIL inst " + inst.id + " C" + inst.activeComplex +
 				    " face=" + (inst.faceEnvelope || "-") +
 				    " motion=" + (inst.faceMotion || "-") +
 				    " slides=0 leaps=0 dur=" + dur.toFixed(2));
+			} else if (maxRun > MAX_CONSECUTIVE_LEAPS) {
+				// D48 + D51 — leap-run exceeded MAX_CONSECUTIVE_LEAPS despite
+				// the post-leap nudge. Only happens when nudgeToSameString
+				// returned null (source at extreme of every string with no
+				// minLeap headroom in either direction). If frequent, narrow
+				// pickPitch's C5 register or lower MIN_LEAP.
+				log("GLISS RUN FAIL inst " + inst.id + " C" + inst.activeComplex +
+				    " face=" + (inst.faceEnvelope || "-") +
+				    " slides=" + slides + " leaps=" + leaps +
+				    " consecLeapMax=" + maxRun + " dur=" + dur.toFixed(2));
 			} else {
 				log("inst " + inst.id + " C" + inst.activeComplex +
 				    " face=" + (inst.faceEnvelope || "-") +
@@ -731,6 +767,36 @@ function scheduleRelease(inst, dur) {
 				    " dur=" + dur.toFixed(2));
 			}
 			inst.glissExpected = false;
+		}
+
+		// D47 phrase-arc invariant assertion. Phrase ran to natural end
+		// without being stolen, so the rampCC chain had the full duration
+		// to walk from phraseArcStart to phraseArcEnd. ccCache[CC.EXPRESSION]
+		// should be at phraseArcEnd within tolerance — the last task in the
+		// rampCC chain wrote it via ccForce. Mismatch > 8 of 127 (~6%) means
+		// either the duration was too short for any rampCC step to land
+		// (15 ms tickMs floor) or some external CC.EXPRESSION write
+		// intervened (60 Hz expression modulator, manual override, regression
+		// in another helper). Stolen voices clear inst.phraseArcDir via the
+		// new voice's snapshot/dispatch in handleVoice, so this branch only
+		// runs on natural ends.
+		if (inst.phraseArcDir) {
+			var landed = inst.ccCache[CC.EXPRESSION];
+			if (landed == null) landed = 0;
+			var off = Math.abs(landed - inst.phraseArcEnd);
+			if (off > 8) {
+				log("ARC FAIL inst " + inst.id + " C" + inst.activeComplex +
+				    " face=" + (inst.faceEnvelope || "-") +
+				    " dir=" + inst.phraseArcDir +
+				    " landed=" + landed + " want=" + inst.phraseArcEnd +
+				    " off=" + off + " dur=" + dur.toFixed(2));
+			} else {
+				log("inst " + inst.id + " C" + inst.activeComplex +
+				    " arc=" + inst.phraseArcDir +
+				    " " + inst.phraseArcStart + "->" + landed +
+				    " dur=" + dur.toFixed(2));
+			}
+			inst.phraseArcDir = null;
 		}
 
 		var offT = new Task(function() {
@@ -770,6 +836,52 @@ function scheduleExprEnvelope(inst, peakExpr, env, durMs) {
 	scheduleAt(inst, sustainAt, function() {
 		rampCC(inst, CC.EXPRESSION, Math.round(peakExpr * env.sustain), sMs);
 	});
+}
+
+// D47 — face envelope → arc direction. Returns 'cresc' / 'dim' / null.
+// Null means caller falls back to scheduleExprEnvelope (isSingle envelopes
+// resolve to one note, so an arc is moot; null face has no envelope to read).
+// Burst is treated as dim — the iterative flurry reads as energy releasing
+// rather than accumulating. R' is the only burst face under the current
+// FACE_SIGNATURES; revisit if the table grows.
+function phraseArcDirection(inst) {
+	var env = inst.faceEnvelope;
+	if (!env) return null;
+	if (env === 'swell') return 'cresc';
+	if (env === 'fade')  return 'dim';
+	if (env === 'burst') return 'dim';
+	return null;
+}
+
+// D47 — phrase-spanning linear CC 11 ramp. Replaces scheduleExprEnvelope's
+// 3-stage attack/peak/sustain shape with a single sweep from ARC_FLOOR ×
+// peakExpr to ARC_CEIL × peakExpr (cresc) or vice versa (dim). ccForce snaps
+// to startVal so the new voice starts at the intended dynamic instead of
+// inheriting the previous voice's tail; rampCC walks the rest. Voice steal
+// cancels the ramp via cancelPhrase → cancelCCRamp(CC.EXPRESSION) — the new
+// voice's snapshot overwrites phraseArcDir before its own scheduleRelease
+// fires, so the FAIL telemetry only triggers on natural ends. REGIME ramp
+// multiplier still applies so contemplative regime stretches the arc and
+// burst regime tightens it.
+function schedulePhraseArc(inst, peakExpr, dir, durMs) {
+	var rm = REGIME_EXPR_RAMP_MULT[state.regime] || 1.0;
+	var rampMs = Math.max(60, Math.round(durMs * rm));
+	var lo = clamp(Math.round(peakExpr * ARC_FLOOR), 0, 127);
+	var hi = clamp(Math.round(peakExpr * ARC_CEIL),  0, 127);
+	var startVal = (dir === 'cresc') ? lo : hi;
+	var endVal   = (dir === 'cresc') ? hi : lo;
+
+	ccForce(inst, CC.EXPRESSION, startVal);
+	rampCC(inst, CC.EXPRESSION, endVal, rampMs);
+
+	inst.phraseArcDir   = dir;
+	inst.phraseArcStart = startVal;
+	inst.phraseArcEnd   = endVal;
+
+	log("inst " + inst.id + " phraseArc dir=" + dir +
+	    " face=" + (inst.faceEnvelope || "-") +
+	    " start=" + startVal + " end=" + endVal +
+	    " dur=" + Math.round(durMs) + "ms");
 }
 
 // ================================================================
@@ -919,6 +1031,89 @@ var FIRST_GLISS_MS = 150;
 // event because its ideal spacing exceeds the floor anyway).
 var MIN_GLISS_SPACING_MS = 200;
 
+// D49 — wild gliss (C5) hard floor on event count. Wild is the complex's
+// identity; even when the face envelope is isSingle (pluck/stab/drone, which
+// collapses faceShapedCount to 1) or the intensity is low (rrand floor of 2
+// from phraseCount at p intensity), C5 must still emit at least this many
+// glissStep events so the phrase reads as a salvo rather than a single
+// anchor → slide pair. Anchor + WILD_MIN_COUNT events = WILD_MIN_COUNT + 1
+// audible notes; with D48 leap-alternation that's at least
+// ceil(WILD_MIN_COUNT/2) audible glissandi. glissSchedule still truncates if
+// the phrase duration is too short to fit the count at MIN_GLISS_SPACING_MS;
+// typical 1-3 s phrases fit 4-9 events comfortably. Raise if user wants
+// even denser wild salvos; lower with caution (3 may not feel wild on
+// pluck-face short durations).
+var WILD_MIN_COUNT = 8;
+
+// D52 — wild gliss (C5) bow pressure accent. SWAM Cello's Expressivity →
+// Bow Pressure Accent slider is MIDI-Learned to CC 18 in the user's preset
+// (already used by sexy-move and u-perm spells for transient pressure
+// accents). Spiking CC 18 just before each slide noteOn applies a per-event
+// pressure accent that SWAM hears as a fresh bow attack — without touching
+// velocity (which would shrink portamento time per Velocity → P.MaxTime,
+// the failure mode of D50 v1). Decouples slide intent (vel) from attack
+// character (BPA spike), so wild gliss gets audible per-slide attacks while
+// portamento stays fully engaged.
+//
+// Spike value 80 is moderate (sexy-move uses 110, u-perm 100); 30 ms reset
+// returns to 0 well before the next ≥200 ms gliss event so spikes don't
+// stack. cancelPhrase forces CC 18 = 0 on steal so a spike whose reset
+// task got cancelled can't bleed into the next voice. Used by C5 wild
+// gliss only — C6/C7 keep their gentle bow-continuation slide character.
+var WILD_GLISS_BPA = 80;
+var BPA_RESET_MS   = 30;
+
+// D50 v2 — wild gliss (C5) slide-target velocity. SWAM Cello's Advanced→MIDI
+// menu has "Portamento Control: Velocity (P.MaxTime)" selected, which means
+// the slide noteOn's velocity directly scales the portamento time — high vel
+// shrinks portamento time toward zero, so a vel-bump that looks like "soft
+// audible attack" actually kills the slide entirely. The original GLISS_VEL
+// = 18 sits at the bottom of that scale, giving max portamento time. This
+// re-attempt nudges the slide vel only 4 units up to see whether slides stay
+// audibly engaged at vel 22 while gaining a tiny bit of attack character.
+// If portamento still works at 22, we can creep up further (24, 26, ...) to
+// find SWAM's threshold. If 22 already breaks portamento, drop back to 18.
+//
+// More surgical alternative for adding slide audibility (not yet wired):
+// Bow Pressure Accent (CC 18, currently mapped but unused) — sends a brief
+// pressure spike per noteOn without touching velocity. SWAM's Expressivity
+// → Bow Pressure Accent is at 0.0 default; raising it via CC 18 on each
+// slide noteOn would add per-event attack emphasis with zero impact on
+// portamento. See docs/revision_roadmap.md D50 v2 follow-ups.
+var WILD_GLISS_VEL = 22;
+
+// D51 — leap-alternation tolerance. D48 enforced strict N=1 (every leap
+// immediately followed by a slide), which produced the user's stated rule
+// but cost the perceived attack density of pre-D48 leap-clusters: post-D48
+// the Markov stationary distribution gave only ~33% leaps (the events with
+// audible attacks at vel 70), down from ~50% pre-D48. User reports D48
+// "lobotomized" the wild gliss density. Relaxing tolerance to N=2 allows
+// leap → leap → forced-slide patterns alongside leap → slide, restoring
+// some leap-cluster density while still preventing the egregious 3+ leap
+// chains that originally read as "consecutive non-gliss notes."
+//
+// Phrase anchor no longer seeds the counter as 1 — first event after the
+// anchor is fully natural (could be a dramatic leap-from-anchor opening,
+// which the user's original wild character relied on).
+var MAX_CONSECUTIVE_LEAPS = 2;
+
+// D47 (Phrase Dynamic Arcs, Phase 1) — sustained multi-note complexes
+// (C2/C3/C4/C8) replace the legacy 3-stage attack/peak/sustain CC 11 envelope
+// with a single linear ramp across the full phrase duration. Direction
+// (cresc / dim) comes from the face envelope: swell → cresc TO the K-dynamic,
+// fade/burst → dim FROM the K-dynamic. ARC_FLOOR is the soft endpoint as a
+// fraction of inst.peakExpr (the K-dynamic ceiling already baked from
+// INTENSITY_MAP × path × env peakMult); ARC_CEIL is the loud endpoint. Tune
+// ARC_FLOOR upward if the cresc-start feels too quiet (kills SWAM's bow
+// excitation at low expr values) or downward if the swell range feels
+// compressed. pluck/stab/drone faces (isSingle) and gliss complexes
+// (C5/C6/C7) keep their existing envelope path — single notes don't have an
+// arc, gliss already owns its own contour. See CLAUDE.md § Bridge Invariants
+// and docs/research_notes.md § Phrase Dynamic Arcs.
+var ARC_FLOOR = 0.30;
+var ARC_CEIL  = 1.00;
+var ARC_COMPLEXES = { 2: true, 3: true, 4: true, 8: true };
+
 function legatoNoteOverlap(inst, pitch, vel, overlapMs) {
 	var oldNotes = inst.activeNotes.slice();
 	noteOn(inst, pitch, vel);
@@ -940,8 +1135,23 @@ function legatoNote(inst, pitch, vel) {
 }
 
 var GLISS_VEL = 18;
-function glissNote(inst, pitch) {
-	legatoNoteOverlap(inst, pitch, GLISS_VEL, GLISS_OVERLAP_MS);
+// `vel` overrides GLISS_VEL when provided — used by C5 wild gliss (D50 v2)
+// to bump slide-target velocity slightly above the default while staying
+// well under SWAM's Portamento Control (Velocity → P.MaxTime) threshold
+// that would shrink portamento time to zero. C6/C7 omit it and get default.
+// `accent` (D52) spikes CC 18 (Bow Pressure Accent) just before the noteOn
+// for a per-event attack character without touching velocity. Reset to 0
+// after BPA_RESET_MS so subsequent events aren't affected.
+function glissNote(inst, pitch, vel, accent) {
+	if (accent && HAS_BOW_PRESS_ACCENT) {
+		ccForce(inst, CC.BOW_PRESS_ACCENT, accent);
+	}
+	legatoNoteOverlap(inst, pitch, vel || GLISS_VEL, GLISS_OVERLAP_MS);
+	if (accent && HAS_BOW_PRESS_ACCENT) {
+		scheduleAt(inst, BPA_RESET_MS, function() {
+			ccForce(inst, CC.BOW_PRESS_ACCENT, 0);
+		});
+	}
 }
 
 // D46 — string-crossing geometry.
@@ -975,6 +1185,47 @@ function sameString(p1, p2) {
 		if (p1 >= s.open && p1 <= s.hi && p2 >= s.open && p2 <= s.hi) return true;
 	}
 	return false;
+}
+
+// D48 — pick a pitch on one of `sourcePitch`'s strings, ≥ minLeap semitones
+// from source, prefer direction toward `preferTarget` so the random contour
+// intent isn't reversed. Used by glissStep to enforce the user's mental model:
+// "every note in wild gliss should be gliding to or from somewhere" — every
+// leap (and the phrase anchor) must be followed by a same-string slide.
+//
+// When source sits in a multi-string overlap zone (50–55: C/G/D; 57–62:
+// G/D/A), the candidate strings are shuffled so trajectory isn't biased
+// toward the lowest-indexed string. This broadens the gliss target
+// distribution and keeps wild gliss from clustering on one string.
+//
+// Returns null only when source is at the extreme of every string it sits on
+// with no minLeap headroom in either direction (extremely rare in cello range).
+function nudgeToSameString(sourcePitch, preferTarget, minLeap) {
+	var preferUp = preferTarget >= sourcePitch;
+
+	var candidates = [];
+	for (var i = 0; i < CELLO_STRINGS.length; i++) {
+		var s = CELLO_STRINGS[i];
+		if (sourcePitch >= s.open && sourcePitch <= s.hi) candidates.push(s);
+	}
+	if (candidates.length === 0) return null;
+
+	for (var k = candidates.length - 1; k > 0; k--) {
+		var j = Math.floor(Math.random() * (k + 1));
+		var tmp = candidates[k]; candidates[k] = candidates[j]; candidates[j] = tmp;
+	}
+
+	for (var pass = 0; pass < 2; pass++) {
+		var dir = (pass === 0) ? (preferUp ? 1 : -1) : (preferUp ? -1 : 1);
+		for (var ci = 0; ci < candidates.length; ci++) {
+			var cs = candidates[ci];
+			var lo, hi;
+			if (dir > 0) { lo = sourcePitch + minLeap; hi = cs.hi; }
+			else         { lo = cs.open;               hi = sourcePitch - minLeap; }
+			if (hi >= lo) return lo + Math.floor(Math.random() * (hi - lo + 1));
+		}
+	}
+	return null;
 }
 
 // Cross-string leap velocity (medium-articulated, distinct from GLISS_VEL=18
@@ -1043,15 +1294,36 @@ function enforceLeap(sourcePitch, targetPitch, minLeap) {
 // reach target on this string, GUI shows residual portamento state without
 // the audible slide" failure mode. Both counters feed the D42 invariant
 // (totalEvents = slides + leaps must be ≥ 1 per gliss-complex voice).
+// D48 + D51: leap-alternation with tolerance. After MAX_CONSECUTIVE_LEAPS
+// consecutive leaps, the next cross-string outcome is nudged to same-string
+// to force a slide — caps leap-clusters while still allowing short leap
+// runs that contributed to pre-D48 wild-density character. With N=2, runs
+// of 1 or 2 leaps are natural; 3+ would-be runs trigger the nudge.
+// `glissVel` (D50 v2) overrides the default GLISS_VEL for the slide branch
+// only — passed by C5 wild gliss for slight slide audibility. C6/C7 omit it.
+// `accent` (D52) is forwarded to glissNote for per-slide bow pressure
+// accent — passed by C5 to give each slide an audible attack moment.
+// Leap branch ignores it (LEAP_VEL=70 already produces a clear attack).
 // Returns the actual (post-coercion) pitch so callers can chain.
-function glissStep(inst, sourcePitch, targetPitch, minLeap) {
+function glissStep(inst, sourcePitch, targetPitch, minLeap, glissVel, accent) {
 	var p = enforceLeap(sourcePitch, targetPitch, minLeap);
+	if ((inst.consecutiveLeapCurrent | 0) >= MAX_CONSECUTIVE_LEAPS && !sameString(sourcePitch, p)) {
+		var nudged = nudgeToSameString(sourcePitch, p, minLeap);
+		if (nudged != null) p = nudged;
+	}
 	if (sameString(sourcePitch, p)) {
-		glissNote(inst, humanPitch(p));
+		glissNote(inst, humanPitch(p), glissVel, accent);
 		inst.glissOverlapCount = (inst.glissOverlapCount | 0) + 1;
+		inst.lastWasLeap = false;
+		inst.consecutiveLeapCurrent = 0;
 	} else {
 		leapStep(inst, p);
 		inst.glissLeapCount = (inst.glissLeapCount | 0) + 1;
+		inst.lastWasLeap = true;
+		inst.consecutiveLeapCurrent = (inst.consecutiveLeapCurrent | 0) + 1;
+		if (inst.consecutiveLeapCurrent > (inst.consecutiveLeapMax | 0)) {
+			inst.consecutiveLeapMax = inst.consecutiveLeapCurrent;
+		}
 	}
 	return p;
 }
@@ -1342,9 +1614,19 @@ function phraseC4(inst, vel, dur) {
 // has time to actually engage portamento between events — without the
 // floor, dense short phrases collapsed into fast leaps. D42: face envelope
 // scales phrase density via faceShapedCount but may not zero it.
+//
+// D49: hard floor of WILD_MIN_COUNT events regardless of face envelope or
+// intensity. Pre-D49 `Math.max(1, ...)` honored faceShapedCount's isSingle
+// collapse (pluck/stab/drone → 1) and its low-intensity floor — wild gliss
+// on a stab face produced a single anchor → slide pair, audibly "1 glissando"
+// which by user definition is not wild. Wildness is the complex's identity;
+// the face's envelope can shape how the salvo sits in time (pluck = short
+// percussive salvo, drone = long sustained salvo via durationBias) but cannot
+// reduce the count below what reads as wild. The face's expressive shape
+// still applies via durationBias / velCurve / releaseMult.
 function phraseC5(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var requestedCount = Math.max(1, faceShapedCount(inst, 4, 9, true));
+	var requestedCount = Math.max(WILD_MIN_COUNT, faceShapedCount(inst, 4, 9, true));
 	var MIN_LEAP = 8;
 	var lastPitchRef = { p: pickPitch(5, inst) };
 
@@ -1352,6 +1634,15 @@ function phraseC5(inst, vel, dur) {
 	var tailEnd = Math.max(FIRST_GLISS_MS + 200, durMs * 0.92);
 	var times = glissSchedule(requestedCount, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
 	var count = times.length;
+
+	// Anchor seed: pre-load consecutiveLeapCurrent to MAX_CONSECUTIVE_LEAPS
+	// so the first glissStep is forced to slide. Wild gliss must always
+	// start with a slide (matching ord gliss / C6) — anchor → slide is the
+	// "always begins with a gliss" guarantee. Subsequent events are natural
+	// (slides or leaps up to MAX_CONSECUTIVE_LEAPS in a row, then forced
+	// slide). Without this seed, the first event could be a random leap and
+	// the user would hear "anchor + leap target sustaining" with no gliss.
+	inst.consecutiveLeapCurrent = MAX_CONSECUTIVE_LEAPS;
 
 	legatoNote(inst, humanPitch(lastPitchRef.p), humanVel(vel * stepVelScale(velCurve, 0, count + 1)));
 
@@ -1361,7 +1652,7 @@ function phraseC5(inst, vel, dur) {
 				var p = pickPitch(5, inst);
 				var attempts = 0;
 				while (Math.abs(p - lastPitchRef.p) < MIN_LEAP && attempts < 12) { p = pickPitch(5, inst); attempts++; }
-				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP);
+				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP, WILD_GLISS_VEL, WILD_GLISS_BPA);
 			});
 		})(times[i]);
 	}
@@ -1606,6 +1897,16 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	inst.glissLeapCount = 0;
 	inst.glissExpected = (complexType === 5 || complexType === 6 || complexType === 7);
 
+	// D48 + D51 — leap-alternation with N=MAX_CONSECUTIVE_LEAPS tolerance.
+	// Anchor no longer counts as a leap (D51 relaxation): consecutiveLeap
+	// counter starts at 0 so the first event after the anchor is fully
+	// natural — preserves the dramatic anchor → leap opening that was part
+	// of pre-D48 wild character. lastWasLeap is now vestigial (the counter
+	// is the source of truth) but maintained for readability.
+	inst.lastWasLeap = false;
+	inst.consecutiveLeapCurrent = 0;
+	inst.consecutiveLeapMax = 0;
+
 	var intMap = INTENSITY_MAP[intensity] || INTENSITY_MAP["mf"];
 	inst.baseExpr = intMap.expr;
 	var baseVel = intMap.vel;
@@ -1684,7 +1985,19 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 			releaseRampMs:  cmx.exprEnv.releaseRampMs
 		};
 	}
-	scheduleExprEnvelope(inst, inst.peakExpr, envForPhrase, Math.max(duration * 1000, 250));
+	// D47 — sustained multi-note complexes get a phrase-spanning linear
+	// CC 11 arc (cresc TO K-dynamic / dim FROM K-dynamic) driven by face
+	// envelope. Single-note faces (pluck/stab/drone, isSingle) and gliss
+	// complexes (C5/C6/C7) keep the legacy 3-stage envelope — single notes
+	// don't have an arc, gliss owns its own contour. phraseArcDir = null
+	// in the fallback path so scheduleRelease's FAIL check stays silent.
+	var arcDir = ARC_COMPLEXES[complexType] ? phraseArcDirection(inst) : null;
+	if (arcDir) {
+		schedulePhraseArc(inst, inst.peakExpr, arcDir, Math.max(duration * 1000, 250));
+	} else {
+		inst.phraseArcDir = null;
+		scheduleExprEnvelope(inst, inst.peakExpr, envForPhrase, Math.max(duration * 1000, 250));
+	}
 
 	switch (complexType) {
 		case 1: phraseC1(inst, baseVel, duration); break;
@@ -2094,6 +2407,12 @@ function resetInstance(inst) {
 	inst.faceEnvProfile = null;
 	inst.faceOffVelOverride = null;
 	inst.faceReleaseMult = 1.0;
+	inst.phraseArcDir = null;
+	inst.phraseArcStart = 0;
+	inst.phraseArcEnd = 0;
+	inst.lastWasLeap = false;
+	inst.consecutiveLeapCurrent = 0;
+	inst.consecutiveLeapMax = 0;
 	inst.ksForceCount = 3;
 	inst.forceKS = false;
 	inst.status = 'IDLE';
