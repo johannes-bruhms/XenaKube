@@ -1092,6 +1092,62 @@ for (let i = 0; i < SIEVE_RANGE; i++) {
   sieveCells.push(cell);
 }
 
+// Phase 1 Visual Invariant — sieve cell distribution.
+// All 49 cells must occupy equal vertical share of the strip's inner height.
+// The bug case: putting `display: flex` on `.ovl-sieve-right` instead of on
+// `.sieve-strip` (the immediate parent of the cells) silently disables the
+// flex distribution, collapsing empty cells to 0 px and leaving only the 5
+// labelled octave cells with content height — which then stack unevenly at
+// one end of the strip. The pitch axis silently drifts to ~64 px / 48 ≈ 1.3 px
+// per semitone, and notes paint into the wrong cells.
+//
+// Two complementary checks:
+//   (1) per-cell uniformity (max − min height across all 49 cells)
+//   (2) octave-pair-derived cellH ≈ avg cellH (the explicit CLAUDE.md spec)
+// Either > 1 px → loud error; the message includes both diagnostics so the
+// failure mode (collapsed cells vs. drifting flex basis) is identifiable
+// from the log alone. Init-time only — once flex distributes correctly, it
+// stays correct across resize.
+let _sieveAssertRetries = 0;
+function assertSieveLayout() {
+  if (sieveCells.length !== SIEVE_RANGE) return;
+  const heights = new Array(SIEVE_RANGE);
+  const centers = new Array(SIEVE_RANGE);
+  for (let i = 0; i < SIEVE_RANGE; i++) {
+    const r = sieveCells[i].getBoundingClientRect();
+    heights[i] = r.height;
+    centers[i] = r.top + r.height / 2;
+  }
+  // Strip not laid out yet (display: none parent, not in DOM, etc.) — defer
+  // up to ~0.5 s. After that, give up silently: this assertion catches
+  // layout-bug regressions, not "the strip is hidden" runtime states.
+  if (heights[0] === 0 && heights[48] === 0) {
+    if (++_sieveAssertRetries < 30) requestAnimationFrame(assertSieveLayout);
+    return;
+  }
+  let minH = Infinity, maxH = -Infinity, sumH = 0;
+  for (let i = 0; i < SIEVE_RANGE; i++) {
+    if (heights[i] < minH) minH = heights[i];
+    if (heights[i] > maxH) maxH = heights[i];
+    sumH += heights[i];
+  }
+  const avgCellH = sumH / SIEVE_RANGE;
+  const spreadDrift = maxH - minH;
+  // (C2 center − C6 center) / 48 — explicit CLAUDE.md formula. Since the
+  // strip uses column-reverse, C2 (i=0) is at the bottom (larger Y) and
+  // C6 (i=48) is at the top. abs() so the math is direction-agnostic.
+  const octavePairCellH = Math.abs(centers[0] - centers[48]) / 48;
+  const spanDrift = Math.abs(octavePairCellH - avgCellH);
+  if (spreadDrift > 1 || spanDrift > 1) {
+    console.error(
+      'SIEVE LAYOUT FAIL: cells uneven, expected uniform cellH≈' + avgCellH.toFixed(2) + 'px; ' +
+      'octave-pair-derived=' + octavePairCellH.toFixed(2) + 'px (spanDrift=' + spanDrift.toFixed(2) + 'px), ' +
+      'per-cell max=' + maxH.toFixed(2) + ' min=' + minH.toFixed(2) + ' (spread=' + spreadDrift.toFixed(2) + 'px)'
+    );
+  }
+}
+requestAnimationFrame(assertSieveLayout);
+
 const permDisplay = document.getElementById('s-perm');
 const permSlots = [];
 for (let i = 0; i < 8; i++) {
@@ -1524,17 +1580,24 @@ const ROLL_BOTTOM_INSET_PX = 80;
 // matches the clamp's lower bound.
 let ROLL_RIGHT_INSET_CSS_PX = 90;
 const PENDING_MAX_AGE_MS = 45000;      // force-complete notes stuck >45s
-// Same-voice gap threshold below which two consecutive gliss notes are
-// treated as one continuous slide and joined into a single chain. Bridge
-// emits two distinct slide modes:
+// UDP-reorder fallback for the slide-vs-leap classifier. The PRIMARY
+// classifier is the per-note `chainStart` flag set in handleMidiEcho —
+// it uses the same "is a previous same-(voice, complex) note alive at
+// noteon time?" check as the white-line's `_findGlissLine`, so both
+// code paths classify identically. Bridge emit modes:
 //   • glissOverlap (true slide, same string) — noteon NEW arrives BEFORE
-//     noteoff OLD. The dashboard sees this as gap < 0 → always chains.
-//   • leapStep (cross-string leap, NOT a slide) — clean noteoff → 50 ms
-//     gap (LEAP_GAP_MS in xk_swam.js) → noteon. The dashboard MUST NOT
-//     chain these or every C5 wild-gliss leap would draw as a slant
-//     instead of a clean break.
-// Threshold sits well under the 50 ms leap gap so leaps split the chain,
-// while overlapping (negative-gap) slides always chain.
+//     noteoff OLD; previous note is alive → chainStart=false → chain.
+//   • leapStep (cross-string leap) — clean noteoff → 50 ms gap → noteon;
+//     queue empty at noteon time → chainStart=true → break.
+//   • stealInstance (voice steal) — synchronous noteoff(old) → noteon(new);
+//     queue empty at noteon time → chainStart=true → break (this case
+//     was the regression that motivated the unification — gap ≈ 0 ms
+//     was below GLISS_GAP_MS so the gap-only test misclassified as slide).
+// GLISS_GAP_MS only fires when chainStart's live-entry check is fooled
+// by UDP packet reorder (the slide's noteoff is delivered BEFORE the
+// new noteon despite being emitted after) — extremely rare on localhost
+// but cheap to guard against. Threshold sits well under 50 ms so leaps
+// also split if chainStart is somehow wrong.
 const GLISS_GAP_MS      = 25;
 const GLISS_COMPLEXES   = new Set([5, 6, 7]);
 
@@ -1595,6 +1658,48 @@ function resizeRollingScore() {
   if (sieveEl) {
     const r = sieveEl.getBoundingClientRect();
     if (r.width > 0) ROLL_RIGHT_INSET_CSS_PX = r.width;
+  }
+  // Phase 1 Visual Invariant — midiToY ↔ sieve-cell agreement. After every
+  // resize, verify the canvas pitch axis still lines up with the sieve strip
+  // cells. Deferred one rAF so the browser has finished re-laying-out the
+  // sieve cells before we measure them (resize → reflow → paint; we want
+  // the post-reflow rects).
+  requestAnimationFrame(assertPitchAxis);
+}
+
+// Phase 1 Visual Invariant — midiToY ↔ sieve-cell-Y agreement.
+// For any pitch P in [36, 84], the rolling-score's `midiToY(P)` (device-px
+// in canvas) must equal the matching sieve cell's vertical centre (CSS-px
+// × dpr) to ≤1 px. Both axes derive from the same insets / 49-bin centring
+// formula; they drift only if either:
+//   • the JS constants ROLL_TOP_INSET_PX / ROLL_BOTTOM_INSET_PX fall out of
+//     sync with the CSS variables --roll-top-inset / --roll-bottom-inset
+//     that position .ovl-sieve-right, OR
+//   • midiToY's bin math gets refactored to N-bin (interval count) instead
+//     of (N+1)-bin (centre count), or
+//   • the sieve cell distribution itself breaks (Phase 1 sieve invariant —
+//     this assertion would also fire in that case, but the first one fires
+//     louder and earlier so the message naming is unambiguous).
+function assertPitchAxis() {
+  if (!rollCanvas || sieveCells.length !== SIEVE_RANGE) return;
+  const h = rollCanvas.height;
+  if (h === 0) return;
+  const probes = [36, 48, 60, 72, 84];   // C2, C3, C4, C5, C6 — every octave anchor
+  let worst = null;
+  for (const P of probes) {
+    const r = sieveCells[P - 36].getBoundingClientRect();
+    if (r.height === 0) return;          // strip not yet laid out — silent
+    const expected = r.top + r.height / 2;          // CSS px (viewport y of cell centre)
+    const got      = midiToY(P, h) / rollDpr;       // CSS px (canvas y of pitch P, normalised)
+    const drift    = Math.abs(got - expected);
+    if (!worst || drift > worst.drift) worst = { P, drift, expected, got };
+  }
+  if (worst && worst.drift > 1) {
+    console.error(
+      'PITCH AXIS FAIL P=' + worst.P + ' expected=' + worst.expected.toFixed(2) + 'px ' +
+      'got=' + worst.got.toFixed(2) + 'px drift=' + worst.drift.toFixed(2) + 'px ' +
+      '(midiToY canvas y vs sieve cell rect)'
+    );
   }
 }
 
@@ -1884,7 +1989,10 @@ function buildGlissChains(nowMs, w, h) {
       const prev = i > 0 ? arr[i - 1] : null;
       const prevOff = prev ? (prev.evt.offsetMs ?? nowMs) : -Infinity;
       const gapMs = prev ? node.evt.onsetMs - prevOff : 0;
-      if (!chain || gapMs > GLISS_GAP_MS) {
+      // chainStart (live-entry classifier set at noteon time) is the
+      // primary break signal — robust against voice steal at sub-25 ms gap.
+      // GLISS_GAP_MS remains as the UDP-reorder fallback. See handleMidiEcho.
+      if (!chain || node.evt.chainStart || gapMs > GLISS_GAP_MS) {
         chain = {
           complex: node.evt.complex,
           color:   COMPLEX_COLOR[node.evt.complex] || COMPLEX_COLOR[0],
@@ -2058,7 +2166,102 @@ function drawRollingScore() {
   const chains = buildGlissChains(nowMs, w, h);
   for (const chain of chains) drawGlissChain(rollCtx, chain, nowMs, w, h);
 
+  // Phase 1 Visual Invariant — gliss-line trajectory ↔ rolling-chain
+  // trajectory drift. Throttled to ~1 Hz; silent unless any gliss line is
+  // active (mid-slide OR instant-snap). See assertGlissSync below.
+  assertGlissSync(nowMs);
+
   requestAnimationFrame(drawRollingScore);
+}
+
+// Phase 1 Visual Invariant — gliss-line ↔ rolling-chain trajectory.
+// The white triangle leg endpoint Y (drawLineOverlay's per-frame `pitch`
+// derived from `lineNotes` + easeSlide) and the rolling-score gliss-chain
+// polyline Y (drawGlissChain's segment-model `_glissPitchAt`) MUST plot
+// the same audible pitch curve at every frame to ≤1 px drift. They share
+// the same easing (`easeSlide` ≡ `_glissEase`, both cubic smoothstep) and
+// the same per-complex portamento times (PORTAMENTO_MS_PER_SEMITONE ≡
+// GLISS_PORTAMENTO_MS_PER_SEMITONE). They diverge only if a refactor
+// alters one without the other — exactly the silent-failure mode this
+// assertion exists to catch.
+//
+// Sampled at ~1 Hz so live performance isn't paying for the segment
+// rebuild every frame; gated to "any active gliss line exists" so we
+// don't fire on the trivial-easy case (no live gliss to compare).
+// Compares both mid-slide (animDurMs > 0) and instant-snap (animDurMs
+// = 0, post-leap or post-chain-start) line states against the chain.
+// Both sides go through the SAME midiToY so this assertion isolates
+// trajectory drift only — pitch-axis drift is the separate Phase 1
+// sieve / pitch-axis assertion's job.
+let _glissSyncLastCheckMs = 0;
+const GLISS_SYNC_CHECK_INTERVAL_MS = 1000;
+
+// Replay just the latest chain (same voice + complex; gap ≤ GLISS_GAP_MS).
+// Mirrors the chain-grouping rule in buildGlissChains. Returns an array of
+// `{ evt }` shaped like buildGlissChains' chain.nodes so _buildGlissSegments
+// can consume it directly.
+function _findActiveGlissChain(voice, complex, nowMs) {
+  const evts = [];
+  for (const evt of finishedMidiNotes) {
+    if (evt.voice === voice && evt.complex === complex) evts.push(evt);
+  }
+  for (const queue of activeMidiNotes.values()) {
+    for (const evt of queue) {
+      if (evt.voice === voice && evt.complex === complex) evts.push(evt);
+    }
+  }
+  if (evts.length === 0) return null;
+  evts.sort((a, b) => a.onsetMs - b.onsetMs);
+  let start = 0;
+  for (let i = 1; i < evts.length; i++) {
+    // Primary: chainStart (live-entry classifier set at noteon receive
+    // time) — robust against voice steal where gap ≈ 0 ms. Fallback:
+    // GLISS_GAP_MS gap-magnitude (catches UDP reorders where the prior
+    // noteoff arrives after the new noteon and the live-entry check
+    // would have spuriously read "still active").
+    const prevOff = evts[i - 1].offsetMs ?? nowMs;
+    if (evts[i].chainStart || (evts[i].onsetMs - prevOff > GLISS_GAP_MS)) start = i;
+  }
+  const out = [];
+  for (let i = start; i < evts.length; i++) out.push({ evt: evts[i] });
+  return out;
+}
+
+function assertGlissSync(nowMs) {
+  if (nowMs - _glissSyncLastCheckMs < GLISS_SYNC_CHECK_INTERVAL_MS) return;
+  if (!rollCanvas) return;
+  // Find any active gliss line (mid-slide AND instant-snap states are
+  // both checked — the line and chain must agree at every gliss-active
+  // moment, not only when the line is interpolating).
+  let line = null;
+  for (const ln of lineNotes) {
+    if (ln.isGliss) { line = ln; break; }
+  }
+  if (!line) return;
+  _glissSyncLastCheckMs = nowMs;
+
+  const chainNodes = _findActiveGlissChain(line.voice, line.complex, nowMs);
+  if (!chainNodes || chainNodes.length === 0) return;
+  const segs = _buildGlissSegments(chainNodes);
+  if (segs.length === 0) return;
+
+  const linePitch  = _displayedPitch(line, nowMs);
+  const chainPitch = _glissPitchAt(nowMs, segs);
+  // Both pitches go through the SAME midiToY → drift is purely trajectory
+  // (segment-model) drift. Output in CSS px so the threshold matches the
+  // CLAUDE.md "≤1 px" wording (1 CSS px is what the eye sees regardless
+  // of dpr).
+  const lineY  = midiToY(linePitch,  rollCanvas.height) / rollDpr;
+  const chainY = midiToY(chainPitch, rollCanvas.height) / rollDpr;
+  const drift  = Math.abs(lineY - chainY);
+  if (drift > 1) {
+    console.error(
+      'GLISS SYNC FAIL voice=' + line.voice + ' complex=' + line.complex +
+      ' line=' + lineY.toFixed(2) + 'px chain=' + chainY.toFixed(2) + 'px' +
+      ' drift=' + drift.toFixed(2) + 'px linePitch=' + linePitch.toFixed(2) +
+      ' chainPitch=' + chainPitch.toFixed(2)
+    );
+  }
 }
 
 // ---- Sieve-cell emanation glow ---------------------------------------------
@@ -2278,8 +2481,18 @@ const PIZZ_FADE_MAX_MS = 420;
 // Find the live (sustaining) gliss line for this voice+complex, if any.
 // For gliss complexes, this presence/absence IS the slide-vs-leap
 // discriminator: a true slide's overlapping noteons mean the previous
-// line is still alive when the new noteon arrives; a leap's clean
-// noteoff has already removed it. No auxiliary tracker needed.
+// line is still alive when the new noteon arrives; a leap or voice-steal
+// has already issued a clean noteoff, so the line was removed by endLine.
+// No auxiliary tracker needed.
+//
+// UNIFIED CLASSIFIER — the rolling-chain side runs the same live-entry
+// check at handleMidiEcho noteon time (storing `chainStart` on the
+// event); chain grouping breaks at chainStart=true. Both this function
+// and the chain-grouping pass therefore classify the SAME bridge MIDI
+// pattern using the SAME signal. If the bridge's LEAP_GAP_MS or
+// stealInstance behaviour ever changes such that "live entry at noteon
+// time" stops being a reliable slide-vs-leap signal, BOTH paths need a
+// coordinated review (search for `chainStart` to find the chain side).
 function _findGlissLine(voice, complex) {
   for (let i = lineNotes.length - 1; i >= 0; i--) {
     const ln = lineNotes[i];
@@ -2538,16 +2751,39 @@ function handleMidiEcho(data) {
   const key = `${data.voice}:${data.pitch}`;
 
   if (data.kind === 'noteon') {
-    startGlow(data.pitch, data.velocity, data.complex | 0);
-    startLine(data.voice, data.pitch, data.velocity, data.complex | 0, key);
+    // Slide-vs-leap classifier (paired with the white-line's `_findGlissLine`).
+    // A true slide's overlapping noteons mean a previous same-(voice, complex)
+    // note is still alive when this noteon arrives; a leap or a voice-steal
+    // has already issued the noteoff so the queue is empty for this complex.
+    // Tag this noteon's `chainStart` so the rolling-chain grouping pass
+    // breaks here. Mirrors the white-line's "live entry" semantics exactly,
+    // eliminating the GLISS_GAP_MS heuristic's blind spot at sub-25 ms voice
+    // steals: the bridge's `stealInstance` emits noteoff(old) → noteon(new)
+    // synchronously (gap ≈ 0 ms), which the gap-only test misclassified as
+    // a slide and drew as a slant from old's last pitch to new's anchor —
+    // visible as "wrong direction" mid-phrase. GLISS_GAP_MS remains as a
+    // UDP-reorder fallback only.
+    const cmx = data.complex | 0;
+    let chainStart = false;
+    if (GLISS_COMPLEXES.has(cmx)) {
+      chainStart = true;
+      outer: for (const q of activeMidiNotes.values()) {
+        for (const e of q) {
+          if (e.voice === data.voice && e.complex === cmx) { chainStart = false; break outer; }
+        }
+      }
+    }
+    startGlow(data.pitch, data.velocity, cmx);
+    startLine(data.voice, data.pitch, data.velocity, cmx, key);
     let queue = activeMidiNotes.get(key);
     if (!queue) { queue = []; activeMidiNotes.set(key, queue); }
     queue.push({
       pitch:    data.pitch,
       velocity: data.velocity,
       voice:    data.voice,
-      complex:  data.complex | 0,
+      complex:  cmx,
       onsetMs:  performance.now(),
+      chainStart,
     });
     return;
   }
