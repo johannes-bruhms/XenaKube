@@ -236,6 +236,14 @@ var COMPLEX = {
 	     exprEnv:{ attack:0.4, peak:1.05, sustain:0.9, release:0.7,
 	               attackRampMs:100, sustainRampMs:200, releaseRampMs:260 },
 	     vibrato:{ depth:55, rate:40 }, bowPos:115,
+	     // CC 5 (Portamento Time) caps at 127 (standard MIDI CC range).
+	     // D53 v1 tried `time:250` thinking it was raw ms/semi, but
+	     // ccForce clamps to 0..127 → audio actually played at CC 5 = 127
+	     // (~127 ms/semi) while the dashboard mirror was set to 250
+	     // ms/semi → visual interpolated 2× slower than audio. Reverted to
+	     // 115 (original C7 value) until pitchbend lands as the path to
+	     // genuinely-slow drift. Gestural distinction from C6 comes from
+	     // FIRST_GLISS_MS_C7 + ±1-2 alternating-sign deltas in phraseC7.
 	     bowPressure:55, portamento:{ on:true, time:115 },
 	     attackRamp:90, attackCtrl:25, tremoloRate:40,
 	     bowPoly:BOW_POLY.MONO_POLY_RELEASE,
@@ -1019,6 +1027,20 @@ var GLISS_OVERLAP_MS  = 60;
 // scheduleRelease's 200 ms floor hits for tiny durations.
 var FIRST_GLISS_MS = 150;
 
+// D53 — C7 immediate-start drift. C7's character is "wispy ephemeral
+// wandering" / breath-like rocking around an anchor (vs C6's deliberate
+// sieve-walking). To make the gesture audibly distinct from C6 — even
+// though both timbral signatures (sul tasto, deep vibrato, low register)
+// already differ — C7 fires its first drift much earlier so the listener
+// never hears the anchor settle as a stable pitch; pitch is in motion
+// almost immediately, exposing microtonal slow drift via the slow
+// portamento (CC 5 = 250 ms/semi for C7, set in COMPLEX[7].portamento.time).
+// 30 ms is short enough that anchor reads as a "starting pitch" attack
+// moment but not a sustained note; long enough that SWAM still receives
+// the 60 ms anchor → drift overlap (GLISS_OVERLAP_MS) needed to engage
+// portamento on the first slide.
+var FIRST_GLISS_MS_C7 = 30;
+
 // D45 — minimum spacing between consecutive gliss events. SWAM's Mono Poly
 // Release portamento needs ~150–200 ms to actually engage; if the next
 // overlapping noteon arrives sooner, SWAM aborts the in-progress slide and
@@ -1715,22 +1737,36 @@ function phraseC7(inst, vel, dur) {
 	}
 	var motionDir = (inst.faceMotion === 'up') ? 1 : (inst.faceMotion === 'down') ? -1 : 0;
 	var durMs = dur * 1000;
-	var tailEnd = Math.max(FIRST_GLISS_MS + 250, durMs * 0.88);
-	var times = glissSchedule(driftCount, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
+	// D53 — C7 first drift fires at FIRST_GLISS_MS_C7 (= 30 ms) so the slide
+	// kicks in almost immediately after the anchor, distinguishing C7's
+	// "continuous floating" character from C6's "deliberate stepping". The
+	// slow portamento (COMPLEX[7].portamento.time = 250 ms/semi) means each
+	// drift then audibly exposes microtonal pitch change for 250–500 ms.
+	var tailEnd = Math.max(FIRST_GLISS_MS_C7 + 250, durMs * 0.88);
+	var times = glissSchedule(driftCount, FIRST_GLISS_MS_C7, tailEnd, MIN_GLISS_SPACING_MS);
 
+	// D53 — drift sign alternates per drift index (when face motion is
+	// neutral) so the trajectory rocks around the anchor in zigzag, evoking
+	// inhale/exhale rather than C6's monotonic sieve walk. Random starting
+	// direction so phrases don't always begin the same way. When face motion
+	// has a bias (up/down), drifts go monotonically in that direction —
+	// face semantics override the rocking pattern. Magnitude rrand(1, 2)
+	// (was rrand(-3, 3)): caps swings between consecutive drifts at 4
+	// semitones (was 6), reads as "drift" not "wandering slide", and
+	// average ±1.2 keeps the character subtle.
+	var phraseStartSign = (Math.random() < 0.5) ? 1 : -1;
 	for (var i = 0; i < times.length; i++) {
-		(function(tMs) {
+		(function(tMs, idx) {
 			scheduleAt(inst, tMs, function() {
 				var lo = (inst.path === "V2") ? 24 : CELLO_MIN;
-				// rrand(-3,3) can return 0 — force a non-zero delta so the
-				// slide has somewhere to go (SWAM slides from p1 to itself
-				// would be silent).
-				var delta = (motionDir !== 0) ? motionDir * rrand(1, 3) : rrand(-3, 3);
-				if (delta === 0) delta = (Math.random() < 0.5) ? -1 : 1;
-				var p2 = clamp(p1 + delta, lo, CELLO_MAX);
+				var sign = (motionDir !== 0)
+					? motionDir
+					: phraseStartSign * ((idx % 2 === 0) ? 1 : -1);
+				var mag = rrand(1, 2);
+				var p2 = clamp(p1 + sign * mag, lo, CELLO_MAX);
 				glissStep(inst, p1, p2, 1);
 			});
-		})(times[i]);
+		})(times[i], i);
 	}
 	scheduleRelease(inst, dur);
 }
