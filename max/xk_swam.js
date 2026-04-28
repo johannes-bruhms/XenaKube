@@ -1043,7 +1043,7 @@ var MIN_GLISS_SPACING_MS = 200;
 // typical 1-3 s phrases fit 4-9 events comfortably. Raise if user wants
 // even denser wild salvos; lower with caution (3 may not feel wild on
 // pluck-face short durations).
-var WILD_MIN_COUNT = 8;
+var WILD_MIN_COUNT = 12;
 
 // D52 — wild gliss (C5) bow pressure accent. SWAM Cello's Expressivity →
 // Bow Pressure Accent slider is MIDI-Learned to CC 18 in the user's preset
@@ -1055,13 +1055,15 @@ var WILD_MIN_COUNT = 8;
 // character (BPA spike), so wild gliss gets audible per-slide attacks while
 // portamento stays fully engaged.
 //
-// Spike value 80 is moderate (sexy-move uses 110, u-perm 100); 30 ms reset
-// returns to 0 well before the next ≥200 ms gliss event so spikes don't
-// stack. cancelPhrase forces CC 18 = 0 on steal so a spike whose reset
-// task got cancelled can't bleed into the next voice. Used by C5 wild
-// gliss only — C6/C7 keep their gentle bow-continuation slide character.
+// Spike value 80 is moderate (sexy-move uses 110, u-perm 100); reset to 0
+// after BPA_RESET_MS sustains the accent through the start of the slide
+// envelope so SWAM's pressure response has time to ring out before the next
+// event arrives at ≥200 ms (MIN_GLISS_SPACING_MS), preventing stacked spikes.
+// cancelPhrase forces CC 18 = 0 on steal so a spike whose reset task got
+// cancelled can't bleed into the next voice. Used by C5 wild gliss only —
+// C6/C7 keep their gentle bow-continuation slide character.
 var WILD_GLISS_BPA = 80;
-var BPA_RESET_MS   = 30;
+var BPA_RESET_MS   = 100;
 
 // D50 v2 — wild gliss (C5) slide-target velocity. SWAM Cello's Advanced→MIDI
 // menu has "Portamento Control: Velocity (P.MaxTime)" selected, which means
@@ -1095,7 +1097,7 @@ var WILD_GLISS_VEL = 22;
 // Phrase anchor no longer seeds the counter as 1 — first event after the
 // anchor is fully natural (could be a dramatic leap-from-anchor opening,
 // which the user's original wild character relied on).
-var MAX_CONSECUTIVE_LEAPS = 2;
+var MAX_CONSECUTIVE_LEAPS = 1;
 
 // D47 (Phrase Dynamic Arcs, Phase 1) — sustained multi-note complexes
 // (C2/C3/C4/C8) replace the legacy 3-stage attack/peak/sustain CC 11 envelope

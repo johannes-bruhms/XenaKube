@@ -2,6 +2,27 @@
 
 A real-time musical instrument that transforms a GAN i4 smart Rubik's cube into a live performance tool. Cube turns produce sound; Rubik's algorithms are "spells" that trigger mode changes. Built on S4 group math (24 rotation symmetries) inspired by Xenakis' *Nomos Alpha*.
 
+## Overview
+
+XenaKube is a performance system with four parts working together:
+
+- A GAN i4 smart cube provides turn and gyro data.
+- Chrome connects to the cube over Web Bluetooth and forwards events to `relay.js`.
+- `XenaKubeEngine` maps those events into `S4` state, parameter permutations, sound-complex assignments, spell detections, and expression values.
+- Max/MSP + SWAM Cello turn the resulting voice events into playable phrases, while the browser dashboard visualizes the session in real time.
+
+In practice, each turn is more than a note trigger. A turn can:
+
+- permute the active `K_i` parameter bundle (density, intensity, duration)
+- permute the active `C_i` sound complex (`C1`-`C8`)
+- trigger a phrase shaped by face identity and current engine state
+- contribute to a Rubik's algorithm "spell" that changes higher-level musical behavior
+- update the live GUI with cube state, sieve state, rolling-score output, and mode badges
+
+The browser GUI is a full performance HUD: it shows the live cube, ghost/snap orientation, active vertices and complexes, spell buffer, right-edge pitch sieve, and a rolling score fed by the actual MIDI echo coming back from the Max bridge.
+
+For the full report, including a GUI walkthrough based on `docs/current-gui.png`, see [docs/project-report.md](docs/project-report.md).
+
 ## How It Works
 
 ```
@@ -97,7 +118,7 @@ src/              TypeScript engine (S4 group, spells, voice, expression, scramb
 max/              Max/MSP SWAM Cello bridge (xk_swam.js for v8 object)
 public/           Browser dashboard (live visualizer + cube connect)
 relay.js          BLE-to-OSC bridge with XenaKubeEngine
-test/             Vitest test suite (68 tests)
+test/             Vitest test suite
 docs/             Xenakis primary source, research notes, roadmap
 ```
 
