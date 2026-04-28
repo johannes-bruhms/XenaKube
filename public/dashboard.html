@@ -1583,8 +1583,8 @@ function resizeRollingScore() {
 // Phase 1 Visual Invariant — midiToY ↔ sieve-cell-Y agreement.
 // For any pitch P in [36, 84], the rolling-score's `midiToY(P)` (device-px
 // in canvas) must equal the matching sieve cell's vertical centre (CSS-px
-// × dpr) to ≤1 px. Both axes derive from the same insets / 49-bin centring
-// formula; they drift only if either:
+// × dpr) to within the threshold below. Both axes derive from the same
+// insets / 49-bin centring formula; they drift only if either:
 //   • the JS constants ROLL_TOP_INSET_PX / ROLL_BOTTOM_INSET_PX fall out of
 //     sync with the CSS variables --roll-top-inset / --roll-bottom-inset
 //     that position .ovl-sieve-right, OR
@@ -1593,6 +1593,20 @@ function resizeRollingScore() {
 //   • the sieve cell distribution itself breaks (Phase 1 sieve invariant —
 //     this assertion would also fire in that case, but the first one fires
 //     louder and earlier so the message naming is unambiguous).
+//
+// Threshold = 2 CSS px (was 1 in initial Phase 1.2). Pure browser
+// subpixel rendering — `canvas.height = round(window.innerHeight × dpr)`
+// integer rounding plus the browser's own subpixel snap for CSS-positioned
+// flex children at non-integer dpr or non-100% browser zoom — produces
+// ~1.0–1.2 px drift at the bottom cell (P=36) where the (48.5/49) ≈ 0.99
+// multiplier amplifies the canvas-vs-CSS innerH discrepancy. Real
+// architectural drift (49→48 bin error, JS/CSS inset constants desync,
+// flex regression) produces 10+ px drift, easily distinguishable.
+// Proper fix (compute midiToY off CSS-derived `window.innerHeight` so
+// both sides share an unrounded source, OR a dpr-aware threshold)
+// deferred to v2 → main reintegration; flagged in docs/todo.md.
+const PITCH_AXIS_DRIFT_THRESHOLD_PX = 2;
+
 function assertPitchAxis() {
   if (!rollCanvas) return;
   const h = rollCanvas.height;
@@ -1607,11 +1621,12 @@ function assertPitchAxis() {
     const drift    = Math.abs(got - expected);
     if (!worst || drift > worst.drift) worst = { P, drift, expected, got };
   }
-  if (worst && worst.drift > 1) {
+  if (worst && worst.drift > PITCH_AXIS_DRIFT_THRESHOLD_PX) {
     console.error(
       'PITCH AXIS FAIL P=' + worst.P + ' expected=' + worst.expected.toFixed(2) + 'px ' +
       'got=' + worst.got.toFixed(2) + 'px drift=' + worst.drift.toFixed(2) + 'px ' +
-      '(midiToY canvas y vs sieve cell rect)'
+      '(midiToY canvas y vs sieve cell rect; threshold=' +
+      PITCH_AXIS_DRIFT_THRESHOLD_PX + 'px)'
     );
   }
 }
@@ -1904,7 +1919,22 @@ function buildGlissChains(nowMs, w, h) {
       // chainStart (live-entry classifier set at noteon time) is the
       // primary break signal — robust against voice steal at sub-25 ms gap.
       // GLISS_GAP_MS remains as the UDP-reorder fallback. See handleMidiEcho.
-      if (!chain || node.evt.chainStart || gapMs > GLISS_GAP_MS) {
+      const breakByCs  = !!node.evt.chainStart;
+      const breakByGap = gapMs > GLISS_GAP_MS;
+      if (!chain || breakByCs || breakByGap) {
+        // Diagnostic — opt-in via `localStorage.xkDebugGliss = '1'`.
+        // Logs each chain break with the trigger reason so a phrase that
+        // visually appears to fail breaking is identifiable from the
+        // console output alone.
+        if (window.xkDebugGliss && chain) {
+          console.log(
+            '[gliss break] complex=C' + node.evt.complex +
+            ' pitch=' + node.evt.pitch +
+            ' cs=' + breakByCs +
+            ' gap=' + (gapMs).toFixed(1) + 'ms' +
+            ' (>25? ' + breakByGap + ')'
+          );
+        }
         chain = {
           complex: node.evt.complex,
           color:   COMPLEX_COLOR[node.evt.complex] || COMPLEX_COLOR[0],
@@ -2526,6 +2556,19 @@ function handleMidiEcho(data) {
         for (const e of q) {
           if (e.voice === data.voice && e.complex === cmx) { chainStart = false; break outer; }
         }
+      }
+      // Diagnostic — opt-in. Set `localStorage.xkDebugGliss = '1'` and
+      // reload to trace gliss noteon classification. Logs the live-entry
+      // check result + the active-queue keys at decision time so a
+      // wrongly-attributed slide (chainStart=false when audio leaped) is
+      // identifiable from the WS arrival pattern alone.
+      if (window.xkDebugGliss) {
+        const activeKeys = [...activeMidiNotes.keys()].join(',') || '(empty)';
+        console.log(
+          '[gliss noteon] voice=' + data.voice + ' pitch=' + data.pitch +
+          ' complex=C' + cmx + ' chainStart=' + chainStart +
+          ' activeKeys=[' + activeKeys + ']'
+        );
       }
     }
     startGlow(data.pitch, data.velocity, cmx);
