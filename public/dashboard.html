@@ -206,6 +206,15 @@ import {
   PORTAMENTO_MS_PER_SEMITONE, GLISS_PORTAMENTO_MS_PER_SEMITONE,
   COMPLEX_COLOR,
 } from './js/constants.js';
+// Phase 2.3 — WebSocket transport extracted to ./js/transport.js.
+// Aliased to short names since dashboard.html still has many callsites
+// (BLE move forwarding, mode toggles, diagram selection, panic, etc.)
+// that pre-date the modular split.
+import {
+  connect as transportConnect,
+  send    as transportSend,
+  on      as transportOn,
+} from './js/transport.js';
 
 // ============================================================
 // Constants
@@ -2830,100 +2839,82 @@ function computeLocalExpression(gyro) {
 // ============================================================
 
 // ws status indicators were removed from the UI; stub out the refs so the
-// existing onopen/onclose handlers don't need to branch.
+// existing open/close handlers don't need to branch.
 const dot = { classList: { add() {}, remove() {} } };
 const wsStatusEl = { set textContent(_v) {} };
-let ws;
 let gyroThrottleFrame = null;
 let pendingGyroState = null;
 
-function wsSend(obj) {
-  if (ws && ws.readyState === WebSocket.OPEN) {
-    ws.send(JSON.stringify(obj));
-  }
-}
+// Phase 2.3 — WebSocket transport extracted to ./js/transport.js. The
+// transport owns the connection + reconnect loop and emits typed events;
+// the wiring below subscribes each event to the dashboard's local
+// handlers. `wsSend` is the same name re-exported as a thin alias so
+// the rest of dashboard.html (numerous callsites: BLE move forwarding,
+// mode toggles, diagram selection, panic, gyro zero) doesn't have to
+// rename anything.
+const wsSend = transportSend;
 
-function wsConnect() {
-  ws = new WebSocket('ws://' + window.location.host);
-
-  ws.onopen = () => {
-    dot.classList.add('connected');
-    wsStatusEl.textContent = 'connected';
-    // Request diagram list
-    wsSend({ type: 'get_diagrams' });
-  };
-
-  ws.onclose = () => {
-    dot.classList.remove('connected');
-    wsStatusEl.textContent = 'reconnecting...';
-    setTimeout(wsConnect, 2000);
-  };
-
-  ws.onerror = () => ws.close();
-
-  ws.onmessage = (evt) => {
-    try {
-      const msg = JSON.parse(evt.data);
-      if (msg.type === 'state') {
-        updateState(msg.data, msg.move);
-        updateV2State(msg.data, msg.move);
-        // computeLocalExpression runs off gyro_tick only (see its handler).
-      } else if (msg.type === 'gyro_state') {
-        pendingGyroState = msg.data;
-        if (!gyroThrottleFrame) {
-          gyroThrottleFrame = requestAnimationFrame(() => {
-            if (pendingGyroState) {
-              updateState(pendingGyroState, null);
-              updateV2State(pendingGyroState, null);
-              pendingGyroState = null;
-            }
-            gyroThrottleFrame = null;
-          });
-        }
-      } else if (msg.type === 'gyro_tick') {
-        // 60 Hz lightweight pose update from relay's Kalman loop.
-        // Skip full state recompute — only refresh gyro-driven visuals.
-        const [x, y, z, w] = msg.data;
-        currentGyro.set(-x, z, y, w);
-        hasGyro = true;
-        if (autoZeroPending) {
-          gyroZeroInv.copy(currentGyro).invert();
-          autoZeroPending = false;
-          // Mirror the zero to the relay so the engine's snap cells centre
-          // on this rest pose too — otherwise snap thresholds are anchored
-          // in the raw sensor frame and feel asymmetric after auto-zero.
-          wsSend({ type: 'zero_gyro' });
-        }
-        if (typeof msg.dev === 'number') {
-          const devEl = document.getElementById('expr-dev');
-          const devBar = document.getElementById('expr-dev-bar');
-          if (devEl) devEl.textContent = msg.dev.toFixed(2);
-          if (devBar) devBar.style.width = (msg.dev * 100) + '%';
-        }
-        computeLocalExpression(msg.data);
-      } else if (msg.type === 'diagrams') {
-        populateDiagramSelect(msg.data);
-      } else if (msg.type === 'spell') {
-        handleSpellEvent(msg.data);
-      } else if (msg.type === 'spell_book') {
-        spellBook = msg.data;
-      } else if (msg.type === 'solve') {
-        handleSolveEvent();
-      } else if (msg.type === 'midi_echo') {
-        handleMidiEcho(msg.data);
+transportOn('open', () => {
+  dot.classList.add('connected');
+  wsStatusEl.textContent = 'connected';
+  wsSend({ type: 'get_diagrams' });
+});
+transportOn('close', () => {
+  dot.classList.remove('connected');
+  wsStatusEl.textContent = 'reconnecting...';
+});
+transportOn('state', (data, move) => {
+  updateState(data, move);
+  updateV2State(data, move);
+  // computeLocalExpression runs off gyro_tick only (see that handler).
+});
+transportOn('gyroState', (data) => {
+  pendingGyroState = data;
+  if (!gyroThrottleFrame) {
+    gyroThrottleFrame = requestAnimationFrame(() => {
+      if (pendingGyroState) {
+        updateState(pendingGyroState, null);
+        updateV2State(pendingGyroState, null);
+        pendingGyroState = null;
       }
-      // Note: the engine's `voice` WS message still fires on every turn
-      // (powers any listener that wants the archetypal gesture shape),
-      // but the notation strip no longer consumes it — Phase E tier 2
-      // reads the MIDI echo instead so the staff reflects exactly what
-      // SWAM plays, not what the engine dispatched.
-    } catch (e) {
-      console.error('Parse error:', e);
-    }
-  };
-}
+      gyroThrottleFrame = null;
+    });
+  }
+});
+transportOn('gyroTick', (data, dev) => {
+  // 60 Hz lightweight pose update from relay's Kalman loop. Skip full
+  // state recompute — only refresh gyro-driven visuals.
+  const [x, y, z, w] = data;
+  currentGyro.set(-x, z, y, w);
+  hasGyro = true;
+  if (autoZeroPending) {
+    gyroZeroInv.copy(currentGyro).invert();
+    autoZeroPending = false;
+    // Mirror the zero to the relay so the engine's snap cells centre on
+    // this rest pose too — otherwise snap thresholds are anchored in the
+    // raw sensor frame and feel asymmetric after auto-zero.
+    wsSend({ type: 'zero_gyro' });
+  }
+  if (typeof dev === 'number') {
+    const devEl  = document.getElementById('expr-dev');
+    const devBar = document.getElementById('expr-dev-bar');
+    if (devEl)  devEl.textContent = dev.toFixed(2);
+    if (devBar) devBar.style.width = (dev * 100) + '%';
+  }
+  computeLocalExpression(data);
+});
+transportOn('diagrams',  populateDiagramSelect);
+transportOn('spell',     handleSpellEvent);
+transportOn('spellBook', (data) => { spellBook = data; });
+transportOn('solve',     handleSolveEvent);
+transportOn('midiEcho',  handleMidiEcho);
+// Note: the engine's `voice` WS message still fires on every turn
+// (powers any listener that wants the archetypal gesture shape), but
+// the notation strip no longer consumes it — Phase E tier 2 reads the
+// MIDI echo instead so the staff reflects exactly what SWAM plays,
+// not what the engine dispatched.
 
-wsConnect();
+transportConnect();
 
 // ============================================================
 // Sequence Control Handlers
