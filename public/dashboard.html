@@ -215,6 +215,20 @@ import {
   send    as transportSend,
   on      as transportOn,
 } from './js/transport.js';
+// Phase 2.4 — sieve strip module. Cell construction, the Phase 1.1
+// `assertSieveLayout` invariant, the per-cell emanation-glow envelope,
+// active-sieve highlighting, and read-only cell-rect access for the
+// rolling-score (Phase 1.2) + triangle (2.7) cross-module reads.
+// Aliased to the original inline names to keep callsites unchanged.
+import {
+  noteOn        as startGlow,
+  noteOff       as endGlow,
+  panic         as clearAllGlows,
+  setActive     as setActiveSieve,
+  getCellRect   as getSieveCellRect,
+  SIEVE_RANGE,
+  BLACK_KEYS,
+} from './js/sieve.js';
 
 // ============================================================
 // Constants
@@ -281,13 +295,8 @@ const FACE_SIG = {
   "B'": { envelope: 'drone', articulation: 'sustained', motion: 'oscillate', registerBias: -0.3 },
 };
 
-const NOTE_NAMES = ['C','C#','D','D#','E','F','F#','G','G#','A','A#','B'];
-
-function semitoneName(s) {
-  const midi = 36 + s;
-  const octave = Math.floor(midi / 12) - 1;
-  return NOTE_NAMES[midi % 12] + octave;
-}
+// NOTE_NAMES + semitoneName moved to ./js/sieve.js (Phase 2.4) — they
+// were only used for octave-cell labels at construction time.
 
 // Cube vertex positions (matching group.ts labeling)
 const CUBE_VERTS = [
@@ -1091,84 +1100,11 @@ for (let i = 0; i < 8; i++) {
   seqPips.push(pip);
 }
 
-const sieveStrip = document.getElementById('sieve-strip');
-const SIEVE_RANGE = 49;
-const sieveCells = [];
-// Black-key semitone offsets (C#, D#, F#, G#, A#)
-const BLACK_KEYS = new Set([1, 3, 6, 8, 10]);
-// Iteration order is C2..C6 (i = 0..48). The strip uses
-// `flex-direction: column-reverse` so the lowest pitch (C2) renders at the
-// bottom and the highest (C6) at the top, matching the rolling-score's
-// pitch axis. Each cell hosts an inline label that's only filled in for
-// octave-C cells (visual scale anchor — non-octave cells stay unlabelled).
-for (let i = 0; i < SIEVE_RANGE; i++) {
-  const cell = document.createElement('div');
-  const pc = i % 12;
-  const baseClasses = ['sieve-cell'];
-  if (BLACK_KEYS.has(pc)) baseClasses.push('black');
-  if (pc === 0) baseClasses.push('octave-start');
-  cell._baseClass = baseClasses.join(' ');
-  cell.className = cell._baseClass;
-  if (pc === 0) cell.textContent = semitoneName(i);
-  sieveStrip.appendChild(cell);
-  sieveCells.push(cell);
-}
-
-// Phase 1 Visual Invariant — sieve cell distribution.
-// All 49 cells must occupy equal vertical share of the strip's inner height.
-// The bug case: putting `display: flex` on `.ovl-sieve-right` instead of on
-// `.sieve-strip` (the immediate parent of the cells) silently disables the
-// flex distribution, collapsing empty cells to 0 px and leaving only the 5
-// labelled octave cells with content height — which then stack unevenly at
-// one end of the strip. The pitch axis silently drifts to ~64 px / 48 ≈ 1.3 px
-// per semitone, and notes paint into the wrong cells.
-//
-// Two complementary checks:
-//   (1) per-cell uniformity (max − min height across all 49 cells)
-//   (2) octave-pair-derived cellH ≈ avg cellH (the explicit CLAUDE.md spec)
-// Either > 1 px → loud error; the message includes both diagnostics so the
-// failure mode (collapsed cells vs. drifting flex basis) is identifiable
-// from the log alone. Init-time only — once flex distributes correctly, it
-// stays correct across resize.
-let _sieveAssertRetries = 0;
-function assertSieveLayout() {
-  if (sieveCells.length !== SIEVE_RANGE) return;
-  const heights = new Array(SIEVE_RANGE);
-  const centers = new Array(SIEVE_RANGE);
-  for (let i = 0; i < SIEVE_RANGE; i++) {
-    const r = sieveCells[i].getBoundingClientRect();
-    heights[i] = r.height;
-    centers[i] = r.top + r.height / 2;
-  }
-  // Strip not laid out yet (display: none parent, not in DOM, etc.) — defer
-  // up to ~0.5 s. After that, give up silently: this assertion catches
-  // layout-bug regressions, not "the strip is hidden" runtime states.
-  if (heights[0] === 0 && heights[48] === 0) {
-    if (++_sieveAssertRetries < 30) requestAnimationFrame(assertSieveLayout);
-    return;
-  }
-  let minH = Infinity, maxH = -Infinity, sumH = 0;
-  for (let i = 0; i < SIEVE_RANGE; i++) {
-    if (heights[i] < minH) minH = heights[i];
-    if (heights[i] > maxH) maxH = heights[i];
-    sumH += heights[i];
-  }
-  const avgCellH = sumH / SIEVE_RANGE;
-  const spreadDrift = maxH - minH;
-  // (C2 center − C6 center) / 48 — explicit CLAUDE.md formula. Since the
-  // strip uses column-reverse, C2 (i=0) is at the bottom (larger Y) and
-  // C6 (i=48) is at the top. abs() so the math is direction-agnostic.
-  const octavePairCellH = Math.abs(centers[0] - centers[48]) / 48;
-  const spanDrift = Math.abs(octavePairCellH - avgCellH);
-  if (spreadDrift > 1 || spanDrift > 1) {
-    console.error(
-      'SIEVE LAYOUT FAIL: cells uneven, expected uniform cellH≈' + avgCellH.toFixed(2) + 'px; ' +
-      'octave-pair-derived=' + octavePairCellH.toFixed(2) + 'px (spanDrift=' + spanDrift.toFixed(2) + 'px), ' +
-      'per-cell max=' + maxH.toFixed(2) + ' min=' + minH.toFixed(2) + ' (spread=' + spreadDrift.toFixed(2) + 'px)'
-    );
-  }
-}
-requestAnimationFrame(assertSieveLayout);
+// Sieve cells, BLACK_KEYS, SIEVE_RANGE, semitoneName, the Phase 1.1
+// assertSieveLayout invariant, and the per-cell glow envelope all moved
+// to ./js/sieve.js (Phase 2.4). Read-only cell-rect access exposed via
+// the imported `getSieveCellRect(pitch)` for Phase 1.2's
+// `assertPitchAxis` and (Phase 2.7) the white-line `sieveCellLeftEdgePos`.
 
 const permDisplay = document.getElementById('s-perm');
 const permSlots = [];
@@ -1344,12 +1280,7 @@ function updateState(state, move) {
   );
   updateActiveVertexIn3D(activeIdx, activeKIdx);
 
-  const activeSet = new Set(state.sieve);
-  for (let i = 0; i < SIEVE_RANGE; i++) {
-    const isActive = activeSet.has(i);
-    const cell = sieveCells[i];
-    cell.className = cell._baseClass + (isActive ? ' active' : '');
-  }
+  setActiveSieve(new Set(state.sieve));
 
   // currentGyro / hasGyro are driven solely by the gyro_tick handler, which
   // ships the SLERP-interpolated visual quat. Writing them here too would
@@ -1663,14 +1594,14 @@ function resizeRollingScore() {
 //     this assertion would also fire in that case, but the first one fires
 //     louder and earlier so the message naming is unambiguous).
 function assertPitchAxis() {
-  if (!rollCanvas || sieveCells.length !== SIEVE_RANGE) return;
+  if (!rollCanvas) return;
   const h = rollCanvas.height;
   if (h === 0) return;
   const probes = [36, 48, 60, 72, 84];   // C2, C3, C4, C5, C6 — every octave anchor
   let worst = null;
   for (const P of probes) {
-    const r = sieveCells[P - 36].getBoundingClientRect();
-    if (r.height === 0) return;          // strip not yet laid out — silent
+    const r = getSieveCellRect(P);
+    if (!r || r.height === 0) return;    // strip not yet laid out — silent
     const expected = r.top + r.height / 2;          // CSS px (viewport y of cell centre)
     const got      = midiToY(P, h) / rollDpr;       // CSS px (canvas y of pitch P, normalised)
     const drift    = Math.abs(got - expected);
@@ -2241,140 +2172,10 @@ function assertGlissSync(nowMs) {
   }
 }
 
-// ---- Sieve-cell emanation glow ---------------------------------------------
-// The glow envelope follows the actual noteon→noteoff window so each cell's
-// pulse "speaks" the technique:
-//   • sustained held note  → glow holds at peak with a subtle flicker for the
-//                            full sounding duration, then exponential release
-//   • staccato pizz        → no flicker, peak-boosted by velocity, short
-//                            release; bright snap on the cell
-//   • tremolo (C8)         → fast flicker matching the bow tremolo rate
-//   • gliss (C5/C6/C7)     → smooth hold, no flicker, fast release
-//
-// `peakBoost` multiplies the velocity-derived base peak (clamped to 1.0).
-// `flickerHz` / `flickerDepth` set the during-sustain modulation (depth 0
-// disables flicker entirely). `releaseMs` is the exp-decay time-constant
-// after noteoff. Profiles per SWAM complex; index 0 = unknown.
-const COMPLEX_GLOW = {
-  0: { flickerHz: 4.0,  flickerDepth: 0.12, peakBoost: 1.00, releaseMs: 380 },
-  1: { flickerHz: 0.0,  flickerDepth: 0.00, peakBoost: 1.45, releaseMs: 130 },  // pizz   — punchy snap
-  2: { flickerHz: 4.5,  flickerDepth: 0.18, peakBoost: 1.00, releaseMs: 420 },  // bow    — breathing cloud
-  3: { flickerHz: 3.0,  flickerDepth: 0.10, peakBoost: 0.95, releaseMs: 600 },  // sust   — long held flat
-  4: { flickerHz: 7.5,  flickerDepth: 0.22, peakBoost: 1.20, releaseMs: 380 },  // harm   — bright twinkle
-  5: { flickerHz: 0.0,  flickerDepth: 0.00, peakBoost: 1.00, releaseMs: 280 },  // gliss  — smooth hold
-  6: { flickerHz: 0.0,  flickerDepth: 0.00, peakBoost: 1.00, releaseMs: 280 },  // gliss
-  7: { flickerHz: 1.5,  flickerDepth: 0.10, peakBoost: 0.95, releaseMs: 350 },  // smoke  — slow waver
-  8: { flickerHz: 13.0, flickerDepth: 0.40, peakBoost: 1.05, releaseMs: 240 },  // trem   — fast bow-rate flicker
-};
-// Shortest perceivable on-state for a near-instant note (bridge can emit
-// noteon→noteoff within a frame for very short pizz). Without this floor
-// a 1-frame note paints, decays, and disappears within the same vsync.
-const GLOW_MIN_VISIBLE_MS = 90;
-// Per-cell glow state. cellGlows.get(i) → { onsetMs, peak, flickerHz,
-// flickerDepth, releaseMs, sustaining, releaseStart, refCount }. refCount
-// tracks how many concurrent voices are holding this cell so the release
-// only kicks in when the last voice lifts.
-const cellGlows = new Map();
-
-function _glowCellIdx(pitch) {
-  if (typeof pitch !== 'number' || !isFinite(pitch)) return -1;
-  return Math.max(0, Math.min(SIEVE_RANGE - 1, (pitch | 0) - 36));
-}
-
-function startGlow(pitch, velocity, complex) {
-  const i = _glowCellIdx(pitch);
-  if (i < 0) return;
-  const profile = COMPLEX_GLOW[complex] || COMPLEX_GLOW[0];
-  const v = Math.max(0, Math.min(127, +velocity || 0)) / 110;
-  // sqrt() for perceptual linearity at low velocities; floor 0.45 so
-  // even a pp note has a visible glow.
-  const peakBase = Math.min(1, 0.45 + 0.55 * Math.sqrt(v));
-  const peak = Math.min(1, peakBase * profile.peakBoost);
-  const now = performance.now();
-  const existing = cellGlows.get(i);
-  if (existing) {
-    existing.peak = Math.max(existing.peak, peak);
-    existing.onsetMs = now;                      // reset flicker phase
-    existing.flickerHz = profile.flickerHz;      // newest voice's profile wins
-    existing.flickerDepth = profile.flickerDepth;
-    existing.releaseMs = profile.releaseMs;
-    existing.sustaining = true;
-    existing.refCount = (existing.refCount || 0) + 1;
-    return;
-  }
-  cellGlows.set(i, {
-    onsetMs: now,
-    peak,
-    flickerHz: profile.flickerHz,
-    flickerDepth: profile.flickerDepth,
-    releaseMs: profile.releaseMs,
-    sustaining: true,
-    releaseStart: 0,
-    refCount: 1,
-  });
-}
-
-function endGlow(pitch) {
-  const i = _glowCellIdx(pitch);
-  if (i < 0) return;
-  const g = cellGlows.get(i);
-  if (!g) return;
-  g.refCount = Math.max(0, (g.refCount || 0) - 1);
-  if (g.refCount > 0) return;
-  if (g.sustaining) {
-    g.sustaining = false;
-    // Defer the release start so the cell stays lit at peak for at least
-    // GLOW_MIN_VISIBLE_MS — covers single-frame staccatos that would
-    // otherwise be inaudible to the eye.
-    const minRelease = g.onsetMs + GLOW_MIN_VISIBLE_MS;
-    g.releaseStart = Math.max(performance.now(), minRelease);
-  }
-}
-
-function clearAllGlows() {
-  cellGlows.clear();
-  for (let i = 0; i < sieveCells.length; i++) {
-    sieveCells[i].style.removeProperty('--glow-opacity');
-  }
-}
-
-function tickGlows() {
-  const now = performance.now();
-  let toDelete = null;
-  for (const [i, g] of cellGlows) {
-    let intensity;
-    if (g.sustaining || now < g.releaseStart) {
-      // Held — peak with optional flicker. Use |sin| so the modulation
-      // never drops below (1 - depth) — a held note shouldn't blink off,
-      // only ripple.
-      const dt = (now - g.onsetMs) / 1000;
-      const flicker = g.flickerDepth > 0
-        ? (1 - g.flickerDepth) + g.flickerDepth * Math.abs(Math.sin(2 * Math.PI * g.flickerHz * dt))
-        : 1;
-      intensity = g.peak * flicker;
-    } else {
-      // Exponential release. tau ≈ releaseMs · 0.7 → ~99% decay at 3·tau.
-      const dt = now - g.releaseStart;
-      const k = Math.exp(-dt / (g.releaseMs * 0.7));
-      intensity = g.peak * k;
-      if (intensity < 0.004) {
-        if (!toDelete) toDelete = [];
-        toDelete.push(i);
-        continue;
-      }
-    }
-    sieveCells[i].style.setProperty('--glow-opacity', intensity.toFixed(3));
-  }
-  if (toDelete) {
-    for (const i of toDelete) {
-      cellGlows.delete(i);
-      sieveCells[i].style.removeProperty('--glow-opacity');
-    }
-  }
-  requestAnimationFrame(tickGlows);
-}
-requestAnimationFrame(tickGlows);
-// ---- /Sieve-cell emanation glow --------------------------------------------
+// Sieve-cell emanation glow + the COMPLEX_GLOW profile table moved to
+// ./js/sieve.js (Phase 2.4). startGlow / endGlow / clearAllGlows are
+// imported as aliases above so callsites in handleMidiEcho / panic
+// don't need renaming.
 
 // ---- Triangle leg lines (K → sieve cell, C → sieve cell) -------------------
 // For every active note, two white lines extend from the active K-vertex and
@@ -2404,7 +2205,6 @@ function resizeLineOverlay() {
   lineOverlay.style.height = cssH + 'px';
   lineOverlay.width  = Math.round(cssW * lineDpr);
   lineOverlay.height = Math.round(cssH * lineDpr);
-  refreshSieveRect();
 }
 
 // Per-note line state. Mirrors activeMidiNotes' lifecycle but is its own
@@ -2570,26 +2370,16 @@ function clearAllLines() {
   lineNotes.length = 0;
 }
 
-// Sieve strip rect cached per resize. Cell positions interpolate from the
-// rect alone (cells distribute uniformly via flex), so we don't pay 49
-// getBoundingClientRect calls per frame — just one for the strip on
-// layout changes.
-let _sieveRect = null;
-function refreshSieveRect() {
-  const el = document.querySelector('.ovl-sieve-right');
-  _sieveRect = el ? el.getBoundingClientRect() : null;
-}
-window.addEventListener('resize', resizeLineOverlay);
-requestAnimationFrame(refreshSieveRect);
-
+// Sieve cell position lookup for the white-line endpoints. Each call
+// goes through the sieve module's getSieveCellRect — which itself does
+// one getBoundingClientRect on a known cell. drawLineOverlay calls
+// this once per active gliss line per frame (typically 1-3 lines), so
+// the per-call layout cost is fine; no manual caching needed now that
+// the lookup is one cell rect, not 49.
 function sieveCellLeftEdgePos(pitch) {
-  if (!_sieveRect || _sieveRect.height === 0) return null;
-  const clamped = Math.max(36, Math.min(84, pitch));
-  const i = clamped - 36;       // continuous semitone index 0..48
-  return {
-    x: _sieveRect.left,
-    y: _sieveRect.top + (48.5 - i) * _sieveRect.height / 49,
-  };
+  const r = getSieveCellRect(pitch);
+  if (!r || r.height === 0) return null;
+  return { x: r.left, y: r.top + r.height / 2 };
 }
 
 const _projVec = new THREE.Vector3();
