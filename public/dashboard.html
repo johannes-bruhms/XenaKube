@@ -193,6 +193,19 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { connectGanCube } from 'https://cdn.jsdelivr.net/npm/gan-web-bluetooth@latest/+esm';
+// Phase 2.1 — shared dashboard constants extracted to ./js/constants.js.
+// Mutable state (slider-driven scroll speed, dynamically-measured
+// sieve-strip width) stays inline below; everything else lives in the
+// module so future Phase 2 modules import the same source of truth.
+import {
+  ROLL_MIN_MIDI, ROLL_MAX_MIDI, ROLL_PITCH_RANGE,
+  ROLL_TOP_INSET_PX, ROLL_BOTTOM_INSET_PX,
+  ROLL_BRUSH_SCALE,
+  PENDING_MAX_AGE_MS, PIZZ_FADE_MIN_MS, PIZZ_FADE_MAX_MS,
+  GLISS_GAP_MS, GLISS_COMPLEXES,
+  PORTAMENTO_MS_PER_SEMITONE, GLISS_PORTAMENTO_MS_PER_SEMITONE,
+  COMPLEX_COLOR,
+} from './js/constants.js';
 
 // ============================================================
 // Constants
@@ -1558,19 +1571,12 @@ function handleSolveEvent() {
 // CSS-px scroll speed. Visible time window is derived from canvas width
 // (wider screen → more history visible). Mutable so the dashboard slider
 // can retune live; persisted in localStorage so the user's choice survives
-// reloads.
+// reloads. Stays inline (not exported via constants.js) — ES module
+// imports are read-only bindings, so a slider-mutated `let` would need
+// a setter wrapper that adds noise without value.
 let ROLL_PX_PER_SEC = 360;
-const ROLL_MIN_MIDI     = 36;          // C2 — bottom of cello range
-const ROLL_MAX_MIDI     = 84;          // C6 — top of practical cello range
-const ROLL_PITCH_RANGE  = ROLL_MAX_MIDI - ROLL_MIN_MIDI;   // 48 semitones
-// Pitch-axis insets (CSS px). The canvas stays full-viewport so the
-// background scrolls under everything, but the pitch axis is restricted to
-// the inner rectangle so high notes (~C6) don't render under the spell row
-// and low notes (~C2) don't render under the bottom-right gizmo cluster.
-// These MUST match the .ovl-sieve-right CSS top/bottom values exactly so
-// each MIDI pitch lines up vertically with its sieve cell.
-const ROLL_TOP_INSET_PX    = 70;
-const ROLL_BOTTOM_INSET_PX = 80;
+// ROLL_MIN_MIDI / ROLL_MAX_MIDI / ROLL_PITCH_RANGE / ROLL_TOP_INSET_PX
+// / ROLL_BOTTOM_INSET_PX moved to ./js/constants.js (Phase 2.1).
 // Right-side inset = current sieve-strip width. The "now" line of the
 // rolling score is anchored to the sieve's LEFT edge so notes appear to
 // emerge from their matching pitch bin and scroll left across the cube
@@ -1579,41 +1585,8 @@ const ROLL_BOTTOM_INSET_PX = 80;
 // score's right-edge inset automatically. Default until first measure
 // matches the clamp's lower bound.
 let ROLL_RIGHT_INSET_CSS_PX = 90;
-const PENDING_MAX_AGE_MS = 45000;      // force-complete notes stuck >45s
-// UDP-reorder fallback for the slide-vs-leap classifier. The PRIMARY
-// classifier is the per-note `chainStart` flag set in handleMidiEcho —
-// it uses the same "is a previous same-(voice, complex) note alive at
-// noteon time?" check as the white-line's `_findGlissLine`, so both
-// code paths classify identically. Bridge emit modes:
-//   • glissOverlap (true slide, same string) — noteon NEW arrives BEFORE
-//     noteoff OLD; previous note is alive → chainStart=false → chain.
-//   • leapStep (cross-string leap) — clean noteoff → 50 ms gap → noteon;
-//     queue empty at noteon time → chainStart=true → break.
-//   • stealInstance (voice steal) — synchronous noteoff(old) → noteon(new);
-//     queue empty at noteon time → chainStart=true → break (this case
-//     was the regression that motivated the unification — gap ≈ 0 ms
-//     was below GLISS_GAP_MS so the gap-only test misclassified as slide).
-// GLISS_GAP_MS only fires when chainStart's live-entry check is fooled
-// by UDP packet reorder (the slide's noteoff is delivered BEFORE the
-// new noteon despite being emitted after) — extremely rare on localhost
-// but cheap to guard against. Threshold sits well under 50 ms so leaps
-// also split if chainStart is somehow wrong.
-const GLISS_GAP_MS      = 25;
-const GLISS_COMPLEXES   = new Set([5, 6, 7]);
-
-// Per-complex colour. Index 0 (= unknown / pre-init / KS) gets a neutral
-// grey so a few stray notes from a stale state aren't misread as pizz.
-const COMPLEX_COLOR = {
-  0: '#888899',
-  1: '#f3a83b',  // C1 pizz       — amber
-  2: '#3b82f6',  // C2 arco       — cobalt
-  3: '#60a5fa',  // C3 arco       — paler cobalt (distinct from C2 in dense passages)
-  4: '#22d3ee',  // C4 harmonic   — cyan
-  5: '#c084fc',  // C5 gliss      — magenta
-  6: '#a855f7',  // C6 gliss      — deeper magenta (sieve-walker)
-  7: '#d8b4fe',  // C7 gliss      — paler magenta
-  8: '#e11d48',  // C8 trem near-bridge — crimson
-};
+// PENDING_MAX_AGE_MS, GLISS_GAP_MS, GLISS_COMPLEXES, COMPLEX_COLOR
+// moved to ./js/constants.js (Phase 2.1).
 
 // FIFO queue per (voice, pitch). The bridge legitimately emits overlapping
 // noteons for the same pitch (C8 trem rebows the same mainPitch every
@@ -1770,9 +1743,8 @@ function timeToX(tMs, nowMs, w) {
 // `ROLL_BRUSH_SCALE` is a single global multiplier for tuning. Bump up for
 // chunkier brushes everywhere, down for thinner. (1.0 matches the original
 // absolute-CSS look on 1080p / 1× DPR; 1.4 is the current thicker default
-// for legibility in dense passages.)
-const ROLL_BRUSH_SCALE = 1.4;
-let   rollRowH         = 19;     // device-px per semitone — recomputed each frame in drawRollingScore
+// for legibility in dense passages.) Moved to ./js/constants.js (Phase 2.1).
+let rollRowH = 19;     // device-px per semitone — recomputed each frame in drawRollingScore
 
 // Stable per-note RNG. Brushes use scattered dots / specks; without a stable
 // seed they'd scintillate every frame. Hash the immutable note identity
@@ -2006,11 +1978,7 @@ function buildGlissChains(nowMs, w, h) {
   return chains;
 }
 
-// SWAM Cello portamento time per gliss complex, ms-per-semitone (matches
-// CC 5 values the bridge writes in xk_swam.js). Mirrors the constant of
-// the same name used by the white-line endpoint in drawLineOverlay so
-// the leg and the drawn chain plot the SAME pitch curve at every frame.
-const GLISS_PORTAMENTO_MS_PER_SEMITONE = { 5: 50, 6: 80, 7: 115 };
+// GLISS_PORTAMENTO_MS_PER_SEMITONE moved to ./js/constants.js (Phase 2.1).
 function _glissChainDur(fromP, toP, complex) {
   const interval = Math.abs(toP - fromP);
   const perSemi = GLISS_PORTAMENTO_MS_PER_SEMITONE[complex] || 80;
@@ -2435,14 +2403,7 @@ function resizeLineOverlay() {
 // cell-glow release tail). Each entry carries the gliss interpolation
 // parameters so a single line can slide its endpoint between cells.
 const lineNotes = [];
-// SWAM Cello portamento time per gliss complex (CC 5 value, ms-per-semitone).
-// The bridge writes these once at setup (xk_swam.js COMPLEX table); SWAM
-// itself scales the slide duration linearly with the MIDI interval per its
-// docs ("Portamento Time: 0–2000 ms (scaled by MIDI interval)"). So the
-// audible slide for a given (complex, interval) pair is ~ table[complex] ·
-// |toPitch − fromPitch| ms — exactly what we want the visual leg to track.
-// C5 wild gliss = fastest, C7 drift = slowest.
-const PORTAMENTO_MS_PER_SEMITONE = { 5: 50, 6: 80, 7: 115 };
+// PORTAMENTO_MS_PER_SEMITONE moved to ./js/constants.js (Phase 2.1).
 
 // Cubic smoothstep — the natural ease-in-out curve SWAM Cello's portamento
 // traces. Mirrored exactly by drawGlissChain's _glissEase so the white
@@ -2471,12 +2432,7 @@ function _displayedPitch(ln, now) {
   return ln.fromPitch + (ln.toPitch - ln.fromPitch) * easeSlide(t);
 }
 
-// C1 pizzicato is the ONLY complex with a release fade (mirrors the
-// physical pluck — string vibrates briefly after the finger lifts). Fade
-// duration scales with velocity: a fff pluck rings longer than a pp pluck.
-// All other complexes snap the line off the moment noteoff arrives.
-const PIZZ_FADE_MIN_MS = 100;
-const PIZZ_FADE_MAX_MS = 420;
+// PIZZ_FADE_MIN_MS / PIZZ_FADE_MAX_MS moved to ./js/constants.js (Phase 2.1).
 
 // Find the live (sustaining) gliss line for this voice+complex, if any.
 // For gliss complexes, this presence/absence IS the slide-vs-leap
