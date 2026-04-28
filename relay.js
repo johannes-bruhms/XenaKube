@@ -427,19 +427,81 @@ function broadcastState(state, move) {
   });
 }
 
-// Load dashboard HTML (single page: connect + live visualization)
-const DASHBOARD_PATH = path.join(__dirname, 'public', 'dashboard.html');
-let DASHBOARD_HTML = '';
+// Static file serving from public/. The dashboard imports ES modules
+// from `./js/...` and stylesheets from `./css/...`; native browser
+// modules require those files to be served with correct MIME types
+// (browsers refuse to load `text/html` as a module). Path-routed reads
+// from disk on every request — no startup cache, so dev edits to any
+// public/ file are picked up by a browser refresh without restarting
+// the relay. Path traversal blocked via realpath-prefix check.
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const DASHBOARD_PATH = path.join(PUBLIC_DIR, 'dashboard.html');
 try {
-  DASHBOARD_HTML = fs.readFileSync(DASHBOARD_PATH, 'utf-8');
+  fs.accessSync(DASHBOARD_PATH);
 } catch (e) {
   console.warn('Dashboard not found at', DASHBOARD_PATH);
 }
 
+const STATIC_MIME = {
+  '.js':   'text/javascript; charset=utf-8',
+  '.mjs':  'text/javascript; charset=utf-8',
+  '.css':  'text/css; charset=utf-8',
+  '.html': 'text/html; charset=utf-8',
+  '.json': 'application/json; charset=utf-8',
+  '.svg':  'image/svg+xml',
+  '.png':  'image/png',
+  '.jpg':  'image/jpeg',
+  '.jpeg': 'image/jpeg',
+  '.gif':  'image/gif',
+  '.ico':  'image/x-icon',
+  '.webp': 'image/webp',
+  '.txt':  'text/plain; charset=utf-8',
+};
+
+function serveDashboard(res) {
+  fs.readFile(DASHBOARD_PATH, (err, data) => {
+    if (err) {
+      res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Dashboard read error: ' + err.message);
+      return;
+    }
+    res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end(data);
+  });
+}
+
+function serveStatic(urlPath, res) {
+  // Strip query / hash, normalise, drop leading slashes so path.join
+  // can't escape PUBLIC_DIR via an absolute path.
+  const clean = urlPath.split('?')[0].split('#')[0];
+  const safe  = path.normalize(clean).replace(/^[\\/]+/, '');
+  const filePath = path.join(PUBLIC_DIR, safe);
+  // Prefix check defeats `..` traversal even after normalize.
+  if (filePath !== PUBLIC_DIR && !filePath.startsWith(PUBLIC_DIR + path.sep)) {
+    res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('Forbidden');
+    return;
+  }
+  fs.readFile(filePath, (err, data) => {
+    if (err) {
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Not found: ' + clean);
+      return;
+    }
+    const ext = path.extname(filePath).toLowerCase();
+    res.writeHead(200, { 'Content-Type': STATIC_MIME[ext] || 'application/octet-stream' });
+    res.end(data);
+  });
+}
+
 // 1. HTTP Server
 const server = http.createServer((req, res) => {
-    res.writeHead(200, { 'Content-Type': 'text/html' });
-    res.end(DASHBOARD_HTML);
+  const urlPath = (req.url || '/').split('?')[0].split('#')[0];
+  if (urlPath === '/' || urlPath === '/dashboard.html' || urlPath === '/index.html') {
+    serveDashboard(res);
+    return;
+  }
+  serveStatic(urlPath, res);
 });
 
 server.listen(3000, () => {
