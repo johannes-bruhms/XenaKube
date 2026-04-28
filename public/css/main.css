@@ -1,0 +1,885 @@
+  :root {
+    --bg: #0a0a0f;
+    --panel: #12121a;
+    --border: #1e1e2e;
+    --text: #c8c8d8;
+    --dim: #555568;
+    --accent: #00ff88;
+    --accent2: #00ccff;
+    --warm: #ff6644;
+    --gold: #ffcc00;
+    --active-glow: rgba(0, 255, 136, 0.25);
+    /* Shared layout geometry. The sieve strip (right) and rolling-score
+       canvas (full-viewport background) both reference these so notes
+       emerge from the matching sieve bin without drifting on resize.
+       Tuned to titl22ed: left column ~30% in portrait / capped wider in
+       landscape; sieve wide enough that pitch labels (C2..C6) read
+       cleanly inside the strip. */
+    --roll-top-inset: 70px;
+    --roll-bottom-inset: 80px;
+    --sieve-strip-w: clamp(86px, 9vw, 170px);
+    --left-col-w: clamp(280px, 30vw, 500px);
+    --br-cluster-w: clamp(160px, 11vw, 220px);
+    --slider-color: var(--gold);
+  }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+    background: var(--bg);
+    color: var(--text);
+    position: relative;
+  }
+
+  /* 2D overlay canvas for the white K→sieve and C→sieve "triangle leg"
+     lines. Sits ABOVE the cube + sieve glow halos but BELOW the title /
+     state / cluster overlays, so a line drawn from a 3D K-vertex inside
+     the cube can pass cleanly to the right-edge sieve cell without being
+     covered by the sieve background, while UI panels still occlude it as
+     expected. Pointer-events off — purely decorative. */
+  #line-overlay {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    pointer-events: none;
+    z-index: 2;
+  }
+
+  /* Full-viewport cube canvas — background layer.
+     Explicit width/height matter: a <canvas> is a replaced element with
+     intrinsic 300×150 HTML attrs, and `position: fixed` with only inset
+     coords (no width/height) lets the browser fall back to those intrinsics
+     in some Chrome paths. That makes Three.js initialise camera.aspect at
+     2.0 (300/150) and the cube collapses to ~21% of canvas width — exactly
+     the regression in fucked.png. Forcing full-viewport dimensions sizes
+     the drawing buffer correctly on first paint. The cube renders at the
+     viewport centre (slightly offset from work-area centre because the
+     left column is wider than the right sieve, but always at full size). */
+  #cube-canvas {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    touch-action: none;
+    z-index: 0;
+  }
+
+  /* Overlay panels — transparent backgrounds over cube */
+  .ovl {
+    position: fixed;
+    z-index: 2;
+    pointer-events: none;
+  }
+  .ovl > * { pointer-events: auto; }
+
+  /* Top-left column — title, conn-row, mode pills, K/C cards. Single column,
+     proportional width, natural font sizes (no zoom hack — sized directly so
+     the rendered metrics match the rest of the HUD). */
+  .ovl-tl {
+    top: 12px;
+    left: 14px;
+    width: var(--left-col-w);
+    max-height: calc(100vh - 24px);
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    overflow-y: auto;
+    scrollbar-width: none;
+    font-size: 13px;
+  }
+  .ovl-tl::-webkit-scrollbar { display: none; }
+
+  /* Top-right — spell buffer + spell notification (compact, matches left
+     column typography). Right-aligned column that cannot exceed cluster
+     width. */
+  .ovl-tr {
+    top: 12px;
+    right: calc(var(--sieve-strip-w) + 14px);
+    max-width: 32vw;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 6px;
+    text-align: right;
+    pointer-events: none;
+    font-size: 13px;
+  }
+
+  /* Bottom-left — STATE panel + permutation. Sibling of .ovl-tl so the
+     left edge stays aligned but the bottom anchor is independent of the
+     title block's height. */
+  .ovl-bl {
+    position: fixed;
+    left: 14px;
+    bottom: 14px;
+    width: var(--left-col-w);
+    z-index: 3;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    max-height: calc(100vh - 380px);
+    overflow-y: auto;
+    scrollbar-width: none;
+    font-size: 13px;
+  }
+  .ovl-bl::-webkit-scrollbar { display: none; }
+  .ovl-bl .state-rows { display: flex; flex-direction: column; gap: 2px; }
+
+  /* Right-side vertical sieve strip — pitch C2 at bottom, C6 at top.
+     Span exactly matches the rolling-score's pitch-axis insets so a note
+     of pitch P emerges from sieve cell (P − 36). */
+  .ovl-sieve-right {
+    position: fixed;
+    top: var(--roll-top-inset);
+    bottom: var(--roll-bottom-inset);
+    right: 0;
+    width: var(--sieve-strip-w);
+    z-index: 1;
+    pointer-events: auto;
+    background: rgba(0, 0, 0, 0.20);
+    border-left: 1px solid rgba(0, 204, 255, 0.18);
+    overflow: hidden;
+    font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace;
+  }
+
+  /* Bottom-right cluster — gizmo + rotate toggles + smooth/ghost/score
+     sliders. Sits ON TOP of the sieve strip with NO background fill so the
+     sieve bins remain visible (and tickable) through the cluster. */
+  .ovl-br {
+    position: fixed;
+    bottom: 14px;
+    right: 0;
+    width: var(--br-cluster-w);
+    padding: 0 10px 0 10px;
+    z-index: 5;
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    background: transparent;
+    pointer-events: none;
+  }
+  .ovl-br > * { pointer-events: auto; }
+  .gizmo-wrap {
+    width: 100%;
+    aspect-ratio: 1 / 1;
+    position: relative;
+    margin: 0 auto;
+  }
+  .gizmo-wrap canvas {
+    width: 100% !important;
+    height: 100% !important;
+    display: block;
+  }
+
+  .ovl-section { display: flex; flex-direction: column; gap: 6px; }
+
+  h1.title {
+    font-size: 46px;
+    font-weight: 700;
+    color: var(--accent);
+    letter-spacing: 3px;
+    line-height: 1;
+    margin: 2px 0 6px;
+  }
+  .conn-row {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 6px;
+    margin-top: 4px;
+  }
+  .conn-row .btn-row {
+    display: flex;
+    gap: 6px;
+    align-items: stretch;
+    flex-wrap: wrap;
+  }
+  .conn-row input {
+    padding: 5px 9px;
+    font-size: 13px;
+    width: 100%;
+    border-radius: 3px;
+    border: 1px solid var(--border);
+    background: rgba(10, 10, 15, 0.5);
+    color: var(--warm);
+    font-family: monospace;
+    letter-spacing: 1px;
+  }
+  .conn-row button, .ctrl-btn {
+    padding: 5px 12px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    background: transparent;
+    color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    font-family: monospace;
+    letter-spacing: 1px;
+  }
+  .conn-row button:hover, .ctrl-btn:hover { color: var(--text); border-color: var(--dim); }
+  .conn-row button.connected { color: var(--accent); border-color: var(--accent); }
+  #cube-status { font-size: 13px; color: var(--dim); }
+  #cube-status.ok { color: var(--accent); }
+  #cube-status.err { color: var(--warm); }
+
+  .ws-status-inline {
+    font-size: 13px;
+    color: var(--dim);
+  }
+  .ws-dot {
+    display: inline-block;
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    background: #ff3333;
+    margin-right: 5px;
+    vertical-align: middle;
+  }
+  .ws-dot.connected { background: var(--accent); }
+  .header-status {
+    display: flex;
+    gap: 12px;
+    font-size: 10px;
+    color: var(--dim);
+  }
+  .header-status .val { color: var(--text); }
+
+  .panel-title {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    color: var(--accent2);
+    text-transform: uppercase;
+    margin-bottom: 6px;
+  }
+
+  .cube-rotate-ctrl {
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    background: transparent;
+    padding: 0;
+    border: none;
+    user-select: none;
+    justify-content: flex-end;
+  }
+  .cube-rotate-ctrl .cr-label {
+    font-size: 12px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-right: 4px;
+  }
+  .cube-rotate-ctrl button {
+    padding: 4px 10px;
+    font-size: 14px;
+    font-family: monospace;
+    font-weight: 600;
+    background: transparent;
+    color: var(--dim);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+  .cube-rotate-ctrl button:hover { color: var(--text); }
+  .cube-rotate-ctrl button.active {
+    background: var(--accent);
+    color: var(--bg);
+    border-color: var(--accent);
+  }
+
+  /* State rows (left overlay, transparent) */
+  .state-rows { display: flex; flex-direction: column; gap: 2px; }
+  .state-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 3px 0;
+    font-size: 13px;
+    background: transparent;
+    gap: 8px;
+  }
+  .state-label { color: var(--dim); text-transform: lowercase; letter-spacing: 0.5px; }
+  .state-val { font-weight: 600; color: var(--text); font-size: 13px; }
+  .state-val.accent { color: var(--accent); }
+  .state-val.accent2 { color: var(--accent2); }
+  .state-val.warm { color: var(--warm); }
+  .state-val.gold { color: var(--gold); }
+  .state-val.clickable { cursor: pointer; user-select: none; transition: color .12s, text-shadow .12s; }
+  .state-val.clickable:hover { color: var(--accent); text-shadow: 0 0 6px var(--accent); }
+
+  .sub-heading {
+    font-size: 11px;
+    color: var(--dim);
+    letter-spacing: 1px;
+    margin: 14px 0 8px;
+    text-transform: uppercase;
+  }
+
+  /* Sequence Control panel */
+  .sequence-panel { grid-column: 1 / -1; }
+  .seq-controls {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    flex-wrap: wrap;
+  }
+  .seq-controls label {
+    font-size: 11px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .seq-controls select, .seq-controls input[type="text"] {
+    padding: 5px 10px;
+    font-size: 12px;
+    border-radius: 4px;
+    border: 1px solid var(--border);
+    background: var(--bg);
+    color: var(--text);
+    font-family: monospace;
+  }
+  .seq-controls select { min-width: 180px; }
+  .ctrl-btn.active {
+    background: var(--warm);
+    color: white;
+  }
+  .seq-status {
+    font-size: 12px;
+    color: var(--dim);
+    margin-left: auto;
+  }
+  .seq-status .val { color: var(--accent); font-weight: 600; }
+
+  /* Active vertex indicator in sequence bar */
+  .seq-vertex-bar {
+    display: flex;
+    gap: 4px;
+    margin-top: 12px;
+  }
+  .seq-vertex-pip {
+    flex: 1;
+    height: 32px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 11px;
+    font-weight: 700;
+    color: var(--dim);
+    transition: all 0.2s;
+    position: relative;
+  }
+  .seq-vertex-pip.active {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--active-glow);
+    box-shadow: 0 0 12px var(--active-glow);
+  }
+  .seq-vertex-pip .pip-complex {
+    position: absolute;
+    bottom: -14px;
+    font-size: 8px;
+    color: var(--dim);
+    white-space: nowrap;
+  }
+  .seq-vertex-pip.active .pip-complex { color: var(--text); }
+
+  /* Active vertex + complex cards (bottom-left overlay) */
+  .vertex-grid, .complex-grid { display: block; }
+  .vertex-card, .complex-card {
+    display: none;
+    background: rgba(10, 10, 15, 0.55);
+    border: 1px solid var(--accent);
+    border-radius: 4px;
+    padding: 6px 10px;
+    text-align: center;
+    transition: all 0.25s;
+  }
+  .vertex-card.active, .complex-card.active {
+    display: block;
+    border-color: var(--accent);
+    background: rgba(0, 255, 136, 0.10);
+    box-shadow: 0 0 10px var(--active-glow);
+    padding: 8px 12px;
+    width: 116px;
+    align-self: flex-start;
+  }
+  .vertex-card.active .intensity-bar { display: none; }
+  .vertex-label {
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--accent);
+    margin-bottom: 3px;
+    line-height: 1;
+  }
+  .vertex-param {
+    font-size: 14px;
+    color: var(--text);
+    line-height: 1.35;
+    white-space: nowrap;
+  }
+  .vertex-param .val { color: var(--accent); font-weight: 600; }
+  .vertex-param .val { color: var(--text); }
+  .vertex-card.active .vertex-param .val { color: #fff; }
+  .intensity-bar {
+    height: 3px;
+    background: var(--border);
+    border-radius: 2px;
+    margin-top: 4px;
+    overflow: hidden;
+  }
+  .intensity-fill {
+    height: 100%;
+    background: var(--accent);
+    border-radius: 2px;
+    transition: width 0.3s;
+  }
+
+  .complex-num {
+    font-size: 28px;
+    font-weight: 700;
+    margin-bottom: 3px;
+    line-height: 1;
+  }
+  .complex-name {
+    font-size: 12px;
+    color: var(--dim);
+    line-height: 1.35;
+  }
+
+  /* Complex type colors */
+  .ct-1 { border-color: #ff4444; color: #ff4444; }
+  .ct-2 { border-color: #ffaa22; color: #ffaa22; }
+  .ct-3 { border-color: #44cc44; color: #44cc44; }
+  .ct-4 { border-color: #44dddd; color: #44dddd; }
+  .ct-5 { border-color: #4488ff; color: #4488ff; }
+  .ct-6 { border-color: #aa44ff; color: #aa44ff; }
+  .ct-7 { border-color: #ff44cc; color: #ff44cc; }
+  .ct-8 { border-color: #cccccc; color: #cccccc; }
+
+  /* Sieve — vertical piano-roll on the right edge. Each .sieve-cell is one
+     semitone (49 cells, C2..C6); the stack lives in column-reverse so cell
+     index 0 (C2) sits at the bottom and index 48 (C6) at the top, matching
+     the rolling-score's pitch axis. Octave-C cells host an inline label.
+     The flex container MUST be `.sieve-strip` itself (the immediate parent
+     of the cells). Putting flex on `.ovl-sieve-right` does nothing for the
+     cells because `.sieve-strip` sits between them — that bug collapsed
+     non-octave cells to 0 px and let only the 5 labelled octave cells
+     show, unevenly stacked at the bottom. */
+  .sieve-strip {
+    width: 100%;
+    height: 100%;
+    display: flex;
+    flex-direction: column-reverse;   /* iteration order C2..C6 → bottom..top */
+    gap: 0;
+  }
+  .sieve-cell {
+    flex: 1 1 0;
+    min-height: 0;
+    position: relative;
+    width: 100%;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.30);
+    background: rgba(200, 220, 235, 0.06);
+    transition: background 0.18s, box-shadow 0.18s, color 0.18s;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    padding-left: 8px;
+    color: var(--dim);
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    line-height: 1;
+  }
+  .sieve-cell.black {
+    background: rgba(0, 0, 0, 0.55);
+  }
+  .sieve-cell.octave-start {
+    border-top: 1px solid rgba(0, 204, 255, 0.30);
+    color: var(--accent2);
+  }
+  .sieve-cell.active {
+    background: var(--accent2);
+    box-shadow: inset 0 0 6px rgba(255,255,255,0.30);
+    color: var(--bg);
+  }
+  .sieve-cell.active.octave-start {
+    color: var(--bg);
+  }
+
+  /* Note-emanation glow — fully JS-driven via the --glow-opacity custom
+     property so the envelope can match the playing technique:
+       • sustained bow / harmonic   → held at peak with subtle flicker for
+         the full sounding duration, then exponential release
+       • staccato pizz              → no flicker, peak-boosted by velocity,
+         very short release — a punchy snap on the cell
+       • tremolo (C8)               → fast flicker matching the bow rate
+       • gliss (C5/C6/C7)           → smooth hold, no flicker, fast release
+     Brushes can spread ±1–2 cells around a note; the glow stays anchored
+     to the exact cell the MIDI pitch belongs to, so it's the diagnostic
+     for "did the bridge actually emit this cell?" independent of brush
+     bleed or active-sieve state. The ::after layer's box-shadow stays at
+     fixed colour/blur — only opacity is animated, which Chrome composites
+     on the GPU without re-layout. */
+  .sieve-cell {
+    overflow: visible;
+  }
+  .sieve-cell::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    background: rgba(255, 255, 255, 0.85);
+    box-shadow:
+      inset 0 0 14px rgba(255, 255, 255, 0.85),
+      0 0 22px rgba(0, 204, 255, 0.85),
+      0 0 44px rgba(0, 204, 255, 0.45);
+    opacity: var(--glow-opacity, 0);
+    will-change: opacity;
+  }
+
+  /* Hidden (JS still writes to these) */
+  .log-panel, .gyro-panel, .sequence-panel, .vertices-panel, .complexes-panel, .spell-panel { display: none !important; }
+  /* Keep active vertex/complex cards visible even though grid containers hide by default */
+  .ovl-tl .vertex-grid, .ovl-tl .complex-grid { display: block !important; }
+  .active-cards { display: flex; flex-direction: column; gap: 6px; }
+
+  .move-log {
+    font-size: 12px;
+    max-height: 150px;
+    overflow-y: auto;
+    scrollbar-width: thin;
+    scrollbar-color: var(--border) transparent;
+  }
+  .move-entry {
+    padding: 3px 0;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    gap: 10px;
+    animation: flash-in 0.3s ease-out;
+  }
+  .move-entry .move-name { color: var(--gold); font-weight: 600; min-width: 30px; }
+  .move-entry .move-detail { color: var(--dim); }
+  .move-entry .move-vertex { color: var(--accent); font-weight: 600; }
+
+  @keyframes flash-in {
+    0% { background: rgba(0, 255, 136, 0.15); }
+    100% { background: transparent; }
+  }
+
+
+  /* Permutation display */
+  .perm-display {
+    display: flex;
+    gap: 3px;
+    margin-top: 2px;
+    flex-wrap: nowrap;
+    width: 100%;
+  }
+  .perm-slot {
+    flex: 1;
+    min-width: 0;
+    height: 24px;
+    background: rgba(10, 10, 15, 0.5);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--accent);
+    transition: all 0.3s;
+  }
+  /* Make the permutation row stack label above slots so 8 boxes fit */
+  .state-row.perm-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+  .state-row.perm-row .state-label { margin-bottom: 2px; }
+  .perm-slot.active {
+    border-color: var(--accent);
+    background: var(--active-glow);
+    color: #fff;
+  }
+
+  /* === V2 Panels === */
+
+  /* Spell area (top-right, compact, right-aligned to match left column).
+     The persistent .spell-notification is hidden in the redesign — every
+     spell fire pushes a transient .spell-toast into .spell-history (now
+     anchored just below the move-buffer, so toasts pop up and disappear
+     in the same top-right column as the moves log). The DOM node stays
+     so handleSpellEvent's writes don't NPE. */
+  .spell-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-end;
+    pointer-events: none;
+  }
+  .spell-notification {
+    display: none;
+  }
+  .spell-buffer {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+    font-size: 16px;
+  }
+  .spell-buffer-move {
+    padding: 0;
+    font-size: 16px;
+    font-weight: 600;
+    background: transparent;
+    border: none;
+    border-radius: 0;
+    color: var(--text);
+    transition: color 0.15s;
+    letter-spacing: 2px;
+  }
+  .spell-buffer-move.matched {
+    color: var(--gold);
+  }
+  .spell-partials {
+    font-size: 10px;
+    color: var(--dim);
+    min-width: 120px;
+    text-align: right;
+  }
+  .spell-partials .partial-name {
+    color: var(--text);
+    font-weight: 600;
+  }
+  .spell-partials .partial-bar {
+    display: inline-block;
+    height: 3px;
+    background: var(--gold);
+    border-radius: 2px;
+    margin-left: 4px;
+    vertical-align: middle;
+    transition: width 0.15s;
+  }
+
+  /* Mode badges (left overlay) */
+  .mode-row {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    align-items: flex-start;
+  }
+  .mode-badge {
+    padding: 4px 10px;
+    font-size: 13px;
+    font-weight: 700;
+    border-radius: 3px;
+    letter-spacing: 0.5px;
+    text-transform: uppercase;
+    background: transparent;
+  }
+  .mode-badge.voice-seq {
+    background: rgba(0, 255, 136, 0.12);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .mode-badge.voice-poly {
+    background: rgba(0, 204, 255, 0.12);
+    border: 1px solid var(--accent2);
+    color: var(--accent2);
+  }
+  .mode-badge.frozen {
+    background: rgba(255, 102, 68, 0.12);
+    border: 1px solid var(--warm);
+    color: var(--warm);
+  }
+  .mode-badge.palette {
+    background: rgba(255, 204, 0, 0.08);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+  }
+  .mode-badge.regime-contemplative {
+    background: rgba(0, 255, 136, 0.10);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .mode-badge.regime-conversational {
+    background: rgba(255, 204, 0, 0.10);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+  }
+  .mode-badge.regime-burst {
+    background: rgba(255, 102, 68, 0.15);
+    border: 1px solid var(--warm);
+    color: var(--warm);
+  }
+  .mode-badge.solved {
+    background: rgba(255, 204, 0, 0.12);
+    border: 1px solid var(--gold);
+    color: var(--gold);
+  }
+  .mode-badge.solved.dim {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--dim);
+  }
+  .mode-badge.solved.pulse {
+    animation: solved-pulse 2.4s ease-out;
+  }
+  @keyframes solved-pulse {
+    0%   { color: #fff; background: rgba(255, 204, 0, 0.35); border-color: #fff;       box-shadow: 0 0 16px var(--gold), 0 0 32px var(--gold); }
+    40%  { color: var(--gold); background: rgba(255, 204, 0, 0.20); border-color: var(--gold); box-shadow: 0 0 6px var(--gold); }
+    100% { color: var(--gold); background: rgba(255, 204, 0, 0.12); border-color: var(--gold); box-shadow: none; }
+  }
+  .turn-rate-val {
+    font-size: 13px;
+    color: var(--dim);
+    font-variant-numeric: tabular-nums;
+    min-width: 60px;
+    text-align: left;
+  }
+  .scramble-wrap {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+  }
+  .scramble-label {
+    font-size: 10px;
+    color: var(--dim);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+  }
+  .scramble-bar-outer {
+    width: 90px;
+    height: 7px;
+    background: rgba(10,10,15,0.5);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  .scramble-bar-inner {
+    height: 100%;
+    width: 0%;
+    background: var(--accent);
+    border-radius: 4px;
+    transition: width 0.3s, background 0.3s;
+  }
+  .scramble-val {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--text);
+    min-width: 36px;
+  }
+
+  /* Expression display rows (TILT/SPIN/DEVIATION/SCRAMBLE) — DOM kept so
+     existing JS write-throughs don't crash, but the panel is hidden in the
+     redesign. */
+  .expression-panel { display: none; }
+
+  /* Bottom-right slider rows. Sit transparently over the sieve strip; the
+     slider track + accent + numeric value all use --slider-color (gold) so
+     they remain readable against active sieve cells (which themselves are
+     bright cyan). Font size matches the rotate-toggle buttons (14px). */
+  .br-slider-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
+    color: var(--text);
+    font-family: monospace;
+  }
+  .br-slider-row label {
+    flex: 0 0 auto;
+    color: var(--text);
+    letter-spacing: 0.5px;
+    min-width: 48px;
+  }
+  .br-slider-row input[type="range"] {
+    flex: 1;
+    min-width: 0;
+    accent-color: var(--slider-color);
+    background: transparent;
+  }
+  .br-slider-row .slider-val {
+    flex: 0 0 auto;
+    color: var(--slider-color);
+    font-weight: 700;
+    min-width: 40px;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Spell-history toast — top-right, just below the move-buffer + spell-row.
+     Toasts slide in from the right, hold ~1.4 s, then slide back out
+     fading. Stack vertically for rapid-fire spells. Pointer-events off so
+     they never block the cube-rotate / sieve / gizmo cluster underneath. */
+  .spell-history {
+    position: fixed;
+    top: 50px;
+    right: calc(var(--sieve-strip-w) + 14px);
+    z-index: 100;
+    display: flex;
+    flex-direction: column;
+    align-items: flex-end;
+    gap: 4px;
+    pointer-events: none;
+  }
+  .spell-toast {
+    padding: 5px 12px;
+    font-size: 14px;
+    font-weight: 700;
+    color: var(--bg);
+    background: var(--gold);
+    border-radius: 4px;
+    animation: toast-in 2s ease-out forwards;
+    white-space: nowrap;
+    box-shadow: 0 2px 8px rgba(255, 204, 0, 0.35);
+    pointer-events: none;
+  }
+  @keyframes toast-in {
+    0%   { opacity: 0; transform: translateX(28px); }
+    14%  { opacity: 1; transform: translateX(0); }
+    70%  { opacity: 1; transform: translateX(0); }
+    100% { opacity: 0; transform: translateX(28px); }
+  }
+
+  /* No data overlay */
+  .waiting { display: none; }
+  .ovl-legacy { display: none !important; }
+  .waiting::after {
+    content: '';
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: var(--dim);
+    margin-left: 8px;
+    animation: pulse 1.5s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 0.3; }
+    50% { opacity: 1; }
+  }
+
+  /* Phase E tier 2 rev C — rolling piano-roll as full-viewport background.
+   * Sits behind cube-canvas (which is alpha:true, so the cube + overlays
+   * float on top of the scrolling score). No frame, no grid, no octave
+   * lines — pure note rectangles + gliss curves on transparent ground.
+   * Resizes with the window; pitch range C2..C6 maps across full height. */
+  #rolling-score {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    pointer-events: none;
+    z-index: -1;
+  }
