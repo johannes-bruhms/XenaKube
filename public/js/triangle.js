@@ -45,7 +45,7 @@
 //     `{voice, complex, pitch}` for the FIRST active gliss line, or null.
 
 import * as THREE from 'three';
-import { GLISS_COMPLEXES, PORTAMENTO_MS_PER_SEMITONE, PIZZ_FADE_MIN_MS, PIZZ_FADE_MAX_MS } from './constants.js';
+import { GLISS_COMPLEXES, PORTAMENTO_MS_PER_SEMITONE, GLISS_SLIDE_MAX_DUR_MS, PIZZ_FADE_MIN_MS, PIZZ_FADE_MAX_MS } from './constants.js';
 
 // ---- Module state ----------------------------------------------------------
 
@@ -107,7 +107,12 @@ function predictGlissDuration(fromPitch, toPitch, complex) {
   const interval = Math.abs(toPitch - fromPitch);
   if (interval === 0) return 0;
   const perSemi = PORTAMENTO_MS_PER_SEMITONE[complex] || 80;
-  return Math.min(2000, interval * perSemi);
+  // D66 — cap at GLISS_SLIDE_MAX_DUR_MS so the line completes its
+  // animation before MIN_GLISS_SPACING_MS = 200 ms next-event arrival
+  // overrides it. Mirror of rolling-score's `_glissChainDur` clamp;
+  // both line and chain models stay synced at this cap so
+  // `assertGlissSync` continues to hold to floating-point precision.
+  return Math.min(GLISS_SLIDE_MAX_DUR_MS, interval * perSemi);
 }
 
 // Compute the displayed pitch of an in-flight line at time `now`. Used by

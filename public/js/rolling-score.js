@@ -34,6 +34,7 @@ import {
   PENDING_MAX_AGE_MS,
   GLISS_GAP_MS, GLISS_COMPLEXES,
   GLISS_PORTAMENTO_MS_PER_SEMITONE,
+  GLISS_SLIDE_MAX_DUR_MS,
   COMPLEX_COLOR,
 } from './constants.js';
 import { getCellRect as getSieveCellRect } from './sieve.js';
@@ -410,7 +411,14 @@ function buildGlissChains(nowMs, w, h) {
 function _glissChainDur(fromP, toP, complex) {
   const interval = Math.abs(toP - fromP);
   const perSemi = GLISS_PORTAMENTO_MS_PER_SEMITONE[complex] || 80;
-  return Math.max(80, Math.min(2000, interval * perSemi));
+  // D66 — cap at GLISS_SLIDE_MAX_DUR_MS (195 ms) so a segment always
+  // completes before MIN_GLISS_SPACING_MS = 200 ms event spacing
+  // overrides it. Without this, wide-interval wild-gliss segments
+  // (e.g. 28 semis × 50 ms/semi = 1400 ms) only walk 14 % of their
+  // arc before the next event takes over, collapsing visual amplitude
+  // to ~6 % of the actual pitch swing the user hears. With cap, full
+  // amplitude is restored.
+  return Math.max(80, Math.min(GLISS_SLIDE_MAX_DUR_MS, interval * perSemi));
 }
 
 // Cubic smoothstep — same ease used by the white triangle leg.

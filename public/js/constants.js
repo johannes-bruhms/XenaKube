@@ -104,6 +104,26 @@ export const GLISS_COMPLEXES = new Set([5, 6, 7]);
 export const PORTAMENTO_MS_PER_SEMITONE       = { 5: 50, 6: 80, 7: 115 };
 export const GLISS_PORTAMENTO_MS_PER_SEMITONE = { 5: 50, 6: 80, 7: 115 };
 
+// D66 — slide segment duration cap. Both `_glissChainDur` (rolling-score
+// chain) and `predictGlissDuration` (triangle white line) clamp their
+// segment duration at this value. Aligns with the bridge's bend duration
+// cap (`MIN_GLISS_SPACING_MS - BEND_DUR_MARGIN_MS = 195 ms`) so a slide
+// segment always completes before the next event's segment overrides it.
+//
+// Why: wild gliss with wide intervals (e.g., 28-semi C5 = 28×50 = 1400 ms
+// "ideal" portamento dur) at MIN_GLISS_SPACING_MS = 200 ms event spacing
+// would only walk 14 % (eased to ~6 %) of each segment before the next
+// took over. Visual amplitude collapsed from 28 semis to ~1.6 semis even
+// though SWAM's Mono Poly Release portamento engages cleanly enough to
+// reach full targets audibly. Capping at 195 ms makes each segment
+// complete by the next event boundary, restoring visual amplitude to
+// match what the user perceives audibly.
+//
+// Tunable but tightly coupled to bridge's `MIN_GLISS_SPACING_MS` — bump
+// in lockstep if the bridge spacing changes. The 5 ms margin matches
+// the bridge's `BEND_DUR_MARGIN_MS = 5`.
+export const GLISS_SLIDE_MAX_DUR_MS = 195;
+
 // ============================================================
 // Per-complex colour (rolling-score brush palette + chain stroke)
 // ============================================================
