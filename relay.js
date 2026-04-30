@@ -401,9 +401,10 @@ midiEchoServer.on('message', (msg) => {
   // is implicit during a single reload window.
   const address = msg[0];
   let data = null;
-  if (address === OSC.MIDI_NOTEON)       data = { kind: 'noteon',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
-  else if (address === OSC.MIDI_NOTEOFF) data = { kind: 'noteoff', voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
-  else if (address === OSC.MIDI_PANIC)   data = { kind: 'panic' };
+  if (address === OSC.MIDI_NOTEON)        data = { kind: 'noteon',   voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
+  else if (address === OSC.MIDI_NOTEOFF)  data = { kind: 'noteoff',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
+  else if (address === OSC.MIDI_PANIC)    data = { kind: 'panic' };
+  else if (address === OSC.MIDI_BENDSTEP) data = { kind: 'bendstep', voice: msg[1]|0, fromPitch: msg[2]|0, toPitch: msg[3]|0, durMs: msg[4]|0, complex: msg[5]|0 };  // D59
   else return;
 
   const payload = JSON.stringify({ type: 'midi_echo', data });

@@ -38,6 +38,7 @@ var OSC = {
   MIDI_NOTEON: "/xk/midi/noteon",
   MIDI_NOTEOFF: "/xk/midi/noteoff",
   MIDI_PANIC: "/xk/midi/panic",
+  MIDI_BENDSTEP: "/xk/midi/bendstep",
   GAN_TURN: "/gan/turn",
   GAN_GYRO: "/gan/gyro"
 };

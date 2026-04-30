@@ -71,6 +71,26 @@ let _getActiveGlissLineDisplay = () => null;
 // to sieve.noteOff + triangle.noteOff so the parallel state stays in sync.
 let _onForceFinalise = null;
 
+// D59 — bend segments per (voice, complex). Each entry is a single
+// pitchbend-driven slide segment recorded at bendstep arrival time. The
+// segment model in `_buildGlissSegments` and `buildGlissChains` merges
+// these alongside noteon-derived segments so the audible curve from
+// fromPitch to toPitch is rendered as a continuous Path2D stroke.
+//
+// Entry shape: { voice, complex, t0, dur, p0: fromPitch, p1: toPitch }.
+// Pruned with finishedMidiNotes when t0+dur falls below the visible
+// horizon (drawRollingScore's cull pass).
+const bendSegments = [];
+
+// D59 — chain-grace map (voice:complex → end timestamp). When a bendstep
+// arrives, set `bendChainUntilMs[vk] = now + durMs + tail`. The bridge's
+// noteOn target arrives at ~now+durMs with chainStart=true (because the
+// noteOff source removed the active entry). Within the grace window AND
+// matching toPitch, override chainStart to false so the chain continues.
+const bendChainUntilMs = new Map();
+const bendChainTargetPitch = new Map();
+const BEND_CHAIN_GRACE_TAIL_MS = 100;
+
 // ---- Pitch axis ------------------------------------------------------------
 
 // Phase 1 Visual Invariant — midiToY ↔ sieve-cell-Y agreement (CLAUDE.md).
@@ -325,6 +345,34 @@ function buildGlissChains(nowMs, w, h) {
       push(evt, timeToX(evt.onsetMs, nowMs, w), rightEdge, midiToY(evt.pitch, h));
     }
   }
+  // D59 — bend segments are first-class chain participants. They synthesise
+  // an `evt` shape compatible with noteon-derived nodes (voice, complex,
+  // onsetMs, offsetMs=t0+dur, pitch=p1) PLUS an `isBend=true` marker and
+  // explicit `p0` so `_buildGlissSegments` can use the bend's authoritative
+  // start pitch rather than recomputing from the prior segment chain.
+  // D60 — for in-flight bends (t0+dur > nowMs), clamp the visual x1 at
+  // rightEdge so the chain doesn't render past "now". The segment math
+  // (p0/dur/t0 for `_glissPitchAt` interpolation) stays unchanged; only
+  // the visual endpoint clamps. Without this, the chain drew the bend's
+  // destination as a horizontal line ahead of current time — the user-
+  // reported "drawing future notes" symptom.
+  for (const bs of bendSegments) {
+    if (!GLISS_COMPLEXES.has(bs.complex)) continue;
+    const bsEnd = bs.t0 + bs.dur;
+    const evt = {
+      voice:      bs.voice,
+      complex:    bs.complex,
+      onsetMs:    bs.t0,
+      offsetMs:   bsEnd,
+      pitch:      bs.p1,
+      p0:         bs.p0,    // bend-only field
+      bendDur:    bs.dur,   // bend-only field
+      isBend:     true,
+      chainStart: false,    // bends never break chains
+    };
+    const x1 = (bsEnd > nowMs) ? rightEdge : timeToX(bsEnd, nowMs, w);
+    push(evt, timeToX(bs.t0, nowMs, w), x1, midiToY(bs.p1, h));
+  }
   const chains = [];
   for (const arr of groups.values()) {
     arr.sort((a, b) => a.evt.onsetMs - b.evt.onsetMs);
@@ -387,17 +435,31 @@ function _glissPitchAt(t, segs) {
 function _buildGlissSegments(nodes) {
   const segs = [];
   if (nodes.length === 0) return segs;
-  segs.push({ t0: nodes[0].evt.onsetMs, dur: 0, p0: nodes[0].evt.pitch, p1: nodes[0].evt.pitch });
+  // First node — stationary at its pitch. Bend nodes have an explicit
+  // p0 too, but as the FIRST node we use its p0 (the audible start).
+  const first = nodes[0].evt;
+  if (first.isBend) {
+    segs.push({ t0: first.onsetMs, dur: first.bendDur, p0: first.p0, p1: first.pitch });
+  } else {
+    segs.push({ t0: first.onsetMs, dur: 0, p0: first.pitch, p1: first.pitch });
+  }
   for (let i = 1; i < nodes.length; i++) {
     const n = nodes[i].evt;
-    const startT = n.onsetMs;
-    const pitchAtStart = _glissPitchAt(startT, segs);
-    segs.push({
-      t0: startT,
-      dur: _glissChainDur(pitchAtStart, n.pitch, n.complex),
-      p0:  pitchAtStart,
-      p1:  n.pitch,
-    });
+    if (n.isBend) {
+      // D59 bend segment — explicit p0 (the audible start at bend time)
+      // and explicit duration. Don't recompute via `_glissPitchAt` — the
+      // bridge's bend authoritatively defines the slide curve.
+      segs.push({ t0: n.onsetMs, dur: n.bendDur, p0: n.p0, p1: n.pitch });
+    } else {
+      const startT = n.onsetMs;
+      const pitchAtStart = _glissPitchAt(startT, segs);
+      segs.push({
+        t0: startT,
+        dur: _glissChainDur(pitchAtStart, n.pitch, n.complex),
+        p0:  pitchAtStart,
+        p1:  n.pitch,
+      });
+    }
   }
   return segs;
 }
@@ -463,6 +525,11 @@ function drawRollingScore() {
   while (finishedMidiNotes.length && finishedMidiNotes[0].offsetMs < horizonMs - 500) {
     finishedMidiNotes.shift();
   }
+  // D59 — bend segments are time-bounded just like notes (t0..t0+dur);
+  // cull when fully off-screen on the left.
+  while (bendSegments.length && (bendSegments[0].t0 + bendSegments[0].dur) < horizonMs - 500) {
+    bendSegments.shift();
+  }
 
   for (const evt of finishedMidiNotes) {
     const x0 = timeToX(evt.onsetMs,  nowMs, w);
@@ -503,6 +570,22 @@ function _findActiveGlissChain(voice, complex, nowMs) {
     for (const evt of queue) {
       if (evt.voice === voice && evt.complex === complex) evts.push(evt);
     }
+  }
+  // D59 — include bend segments as chain participants (same shape as
+  // synthesised in buildGlissChains for visual rendering).
+  for (const bs of bendSegments) {
+    if (bs.voice !== voice || bs.complex !== complex) continue;
+    evts.push({
+      voice:      bs.voice,
+      complex:    bs.complex,
+      onsetMs:    bs.t0,
+      offsetMs:   bs.t0 + bs.dur,
+      pitch:      bs.p1,
+      p0:         bs.p0,
+      bendDur:    bs.dur,
+      isBend:     true,
+      chainStart: false,
+    });
   }
   if (evts.length === 0) return null;
   evts.sort((a, b) => a.onsetMs - b.onsetMs);
@@ -638,6 +721,30 @@ export function noteOn(data) {
         if (e.voice === data.voice && e.complex === cmx) { chainStart = false; break outer; }
       }
     }
+    // D59 — bend-grace override. When a bendstep just landed (its
+    // bridge-side noteOff source emptied activeMidiNotes for this
+    // voice/complex), the post-bend noteOn target arrives with
+    // chainStart=true. If we're within the grace window AND the
+    // pitch matches the bend's toPitch, treat as continuation.
+    // D60 — pitch match is ±1 semi tolerant for humanPitch jitter.
+    // D62.1 — CONSUME the grace on match. Without consumption, the
+    // SAME grace window can match multiple later noteons (as long as
+    // they pitch-match within ±1), accidentally chaining notes
+    // ACROSS phrase boundaries when the next phrase's anchor lands
+    // within 1 semi of the prior bend's target. One bend grants
+    // exactly one continuation; subsequent noteons compute
+    // chainStart from active state alone.
+    if (chainStart) {
+      const vk = data.voice + ':' + cmx;
+      const until = bendChainUntilMs.get(vk) || 0;
+      const expectedPitch = bendChainTargetPitch.get(vk);
+      if (until > performance.now() && expectedPitch != null &&
+          Math.abs(expectedPitch - data.pitch) <= 1) {
+        chainStart = false;
+        bendChainUntilMs.delete(vk);
+        bendChainTargetPitch.delete(vk);
+      }
+    }
     if (window.xkDebugGliss) {
       const activeKeys = [...activeMidiNotes.keys()].join(',') || '(empty)';
       console.log(
@@ -700,6 +807,35 @@ export function noteOff(data) {
  *  naturally — we don't clear them so the roll doesn't snap to empty. */
 export function panic() {
   activeMidiNotes.clear();
+  bendChainUntilMs.clear();
+  bendChainTargetPitch.clear();
+  // bendSegments deliberately NOT cleared — already-played bend curves
+  // continue scrolling out via the cull pass like finishedMidiNotes.
+}
+
+/**
+ * D59 — record a cross-string bend slide. Called from main.js's
+ * handleMidiEcho when a `/xk/midi/bendstep` event arrives. The bend
+ * segment becomes a first-class chain participant (see _findActiveGlissChain
+ * and buildGlissChains). The chain-grace map is set so the bridge's
+ * follow-up noteon target (which would otherwise have chainStart=true
+ * because the noteoff source emptied activeMidiNotes for this complex)
+ * is treated as continuation, keeping the chain unbroken.
+ */
+export function bendStep(data) {
+  const cmx = data.complex | 0;
+  const dur = (data.durMs | 0);
+  bendSegments.push({
+    voice:   data.voice,
+    complex: cmx,
+    t0:      performance.now(),
+    dur:     dur,
+    p0:      data.fromPitch,
+    p1:      data.toPitch,
+  });
+  const vk = data.voice + ':' + cmx;
+  bendChainUntilMs.set(vk, performance.now() + dur + BEND_CHAIN_GRACE_TAIL_MS);
+  bendChainTargetPitch.set(vk, data.toPitch);
 }
 
 /** Slider-driven scroll speed (CSS px / sec). */

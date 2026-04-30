@@ -121,6 +121,26 @@ var HAS_TREMOLO_CC       = true;
 var HAS_TREMOLO_RATE     = true;
 var HAS_BOW_POLY_CC      = true;
 
+// D59 — pitchbend range (semitones), MUST EXACTLY MATCH the SWAM
+// preset's Master Tuning → Pitchbend Range setting (saved in
+// xenakube_2.swam). MIDI pitchbend is a 14-bit wheel position with
+// no semitone information; SWAM does the conversion using its preset
+// value. If this constant says 24 but SWAM's preset is 2 (default),
+// the bridge sends a value14 expecting 24-semi-scale interpretation
+// but SWAM applies 2-semi-scale → audible bend is 12× weaker than
+// visual → "leaping" perception (visual slope, audio barely moves
+// then jumps to target via noteOn at end of bend). This has bitten
+// us multiple times when the user forgot to save the SWAM preset
+// after changing the range.
+//
+// D64 (2026-04-30) — set to 24 to match the user's reduced preset.
+// On reload, [print xk_swam] logs this value; cross-check against
+// SWAM's preset Pitchbend Range. Any mismatch sounds like leaping
+// even when the bridge is bending correctly.
+var PITCHBEND_RANGE_SEMI = 24;
+// MIDI pitchbend center value (14-bit, 0..16383).
+var PITCHBEND_CENTER = 8192;
+
 function hasCC(ccNum) {
 	if (ccNum === CC.BOW_SPEED)        return HAS_BOW_SPEED;
 	if (ccNum === CC.ATTACK_RAMP)      return HAS_ATTACK_RAMP;
@@ -376,6 +396,24 @@ function makeInstance(id) {
 		releaseTask: null,
 		ksPending: {},
 
+		// D59 — pitchbend state. `pitchbend` is the current 14-bit value
+		// (center = 8192). `pitchbendRampTasks` holds the in-flight
+		// ramp's per-tick Task objects so cancelPitchbendRamp can stop
+		// them. Reset to (8192, null) in cancelPhrase + bang.
+		pitchbend: PITCHBEND_CENTER,
+		pitchbendRampTasks: null,
+
+		// D63 — bend's deferred atomic transition. When bendStep
+		// schedules its noteOff(source) + noteOn(target) at end of
+		// ramp, it stores the params here so glissStep can
+		// force-complete the transition inline if the next event
+		// fires before the scheduled task. With D63's 5 ms bend-dur
+		// margin, scheduling jitter can reverse the firing order;
+		// this flag makes the dispatch race-free. Cleared on natural
+		// completion (in completeBend), on cancelPhrase, and on bang.
+		bendPending: null,           // { hpSource, hpTarget, vel } | null
+		bendPendingTask: null,       // the scheduleAt Task
+
 		// Voice-shot snapshots (captured at handleVoice onset)
 		intensity: "mf",
 		density: 2.0,
@@ -396,13 +434,16 @@ function makeInstance(id) {
 		peakExpr: 0,
 		bowPressureBase: 64,
 
-		// Gliss invariant telemetry (D42 + D46). Every C5/C6/C7 voice MUST
-		// emit ≥1 glissStep; scheduleRelease's offT checks the sum of
-		// glissOverlapCount (within-string slides) + glissLeapCount
-		// (cross-string leaps) and logs "GLISS FAIL" if both are 0. Per-
-		// phrase log line reports the breakdown so the user can verify
-		// in [print xk_swam]. See CLAUDE.md § Bridge Invariants.
+		// Gliss invariant telemetry (D42 + D46 + D59). Every C5/C6/C7 voice
+		// MUST emit ≥1 glissStep; scheduleRelease's offT checks the sum of
+		// glissOverlapCount (within-string slides) + glissBendCount (cross-
+		// string slides via D59 pitchbend) + glissLeapCount (cross-string
+		// leaps when interval exceeds PITCHBEND_RANGE_SEMI) and logs
+		// "GLISS FAIL" if all three are 0. Per-phrase log line reports the
+		// breakdown so the user can verify in [print xk_swam]. See CLAUDE.md
+		// § Bridge Invariants.
 		glissOverlapCount: 0,
+		glissBendCount: 0,
 		glissLeapCount: 0,
 		glissExpected: false,
 
@@ -626,6 +667,101 @@ function rampCC(inst, num, target, durMs) {
 }
 
 // ================================================================
+// PITCHBEND (D59) — per-instance, single-channel pitchbend wheel
+// ================================================================
+//
+// Standard MIDI pitchbend: status byte 0xE0 + channel, 14-bit value
+// (LSB | MSB << 7) ranging 0..16383, center 8192. SWAM responds to
+// pitchbend by shifting all sounding notes' audible pitches by
+// (value - 8192) / 8192 × PITCHBEND_RANGE_SEMI semitones.
+//
+// Use case: cross-string slides (D59 design in docs/research_notes.md).
+// SWAM's portamento engine bails on cross-string overlaps (D46), so
+// the bridge classifies cross-string as leap and emits noteOff →
+// gap → noteOn. That's audibly correct but the user wants the slide
+// to actually slide. Pitchbend on a single held note produces the
+// audible curve regardless of physical string, at the cost of a
+// somewhat-stretched timbre at extreme bends (acceptable trade).
+
+function emitPitchbend(inst, value14) {
+	value14 = clamp(value14 | 0, 0, 16383);
+	var lsb = value14 & 0x7F;
+	var msb = (value14 >> 7) & 0x7F;
+	emitMidi(inst, 0xE0 + MIDI_CH, lsb, msb);
+	inst.pitchbend = value14;
+}
+
+function cancelPitchbendRamp(inst) {
+	if (!inst.pitchbendRampTasks) return;
+	for (var i = 0; i < inst.pitchbendRampTasks.length; i++) {
+		inst.pitchbendRampTasks[i].cancel();
+	}
+	inst.pitchbendRampTasks = null;
+}
+
+// D63 — bend's atomic transition. Called either by the bend's scheduled
+// task at ramp end (`scheduled = true`), OR inline from glissStep when
+// the next event dispatches before the task fires (`scheduled = false`,
+// race-fix path against the 5ms margin scheduling jitter).
+//
+// Order of operations is the SAME as the original D59 design and MUST
+// NOT change — bend reset before noteOn target so the new note's
+// physical-model attack plays at target_written, not target+offset.
+//
+// Idempotent: safe to call when bendPending is null (returns silently).
+//
+// Telemetry (D64.4): when scheduled=false and a transition is pending,
+// log a one-line "race-fix" entry — means scheduling jitter > 5ms.
+// Quiet during normal play; audible when bend dur margin needs tuning.
+function completeBend(inst, scheduled) {
+	if (!inst.bendPending) return;
+	if (scheduled !== true) {
+		log("inst " + inst.id + " bend race-fix — completeBend fired inline before scheduled task");
+	}
+	var bp = inst.bendPending;
+	emitPitchbend(inst, PITCHBEND_CENTER);   // (1) bend = 0
+	noteOff(inst, bp.hpSource);               // (2) source release
+	noteOn(inst, bp.hpTarget, bp.vel);         // (3) target attack
+	// Bookkeeping: source out, target in.
+	var idx = inst.activeNotes.indexOf(bp.hpSource);
+	if (idx >= 0) inst.activeNotes.splice(idx, 1);
+	inst.activeNotes.push(bp.hpTarget);
+	// Cancel the scheduled task if completing inline (so it doesn't
+	// re-fire). If we're being called BY the task, .cancel() on the
+	// already-firing task is a no-op (Max's Task swallows it).
+	if (inst.bendPendingTask) inst.bendPendingTask.cancel();
+	inst.bendPending = null;
+	inst.bendPendingTask = null;
+}
+
+function rampPitchbend(inst, target, durMs) {
+	cancelPitchbendRamp(inst);
+	target = clamp(target | 0, 0, 16383);
+	var start = inst.pitchbend != null ? inst.pitchbend : PITCHBEND_CENTER;
+	if (durMs <= 0 || start === target) { emitPitchbend(inst, target); return; }
+
+	// D64 — pitchbend tick = 5 ms (was 15). Pitchbend modulates the
+	// pitch wheel continuously; coarse 15 ms ticks at ±24 range step
+	// at ~1.85 semis/tick on a 24-semi bend, which can be audible as
+	// stepping. 5 ms = 0.62 semis/tick on the same bend, smoothly
+	// continuous. Trade: 3× more MIDI events per bend (~40 vs ~13 per
+	// 195 ms ramp). SWAM handles 200 Hz pitchbend without trouble; the
+	// total MIDI traffic is still tiny relative to audio rendering.
+	var tickMs = 5;
+	var steps  = Math.max(1, Math.round(durMs / tickMs));
+	var tasks  = [];
+	for (var i = 1; i <= steps; i++) {
+		(function(step) {
+			var v = start + (target - start) * (step / steps);
+			var t = new Task(function() { emitPitchbend(inst, v); }, this);
+			t.schedule(step * tickMs);
+			tasks.push(t);
+		})(i);
+	}
+	inst.pitchbendRampTasks = tasks;
+}
+
+// ================================================================
 // KEY SWITCH (D29 interleave guard, per-instance)
 // ================================================================
 function keyswitch(inst, note, vel, channel) {
@@ -756,6 +892,25 @@ function cancelPhrase(inst, preserveLegatoTail) {
 
 	cancelCCRamp(inst, CC.EXPRESSION);
 
+	// D59 — cancel any in-flight pitchbend ramp and reset the wheel to
+	// center. A stolen mid-bend voice would otherwise leak the bend
+	// offset into the next voice's first noteOn — that note would play
+	// at written_pitch + offset audibly, drifting an entire phrase off
+	// pitch. Cancel BEFORE allNotesOff so the held source's last
+	// audible pitch is its written pitch (not target+offset) before
+	// release; a one-frame audible "drop back to source pitch" is
+	// preferable to a wrong-pitch new voice.
+	cancelPitchbendRamp(inst);
+	if (inst.pitchbend !== PITCHBEND_CENTER) emitPitchbend(inst, PITCHBEND_CENTER);
+
+	// D63 — drop any deferred bend transition. The bend is being
+	// aborted (steal / phrase end); we don't want completeBend to
+	// fire later and re-add a noteOn for the bend's target after
+	// allNotesOff has cleared everything.
+	if (inst.bendPendingTask) inst.bendPendingTask.cancel();
+	inst.bendPending = null;
+	inst.bendPendingTask = null;
+
 	// D52 — clear any in-flight Bow Pressure Accent spike whose scheduled
 	// reset task got cancelled above. Without this, a steal mid-spike could
 	// leak CC 18 = 80 into the next voice, producing an unintended initial
@@ -786,21 +941,25 @@ function scheduleRelease(inst, dur) {
 		inst.status = 'RELEASING';
 		rampCC(inst, CC.EXPRESSION, 0, fadeMs);
 
-		// D42 + D46 gliss invariant assertion. Phrase ran to natural end
-		// without being stolen, so if glissExpected was true we should have
-		// seen ≥1 gliss event (slide OR leap). 0 means the phrase generator
-		// emitted no glissStep at all despite being a gliss complex — a
-		// silent bug pre-D42. The per-phrase breakdown is always logged so
-		// the user can verify slide/leap distribution in [print xk_swam].
+		// D42 + D46 + D59 gliss invariant assertion. Phrase ran to natural
+		// end without being stolen, so if glissExpected was true we should
+		// have seen ≥1 gliss event (slide OR bend OR leap). 0 means the
+		// phrase generator emitted no glissStep at all despite being a
+		// gliss complex — a silent bug pre-D42. The per-phrase breakdown
+		// is always logged so the user can verify the distribution in
+		// [print xk_swam] (slides=same-string portamento; bends=cross-
+		// string pitchbend slide; leaps=cross-string discrete jump,
+		// rare post-D59 since interval rarely exceeds PITCHBEND_RANGE_SEMI).
 		if (inst.glissExpected) {
 			var slides = inst.glissOverlapCount | 0;
+			var bends  = inst.glissBendCount    | 0;
 			var leaps  = inst.glissLeapCount    | 0;
 			var maxRun = inst.consecutiveLeapMax | 0;
-			if (slides + leaps < 1) {
+			if (slides + bends + leaps < 1) {
 				log("GLISS FAIL inst " + inst.id + " C" + inst.activeComplex +
 				    " face=" + (inst.faceEnvelope || "-") +
 				    " motion=" + (inst.faceMotion || "-") +
-				    " slides=0 leaps=0 dur=" + dur.toFixed(2));
+				    " slides=0 bends=0 leaps=0 dur=" + dur.toFixed(2));
 			} else if (maxRun > maxLeapsFor(inst.activeComplex)) {
 				// D48 + D51 + D58 — leap-run exceeded per-complex tolerance
 				// despite the post-leap nudge. Only happens when
@@ -813,14 +972,14 @@ function scheduleRelease(inst, dur) {
 				// pickPitch's register or lower MIN_LEAP.
 				log("GLISS RUN FAIL inst " + inst.id + " C" + inst.activeComplex +
 				    " face=" + (inst.faceEnvelope || "-") +
-				    " slides=" + slides + " leaps=" + leaps +
+				    " slides=" + slides + " bends=" + bends + " leaps=" + leaps +
 				    " consecLeapMax=" + maxRun +
 				    " (max for C" + inst.activeComplex + " = " + maxLeapsFor(inst.activeComplex) + ")" +
 				    " dur=" + dur.toFixed(2));
 			} else {
 				log("inst " + inst.id + " C" + inst.activeComplex +
 				    " face=" + (inst.faceEnvelope || "-") +
-				    " slides=" + slides + " leaps=" + leaps +
+				    " slides=" + slides + " bends=" + bends + " leaps=" + leaps +
 				    " dur=" + dur.toFixed(2));
 			}
 			inst.glissExpected = false;
@@ -1498,6 +1657,176 @@ function leapStep(inst, targetPitch) {
 	});
 }
 
+// bendStep — D59 cross-string slide via pitchbend wheel. Used when
+// sameString(src, dst) is false but the interval fits in
+// PITCHBEND_RANGE_SEMI. Audible result: continuous pitch curve from
+// source to target on the source string (whatever it is) via SWAM's
+// pitchbend response, regardless of which physical string each pitch
+// would normally sit on.
+//
+// The held source note rings throughout the bend at audible pitch
+// `source + bend / 8192 × range`. At ramp end, three messages fire
+// in this order (sub-1ms apart, single JS tick):
+//
+//   1. emitPitchbend(8192)         — wheel returns to center; held
+//                                    source's audible pitch drops
+//                                    from target back to source
+//                                    briefly.
+//   2. noteOff(source)             — source begins release.
+//   3. noteOn(target, vel)         — target attacks at target_written
+//                                    (bend is 0, no offset).
+//
+// Order matters: with bend reset BEFORE noteOn target, the new note's
+// physical-model attack transient plays at the correct pitch. The
+// brief "audible drop to source" between (1) and (2) is masked by
+// the new attack in (3); listener perceives a smooth slide finishing
+// with a clean target attack.
+//
+// OSC echo: `/xk/midi/bendstep <voice> <fromPitch> <toPitch> <durMs>
+// <complex>` fires at the START of the bend so the dashboard can
+// model the segment in advance. The follow-up noteOff(source) +
+// noteOn(target) echo via the existing MIDI_NOTEOFF / MIDI_NOTEON
+// addresses; the dashboard's bendstep handler suppresses the
+// chain-break that the new noteOn would otherwise trigger.
+//
+// Counters: `glissBendCount++` (paralleling glissOverlapCount /
+// glissLeapCount). D42 invariant updated to slides + bends + leaps.
+//
+// `glissVel` overrides default velocity (C5 wild bumps to
+// WILD_GLISS_VEL = 22 for slide audibility); C6/C7 use GLISS_VEL.
+// `accent` (D52) spikes CC 18 just before the noteOff/noteOn pair —
+// the per-event attack character belongs at the TARGET, not the
+// source, so we time the spike to coincide with the target's
+// attack.
+//
+// Caller is responsible for tracking the audible target pitch as
+// the new "source" for subsequent steps — this function returns
+// nothing; phraseC5/6/7 update lastPitchRef from the dispatcher
+// (glissStep returns target pitch).
+function bendStep(inst, sourcePitch, targetPitch, glissVel, accent, complex) {
+	// D60 — find the actual held source note, don't re-humanise.
+	// `humanPitch` has a 10% chance of shifting by ±1 SEMITONE (not
+	// the small jitter I assumed during D59 design). Calling humanPitch
+	// here would produce a fresh random shift that doesn't match what
+	// noteOn put into inst.activeNotes earlier — the end-of-bend
+	// noteOff would target a pitch that doesn't exist, leaving the
+	// real note ringing forever, queues piling up, and visuals
+	// diverging from audio. Match by Math.round so a humanPitch shift
+	// of +1 still resolves to the right active entry.
+	var heldSource = null;
+	for (var ai = 0; ai < inst.activeNotes.length; ai++) {
+		if (Math.round(inst.activeNotes[ai]) === Math.round(sourcePitch)) {
+			heldSource = inst.activeNotes[ai];
+			break;
+		}
+	}
+	if (heldSource == null) {
+		// Defensive — bendStep is only called from glissStep, which
+		// itself is only called after a noteOn has populated
+		// activeNotes. If we get here something is wrong upstream;
+		// log loudly and fall through to leapStep so we never
+		// silently emit a noteOff for a pitch SWAM doesn't have.
+		log("BEND FAIL inst " + inst.id + " C" + (complex || inst.activeComplex) +
+		    " sourcePitch=" + sourcePitch + " not in activeNotes [" +
+		    inst.activeNotes.join(",") + "] — falling back to leapStep");
+		leapStep(inst, targetPitch);
+		return;
+	}
+
+	var hpTarget = humanPitch(targetPitch);
+	// Compute bend in INTEGER semitones; humanPitch jitter on the
+	// source is irrelevant for the bend math (we bend the actual
+	// audible source toward the integer target).
+	var semis = Math.round(targetPitch) - Math.round(sourcePitch);
+	var clamped = clamp(semis, -PITCHBEND_RANGE_SEMI, PITCHBEND_RANGE_SEMI);
+	if (clamped !== semis) {
+		log("BEND CLIP inst " + inst.id + " C" + (complex || inst.activeComplex) +
+		    " semis=" + semis + " range=±" + PITCHBEND_RANGE_SEMI +
+		    " — bendStep dispatched with over-range interval; should have routed to leapStep");
+	}
+	var targetBend = clamp(PITCHBEND_CENTER + Math.round(clamped * 8192 / PITCHBEND_RANGE_SEMI), 0, 16383);
+	var durMs = _bendDur(sourcePitch, targetPitch, complex || inst.activeComplex);
+
+	// Echo to dashboard with INTEGER pitches — the dashboard's relay
+	// parses with `| 0` and the chain-grace match is integer-valued.
+	// Using humanised values here would mismatch on the 10%-of-the-
+	// time pitch shift case.
+	outlet(ECHO_OUTLET, OSC.MIDI_BENDSTEP, inst.voice,
+	       Math.round(sourcePitch), Math.round(targetPitch), durMs | 0,
+	       inst.activeComplex || (complex || 0));
+
+	// Optional accent: spike CC 18 just before target's noteOn fires.
+	// BPA_RESET_MS is typically ≥ 100ms; for bends durMs is now ≤ 150ms
+	// post-D60 cap, so spike now and reset on the target's noteOn so
+	// it gets the bow-pressure-accent boost on its attack.
+	if (accent && HAS_BOW_PRESS_ACCENT) {
+		ccForce(inst, CC.BOW_PRESS_ACCENT, accent);
+	}
+
+	rampPitchbend(inst, targetBend, durMs);
+
+	// Schedule the atomic transition at ramp end. completeBend(inst)
+	// is the single execution path — we just call it from a Task. If
+	// glissStep needs to force-complete inline (D63 race safety), it
+	// also calls completeBend(inst) and the Task here becomes a no-op
+	// (bendPending is null after the inline run).
+	inst.bendPending = {
+		hpSource: heldSource,
+		hpTarget: hpTarget,
+		vel:      glissVel || GLISS_VEL,
+	};
+	inst.bendPendingTask = scheduleAt(inst, durMs, function() {
+		completeBend(inst, /*scheduled=*/ true);
+	});
+
+	// Optional accent reset — same pattern as glissNote.
+	if (accent && HAS_BOW_PRESS_ACCENT) {
+		scheduleAt(inst, durMs + BPA_RESET_MS, function() {
+			ccForce(inst, CC.BOW_PRESS_ACCENT, 0);
+		});
+	}
+}
+
+// Per-complex bend duration. Uses the same per-semitone table as the
+// dashboard's GLISS_PORTAMENTO_MS_PER_SEMITONE so the visual segment
+// model and the audio bend duration agree (Phase 1 Visual Invariant
+// #3). Min 80 ms (avoid sub-perceptible bends), max capped at
+// MIN_GLISS_SPACING_MS - BEND_DUR_MARGIN_MS so a bend reliably
+// completes before the next gliss event dispatches.
+//
+// D60 — without ANY cap, an 8-semi C5 bend at 50 ms/semi = 400 ms
+// vs. event spacing of 200 ms caused the next event to fire WHILE
+// the previous bend's pitchbend ramp was still running, leaking
+// offset into the new noteOn audibly + accumulating stale activeNotes.
+//
+// D63 — D60 originally set the margin to 50 ms. That left a 50 ms
+// stationary "held at target" tail between every bend's atomic
+// transition and the next event's dispatch — visible as horizontal
+// "still note" lines at the top/bottom of the rolling-score axis
+// (especially obvious for bends ending at extreme pitches that
+// clamped to ROLL_MAX_MIDI=84). The user-reported "still notes that
+// shouldn't exist in wild gliss" symptom in temp1.png. Margin
+// tightened to 5 ms — bend ramp now fills the inter-event time
+// almost entirely, leaving a sub-perceptible 5 ms gap (~2 px on
+// screen) between bends. Race safety against scheduling jitter is
+// covered by `completeBend(inst)` called at the top of `glissStep`:
+// if the bend's atomic transition hasn't fired yet when the next
+// event dispatches, force-complete it inline.
+var BEND_DUR_MARGIN_MS = 5;
+function _bendDur(fromP, toP, complex) {
+	var interval = Math.abs(Math.round(toP) - Math.round(fromP));
+	var perSemi;
+	if (complex === 5) perSemi = 50;
+	else if (complex === 6) perSemi = 80;
+	else if (complex === 7) perSemi = 115;
+	else perSemi = 80;
+	var ms = interval * perSemi;
+	if (ms < 80) ms = 80;
+	var cap = MIN_GLISS_SPACING_MS - BEND_DUR_MARGIN_MS;
+	if (ms > cap) ms = cap;
+	return ms;
+}
+
 // ----------------------------------------------------------------
 // GLISS INVARIANT (D42 — see CLAUDE.md § Bridge Invariants)
 // ----------------------------------------------------------------
@@ -1552,19 +1881,52 @@ function enforceLeap(sourcePitch, targetPitch, minLeap) {
 function glissStep(inst, sourcePitch, targetPitch, minLeap, glissVel, accent) {
 	var p = enforceLeap(sourcePitch, targetPitch, minLeap);
 	// D58 — per-complex leap tolerance. C5 keeps 1 (wild punch); C6/C7
-	// drop to 0 (always nudge cross-string to same-string). The single
-	// table MAX_LEAPS_BY_COMPLEX is the authoritative source.
+	// drop to 0 (always nudge cross-string to same-string). With D59
+	// shipped, cross-string outcomes can also slide via pitchbend
+	// (bendStep), so keeping per-complex tolerance > 0 is safe — the
+	// dispatch below preserves slide character even on cross-string.
 	var maxLeaps = maxLeapsFor(inst.activeComplex);
 	if ((inst.consecutiveLeapCurrent | 0) >= maxLeaps && !sameString(sourcePitch, p)) {
 		var nudged = nudgeToSameString(sourcePitch, p, minLeap);
 		if (nudged != null) p = nudged;
 	}
+	// D63 race-safety — if a bend's atomic transition is still pending
+	// (scheduled task hasn't fired yet AND we're dispatching the next
+	// event), force-complete it inline. Without this, with the tight
+	// 5ms bend-dur margin (D63), scheduling jitter could reverse the
+	// firing order: next event glissStep runs before the bend's noteOff/
+	// noteOn — the in-flight bend's pitchbend offset would then leak
+	// into the new event's noteOn audibly. completeBend resets bend,
+	// fires the deferred noteOff source + noteOn target, and clears
+	// the pending state. Safe to call when nothing is pending (no-op).
+	if (inst.bendPending) completeBend(inst, /*scheduled=*/ false);
+
+	// D46 + D59 three-way dispatch:
+	//   • same-string  → glissNote (portamento overlap on a single string)
+	//   • cross-string + interval ≤ PITCHBEND_RANGE_SEMI → bendStep
+	//                     (pitchbend wheel on held source; audible
+	//                     continuous curve regardless of which string)
+	//   • cross-string + interval > PITCHBEND_RANGE_SEMI → leapStep
+	//                     (over-range fallback; rare since SWAM preset
+	//                     covers ±48 = nearly every cello-range interval)
 	if (sameString(sourcePitch, p)) {
 		glissNote(inst, humanPitch(p), glissVel, accent);
 		inst.glissOverlapCount = (inst.glissOverlapCount | 0) + 1;
 		inst.lastWasLeap = false;
 		inst.consecutiveLeapCurrent = 0;
+	} else if (Math.abs(p - sourcePitch) <= PITCHBEND_RANGE_SEMI) {
+		bendStep(inst, sourcePitch, p, glissVel, accent, inst.activeComplex);
+		inst.glissBendCount = (inst.glissBendCount | 0) + 1;
+		// Bend slides count as slides for the leap-alternation counter
+		// (audible result is a slide). D58's MAX_LEAPS gate effectively
+		// counts ONLY over-range leapStep fallbacks now.
+		inst.lastWasLeap = false;
+		inst.consecutiveLeapCurrent = 0;
 	} else {
+		log("BEND CLIP inst " + inst.id + " C" + inst.activeComplex +
+		    " interval=" + Math.abs(p - sourcePitch) +
+		    " > PITCHBEND_RANGE_SEMI=" + PITCHBEND_RANGE_SEMI +
+		    " — falling back to leapStep");
 		leapStep(inst, p);
 		inst.glissLeapCount = (inst.glissLeapCount | 0) + 1;
 		inst.lastWasLeap = true;
@@ -2152,10 +2514,11 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 
 	inst.status = 'PLAYING';
 
-	// D42 + D46 gliss invariant — reset slide + leap counters;
-	// scheduleRelease's offT asserts ≥1 (slide OR leap) fired for C5/C6/C7
-	// and logs the per-phrase breakdown.
+	// D42 + D46 + D59 gliss invariant — reset slide + bend + leap counters;
+	// scheduleRelease's offT asserts ≥1 (slide OR bend OR leap) fired for
+	// C5/C6/C7 and logs the per-phrase breakdown.
 	inst.glissOverlapCount = 0;
+	inst.glissBendCount = 0;
 	inst.glissLeapCount = 0;
 	inst.glissExpected = (complexType === 5 || complexType === 6 || complexType === 7);
 
@@ -2723,6 +3086,14 @@ function resetInstance(inst) {
 	inst.lastWasLeap = false;
 	inst.consecutiveLeapCurrent = 0;
 	inst.consecutiveLeapMax = 0;
+	// D59 — reset pitchbend at panic so any in-flight bend doesn't leak.
+	cancelPitchbendRamp(inst);
+	inst.pitchbend = PITCHBEND_CENTER;
+	emitPitchbend(inst, PITCHBEND_CENTER);
+	// D63 — drop any deferred bend transition.
+	if (inst.bendPendingTask) inst.bendPendingTask.cancel();
+	inst.bendPending = null;
+	inst.bendPendingTask = null;
 	inst.ksForceCount = 3;
 	inst.forceKS = false;
 	inst.status = 'IDLE';
@@ -2759,6 +3130,14 @@ function resetInstance(inst) {
 }
 
 function bang() {
+	// D64 — loud reminder: bridge's PITCHBEND_RANGE_SEMI must match the
+	// SWAM preset's Master Tuning → Pitchbend Range setting EXACTLY.
+	// Mismatch silently produces audible-bend ≠ visual-bend (e.g.,
+	// preset reverted to ±2 default after a Reload Preset = 12× weaker
+	// bends than the bridge expects → "leaping" perception). Cross-
+	// check this number against SWAM's preset on every reload.
+	log("=== BRIDGE PITCHBEND_RANGE_SEMI = ±" + PITCHBEND_RANGE_SEMI +
+	    " — verify this matches SWAM preset's Pitchbend Range ===");
 	state.sieveIdx = 0;
 	state.sieveDir = 1;
 	state.frozen = false;

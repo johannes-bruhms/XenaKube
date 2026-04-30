@@ -37,5 +37,6 @@ Authoritative table of every `/xk/*`, `/gan/*`, and `/xk/midi/*` address.
 | `/xk/midi/noteon` | int, int, int, int | Max → relay (57122). voice (SWAM slot, always 1), pitch (0-127), velocity (1-127), complex (0=unknown / 1..8 = Cn). Mirrors every `noteOn` in `xk_swam.js`; keyswitches excluded. The 4th arg feeds the dashboard piano-roll's complex colour + gliss-curve rules. |
 | `/xk/midi/noteoff` | int, int, int, int | Max → relay (57122). Mirrors every `noteOff`. `complex` is `inst.activeComplex` at noteoff time. |
 | `/xk/midi/panic` | — | Max → relay (57122). Emitted from `bang()` so the dashboard clears its in-flight notes map on reset. |
+| `/xk/midi/bendstep` | int, int, int, int, int | Max → relay (57122). D59 cross-string slide via pitchbend wheel. Args: voice, fromPitch, toPitch, durMs, complex. Fired at the START of a `bendStep` so the dashboard can model the segment in advance; the held source note bends from `fromPitch` to `toPitch` over `durMs`, then noteOff(source) + noteOn(target) echo via the existing MIDI_NOTEOFF / MIDI_NOTEON addresses. The dashboard's bendstep handler suppresses the chain-break that the new noteOn would otherwise trigger. |
 | `/gan/turn` | string | raw move (e.g. "R", "U'", "F2") — port 8000 |
 | `/gan/gyro` | float×4 | raw quaternion — port 8000 |

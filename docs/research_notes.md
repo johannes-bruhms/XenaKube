@@ -651,3 +651,27 @@ Total estimated effort: ~5 hours including testing and doc updates.
 - **Telemetry first** (per CLAUDE.md Recurring-Bug Discipline): `glissBendCount` counter and `BEND CLIP` log added before / alongside the implementation; per-phrase `slides=S bends=B leaps=L` line shows distribution at a glance.
 - **Reversible**: D59 is purely additive — `glissStep` falls through to existing `glissNote` / `leapStep` if `bendStep` is disabled. To kill it: comment out the `bendStep` dispatch branch.
 - **Per-complex tunable**: same pattern as `MAX_LEAPS_BY_COMPLEX` — `BEND_COMPLEXES = { 5: true, 6: true, 7: true }` lets us disable bend for any complex if it produces unwanted timbre.
+
+### What actually shipped (D59 → D64, single-day iteration log 2026-04-30)
+
+The design above shipped, then needed five sub-iterations to reach a state the user described as "the best it's ever been". Each iteration was a real bug surfaced by live testing — recording them here so the same surface doesn't get re-broken on a future refactor.
+
+**D59 (initial ship)** — `bendStep` + atomic-transition design as written above. Worked in concept but had latent bugs the design didn't anticipate.
+
+**D60 (correctness)** — three real bugs in the D59 implementation:
+- D60.1: `humanPitch` is a 10%-chance ±1 semi shift, NOT the small ±0.05 jitter the design assumed. `bendStep`'s fresh `humanPitch(sourcePitch)` for `noteOff` mismatched the `inst.activeNotes` entry from the source's earlier `noteOn` call ~10 % of the time → noteOff for a pitch SWAM didn't have → notes ringing forever, queues piling up. Fix: lookup `inst.activeNotes` via `Math.round`-tolerant match instead of re-humanising.
+- D60.2: bend duration could exceed `MIN_GLISS_SPACING_MS = 200 ms`. C5 8-semi cross-string at 50 ms/semi = 400 ms. Next event fired while previous bend's pitchbend ramp was still running → pitchbend offset (up to ±48 semis) leaked into the new event's `noteOn`. Fix: `_bendDur` clamps at `MIN_GLISS_SPACING_MS - BEND_DUR_MARGIN_MS`.
+- D60.3: dashboard's `buildGlissChains` rendered the bend's future as a horizontal line ahead of "now". Fix: clamp `x1` at `rightEdge` for in-flight bends.
+- D60.4: chain-grace pitch tolerance ±1 added for `humanPitch` jitter on the bend's target noteOn.
+
+**D61** — triangle's white line silently slid across leaps that fired during bend-grace. The grace shielded the line's splice on noteOff (correct for the bend's own atomic transition gap) but ALSO shielded it on a leap's source noteoff, then `_findGlissLine` returned the still-alive line and `noteOn` retargeted as a slide. Fix: `chainStart` parameter wired through `main.js` to `triangle.noteOn`; chainStart=true splices the line regardless of grace.
+
+**D62.1** — bend chain-grace was set on bendstep arrival but never explicitly cleared, so any noteon within the window that pitch-matched ±1 was treated as continuation. Cross-phrase accidental chaining. Fix: `delete()` the grace map entry the moment the override fires. One bend, one continuation.
+
+**D62.2 (REVERTED)** — `BEND_MAX_SEMI = 12` cap converted cross-string bends > 12 semis into leaps. Wild gliss with 36–89 register lost most of its bending activity → user explicitly objected. **Reverted in D63.1**.
+
+**D63 (the real fix to "still notes")** — D60.2's 50 ms bend-dur margin left a visible stationary tail between bend's atomic transition and the next event. Visible as horizontal "still note" lines at the top/bottom of the rolling-score axis (especially at extreme pitches that clamped to `ROLL_MAX_MIDI = 84`). Fix: tighten `BEND_DUR_MARGIN_MS` from 50 → 5 ms. Bend ramp fills the inter-event time. Race-safety: `inst.bendPending` flag + `completeBend(inst, scheduled)` helper. `glissStep` entry calls `completeBend(inst, false)` to force-complete any pending transition inline before dispatching, in case scheduling jitter exceeds the 5 ms margin.
+
+**D64 (the silent killer)** — bridge `PITCHBEND_RANGE_SEMI` MUST match SWAM preset's Pitchbend Range exactly. MIDI pitchbend is a 14-bit wheel with no semitone information; the preset value does the conversion. Mismatch silently produces audible-bend ≠ visual-bend → "leaping" perception even though the bridge is bending correctly. The user had multiple sessions where they'd changed the preset and forgotten to save, leaving SWAM at default ±2 while bridge was at ±48 → 24× weaker bends. Fix: `bang()` logs the bridge's `PITCHBEND_RANGE_SEMI` on every reload to `[print xk_swam]` so a mismatch is visibly enforced. Pitchbend ramp tick lowered from 15 → 5 ms (D64.3) for finer pitch wheel updates — smoother audible slide. Range itself lowered to 24 in this iteration to match the user's preset; tunable.
+
+**The headline lesson**: pitchbend with a stateful physical-modeling VST has half a dozen subtle invariants that all have to be right simultaneously — pitch encoding (bridge↔preset agreement), timing (no overrun, no overrun even under jitter), state coherence (noteOff hits the held pitch, not a re-humanised one), and dashboard mirroring (chain segments authored by bend events, grace consumed exactly once). Telemetry-first per the Recurring-Bug Discipline was vindicated: every iteration's loud failure mode (`BEND FAIL`, `BEND CLIP`, `bend race-fix`, the startup pitchbend log) is what made the next bug findable.

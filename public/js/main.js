@@ -144,14 +144,23 @@ function handleMidiEcho(data) {
   const key = `${data.voice}:${data.pitch}`;
 
   if (data.kind === 'noteon') {
-    sieveNoteOn(data.pitch, data.velocity, cmx);
-    triangle.noteOn(data.voice, data.pitch, data.velocity, cmx, key);
-    rollingScore.noteOn({
+    // D61 — call rollingScore.noteOn FIRST so we capture the unified
+    // slide-vs-leap chainStart signal (computed from active state +
+    // bend-grace + ±1 pitch tolerance) and feed it to triangle.
+    // Without this, triangle's white line silently slid across leaps
+    // that fired during bend-grace because its `_findGlissLine` saw
+    // the bend-grace-preserved line and treated the leap's noteon as
+    // a slide retarget. With chainStart wired through, leaps splice
+    // the line and create a fresh instant-snap entry, matching the
+    // rolling-chain's break behaviour.
+    const chainStart = rollingScore.noteOn({
       voice:    data.voice,
       pitch:    data.pitch,
       velocity: data.velocity,
       complex:  cmx,
     });
+    sieveNoteOn(data.pitch, data.velocity, cmx);
+    triangle.noteOn(data.voice, data.pitch, data.velocity, cmx, key, chainStart);
     return;
   }
 
@@ -166,6 +175,26 @@ function handleMidiEcho(data) {
       sieveNoteOff(finalised.pitch);
       triangle.noteOff(finalised.voice, finalised.pitch, finalised.complex, key);
     }
+    return;
+  }
+
+  if (data.kind === 'bendstep') {
+    // D59 — cross-string slide via pitchbend. The bridge bent the
+    // held source note from fromPitch to toPitch over durMs and is
+    // about to fire noteOff(source) + noteOn(target) at the end.
+    // Both modules track the bend so:
+    //   • triangle's white line retargets fromPitch→toPitch over durMs
+    //     (existing line found → retarget; no existing → create);
+    //     a "bend grace window" prevents the source's incoming
+    //     noteoff from splicing the line.
+    //   • rolling-score adds a bend segment to its chain model and
+    //     sets a chain-grace flag so the target's incoming noteon
+    //     (which would otherwise have chainStart=true because the
+    //     source noteoff cleared the active map) is treated as
+    //     continuation.
+    rollingScore.bendStep(data);
+    triangle.bendStep(data);
+    return;
   }
 }
 

@@ -59,6 +59,19 @@ let lineDpr = 1;
 // parameters so a single line can slide its endpoint between cells.
 const lineNotes = [];
 
+// D59 — bend grace window per (voice, complex). When a bendstep arrives,
+// `bendUntilMs[voiceComplex] = now + durMs + GRACE_TAIL_MS` so the
+// source's incoming noteOff doesn't splice the line during the bend
+// (and for a short tail after, covering the WS-arrival window between
+// the bridge's noteOff(source) and noteOn(target)). The grace also
+// covers a stolen mid-bend voice's cancelPhrase noteOffs without
+// causing harm — the next genuine noteon either matches the bend's
+// toPitch (continuation, retarget) or doesn't (new phrase, fresh line
+// via _findGlissLine returning the existing-but-stale line, retarget
+// to new pitch — same effective behaviour as a chain-start).
+const bendUntilMs = new Map();
+const BEND_GRACE_TAIL_MS = 100;
+
 // Cross-module getters wired via init().
 let _getCamera          = null;
 let _getActiveKWorldPos = null;
@@ -270,16 +283,57 @@ export function init({
 }
 
 /**
- * Start a line for a noteon. For gliss complexes (C5/C6/C7), retarget any
- * existing live line for (voice, complex) from its currently-displayed
- * pitch (mirrors SWAM's portamento engine retarget). Otherwise push a
- * fresh line with NO ramp time; pizz lines also get a velocity-scaled
- * fade configured up-front so endLine doesn't need a lookup.
+ * Start a line for a noteon. For gliss complexes (C5/C6/C7):
+ *   • `chainStart=true` (leap, voice steal, fresh phrase start) →
+ *     splice any existing line and push a fresh instant-snap entry.
+ *     The leap's audible discontinuity is mirrored visually.
+ *   • `chainStart=false` (slide / bend continuation) → retarget any
+ *     existing live line from its currently-displayed pitch (mirrors
+ *     SWAM's portamento engine retarget) OR create fresh if none.
+ *
+ * D61 — `chainStart` parameter wired through main.js. Without it, the
+ * D59 bend-grace shielded the line's splice on the source noteOff at
+ * end of bend, but ALSO shielded it on a leap's source noteOff that
+ * fired during bend-grace. Triangle then retargeted the leap's target
+ * as if it were a slide, drawing the white line as connected across
+ * the leap. The unified slide-vs-leap classifier in rolling-score
+ * already computes the right signal; D61 plumbs it to triangle so
+ * both modules break or continue together.
+ *
+ * For non-gliss complexes: `chainStart` is unused (each noteon gets
+ * its own line entry tagged by `key`).
  */
-export function noteOn(voice, pitch, velocity, complex, key) {
+export function noteOn(voice, pitch, velocity, complex, key, chainStart) {
   const now = performance.now();
 
   if (GLISS_COMPLEXES.has(complex)) {
+    if (chainStart) {
+      // Leap / steal / fresh phrase — splice any preserved line for
+      // this (voice, complex) regardless of bend-grace. The leap's
+      // 50 ms audible gap reads as a chain break in both audio and
+      // visuals.
+      for (let i = lineNotes.length - 1; i >= 0; i--) {
+        const ln = lineNotes[i];
+        if (ln.isGliss && ln.voice === voice && ln.complex === complex) {
+          lineNotes.splice(i, 1);
+        }
+      }
+      // D62.1 — clear bend-grace too. The chain-start signal supersedes
+      // any prior bend's continuation expectation; subsequent noteoffs
+      // should splice normally (not be shielded by stale grace).
+      const vk = voice + ':' + complex;
+      bendUntilMs.delete(vk);
+      lineNotes.push({
+        isGliss: true,
+        voice, complex,
+        fromPitch: pitch, toPitch: pitch,
+        animStartMs: now, animDurMs: 0,
+        sustaining: true,
+        fadeMs: 0,
+        releaseStartMs: 0,
+      });
+      return;
+    }
     const existing = _findGlissLine(voice, complex);
     if (existing) {
       const fromPitch = _displayedPitch(existing, now);
@@ -321,10 +375,20 @@ export function noteOn(voice, pitch, velocity, complex, key) {
  * ONLY when the chain has truly ended (no more same-(voice, complex) notes
  * sounding — checked via the rolling-score-injected hasActiveGliss).
  * For pizz, switch to the release tail; for everything else, splice now.
+ *
+ * D59 — if a bendstep is in-flight (or finished within the grace tail) for
+ * (voice, complex), the source noteOff shouldn't splice the line. The
+ * upcoming noteOn target will retarget (or re-anchor) the line cleanly.
+ * Without this skip, the brief 0–50 ms gap between bridge's noteOff(source)
+ * and noteOn(target) would cause a flicker as the line gets spliced and
+ * recreated.
  */
 export function noteOff(voice, pitch, complex, key) {
   if (GLISS_COMPLEXES.has(complex)) {
     if (_hasActiveGliss(voice, complex)) return;
+    const vk = voice + ':' + complex;
+    const until = bendUntilMs.get(vk) || 0;
+    if (until > performance.now()) return;  // D59 bend grace — keep line alive.
     for (let i = 0; i < lineNotes.length; i++) {
       const ln = lineNotes[i];
       if (ln.isGliss && ln.voice === voice && ln.complex === complex) {
@@ -352,6 +416,49 @@ export function noteOff(voice, pitch, complex, key) {
 /** Drop every line. Called on engine panic / WS panic. */
 export function panic() {
   lineNotes.length = 0;
+  bendUntilMs.clear();
+}
+
+/**
+ * D59 — apply a cross-string bend slide to the white line. The bridge
+ * fired `/xk/midi/bendstep <voice> <fromPitch> <toPitch> <durMs> <complex>`
+ * at the START of the bend; the held source note is now sliding from
+ * fromPitch to toPitch over durMs via pitchbend. We retarget the
+ * existing line (if any) or create a fresh one.
+ *
+ * The retarget shape is identical to a same-string slide retarget
+ * (fromPitch → toPitch over predicted duration), so the white line
+ * draws smoothly across the bend regardless of whether SWAM is
+ * portamento-sliding (same-string) or pitchbend-sliding (cross-string).
+ *
+ * `bendUntilMs` is set so noteOff(source), arriving at end of bend,
+ * doesn't splice the line during the gap before noteOn(target).
+ */
+export function bendStep(data) {
+  const { voice, fromPitch, toPitch, durMs, complex } = data;
+  const now = performance.now();
+  const vk = voice + ':' + complex;
+  bendUntilMs.set(vk, now + (durMs | 0) + BEND_GRACE_TAIL_MS);
+
+  const existing = _findGlissLine(voice, complex);
+  if (existing) {
+    existing.fromPitch  = _displayedPitch(existing, now);  // hand off audible pitch
+    existing.toPitch    = toPitch;
+    existing.animStartMs = now;
+    existing.animDurMs   = durMs | 0;
+  } else {
+    // Fresh line — bend started without a prior in-flight gliss line.
+    // Anchor at fromPitch (instant), then retarget toPitch over durMs.
+    lineNotes.push({
+      isGliss: true,
+      voice, complex,
+      fromPitch, toPitch,
+      animStartMs: now, animDurMs: durMs | 0,
+      sustaining: true,
+      fadeMs: 0,
+      releaseStartMs: 0,
+    });
+  }
 }
 
 /**

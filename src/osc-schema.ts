@@ -61,9 +61,10 @@ export const OSC = {
   //    so the rolling piano-roll can colour by technique and connect
   //    glissando steps in C5/C6/C7). Keyswitches bypass the wrappers
   //    so technique-select toggles don't pollute the score.
-  MIDI_NOTEON:   '/xk/midi/noteon',     // i:voice (1..POOL_SIZE), i:pitch, i:velocity, i:complex (0=unknown, 1..8=Cn)
-  MIDI_NOTEOFF:  '/xk/midi/noteoff',    // i:voice, i:pitch, i:velocity, i:complex
-  MIDI_PANIC:    '/xk/midi/panic',      // (no args) — clear pending notes on bang/panic
+  MIDI_NOTEON:    '/xk/midi/noteon',     // i:voice (1..POOL_SIZE), i:pitch, i:velocity, i:complex (0=unknown, 1..8=Cn)
+  MIDI_NOTEOFF:   '/xk/midi/noteoff',    // i:voice, i:pitch, i:velocity, i:complex
+  MIDI_PANIC:     '/xk/midi/panic',      // (no args) — clear pending notes on bang/panic
+  MIDI_BENDSTEP:  '/xk/midi/bendstep',   // i:voice, i:fromPitch, i:toPitch, i:durMs, i:complex — D59 cross-string slide via pitchbend wheel; held source note bends from fromPitch to toPitch over durMs, then noteOff(source)+noteOn(target) fires (echoed via MIDI_NOTEOFF/MIDI_NOTEON as usual). Dashboard interpolates the curve in its segment model and bridges the gap between source-end and target-start visually.
 
   // ── raw pass-through to TouchDesigner (port 8000) ────────────
   GAN_TURN:      '/gan/turn',           // s:moveString ("R","U'","F2",...)
