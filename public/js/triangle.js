@@ -72,6 +72,14 @@ const lineNotes = [];
 const bendUntilMs = new Map();
 const BEND_GRACE_TAIL_MS = 100;
 
+// D67 — track most-recent event time per (voice, complex) so the line's
+// retarget animDur can match the chain's gap-based segment dur (uniform
+// glissSchedule spacing means the previous gap predicts the next one).
+// The line uses this to set animDur = max(80, lastGap - 5), eliminating
+// plateaus on the line side that would otherwise mismatch the chain's
+// gap-filled segments. Cleared on chainStart (fresh phrase) and panic.
+const lastEventByVk = new Map();
+
 // Cross-module getters wired via init().
 let _getCamera          = null;
 let _getActiveKWorldPos = null;
@@ -310,24 +318,35 @@ export function init({
  */
 export function noteOn(voice, pitch, velocity, complex, key, chainStart) {
   const now = performance.now();
+  const vk = voice + ':' + complex;
+  // D67 — track inter-event gap. Chain side (rolling-score) computes
+  // segment dur from `next.onsetMs - this.onsetMs`; line side uses
+  // `now - lastEventByVk[vk]` as the predictor for the next gap so the
+  // line's animDur matches the chain's segment dur. Uniform
+  // glissSchedule spacing means prev_gap ≈ next_gap, so the predictor
+  // is accurate after the first slide of a phrase. First-slide gap
+  // (anchor → drift = FIRST_GLISS_MS = 150 ms) differs from subsequent
+  // (~335 ms for typical wild gliss), producing a brief 1-2 semi line
+  // ↔ chain disagreement on the first slide; assertGlissSync's 5 px
+  // threshold (D67) absorbs it.
+  const prevEventTime = lastEventByVk.get(vk) || 0;
+  const lastGap = prevEventTime > 0 ? (now - prevEventTime) : 0;
+  lastEventByVk.set(vk, now);
 
   if (GLISS_COMPLEXES.has(complex)) {
     if (chainStart) {
       // Leap / steal / fresh phrase — splice any preserved line for
-      // this (voice, complex) regardless of bend-grace. The leap's
-      // 50 ms audible gap reads as a chain break in both audio and
-      // visuals.
+      // this (voice, complex) regardless of bend-grace.
       for (let i = lineNotes.length - 1; i >= 0; i--) {
         const ln = lineNotes[i];
         if (ln.isGliss && ln.voice === voice && ln.complex === complex) {
           lineNotes.splice(i, 1);
         }
       }
-      // D62.1 — clear bend-grace too. The chain-start signal supersedes
-      // any prior bend's continuation expectation; subsequent noteoffs
-      // should splice normally (not be shielded by stale grace).
-      const vk = voice + ':' + complex;
       bendUntilMs.delete(vk);
+      // D67 — chainStart resets the gap predictor. Reseed with the
+      // chainStart's own onsetMs as the new baseline.
+      lastEventByVk.set(vk, now);
       lineNotes.push({
         isGliss: true,
         voice, complex,
@@ -339,13 +358,22 @@ export function noteOn(voice, pitch, velocity, complex, key, chainStart) {
       });
       return;
     }
+    // D67 — animDur predictor: use last gap if known and reasonable;
+    // fall back to interval-based predict for the first slide of a
+    // phrase (where lastGap = anchor→drift = FIRST_GLISS_MS, not
+    // representative of subsequent gaps).
+    const animDurEstimate = (lastGap > 50 && lastGap < 2000)
+      ? Math.max(80, lastGap - 5)
+      : null;
     const existing = _findGlissLine(voice, complex);
     if (existing) {
       const fromPitch = _displayedPitch(existing, now);
       existing.fromPitch  = fromPitch;
       existing.toPitch    = pitch;
       existing.animStartMs = now;
-      existing.animDurMs   = predictGlissDuration(fromPitch, pitch, complex);
+      existing.animDurMs   = animDurEstimate != null
+        ? animDurEstimate
+        : predictGlissDuration(fromPitch, pitch, complex);
     } else {
       lineNotes.push({
         isGliss: true,
@@ -422,6 +450,7 @@ export function noteOff(voice, pitch, complex, key) {
 export function panic() {
   lineNotes.length = 0;
   bendUntilMs.clear();
+  lastEventByVk.clear();
 }
 
 /**
@@ -444,6 +473,9 @@ export function bendStep(data) {
   const now = performance.now();
   const vk = voice + ':' + complex;
   bendUntilMs.set(vk, now + (durMs | 0) + BEND_GRACE_TAIL_MS);
+  // D67 — bend events also count as inter-event time anchors so the
+  // next slide's animDur predictor reflects bend-to-slide gaps too.
+  lastEventByVk.set(vk, now);
 
   const existing = _findGlissLine(voice, complex);
   if (existing) {

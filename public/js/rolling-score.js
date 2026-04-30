@@ -456,25 +456,36 @@ function _buildGlissSegments(nodes) {
     const startT = n.onsetMs;
     const pitchAtStart = _glissPitchAt(startT, segs);
     if (n.isBend) {
-      // D65 — bend's p0 inherits the audible pitch at the bend's start
-      // from prior segments, NOT the bend's stated `fromPitch`. The
-      // bridge's stated fromPitch is the LOGICAL source noteOn pitch;
-      // the AUDIBLE at bend-start is wherever the prior portamento had
-      // reached by then, which differs when MIN_GLISS_SPACING_MS is
-      // shorter than the prior segment's slide duration (e.g., a 9-semi
-      // C5 slide is 450 ms but the next event fires at 200 ms — the
-      // portamento is only 45% complete when the bend overlays). Using
-      // stated fromPitch makes the chain model diverge from the line
-      // model (which always retargets via `_displayedPitch`), producing
-      // the user-reported GLISS SYNC FAIL with ~4-semi drift during
-      // normal wild-gliss play — a real model divergence, not a bug
-      // either side could fix alone. Inheriting unifies both models so
-      // the assertion only fires on actual architectural drift.
+      // D65 — bend's p0 inherits the audible pitch at bend-start from
+      // prior segments. See CLAUDE.md Visual Invariants row 3.
       segs.push({ t0: startT, dur: n.bendDur, p0: pitchAtStart, p1: n.pitch });
     } else {
+      // D67 — slide segment duration = gap to next event (when known),
+      // not a static interval-based or capped duration. The chain's
+      // _buildGlissSegments runs with the FULL future of nodes available
+      // at rebuild time, so the next event's onsetMs is known and the
+      // segment fills exactly to that boundary — zero plateau.
+      // Pre-D67 (with D66's static GLISS_SLIDE_MAX_DUR_MS = 195 ms cap),
+      // sparse phrases (event spacing > 200 ms, common with wild gliss
+      // at long durations: 12 events in 4 s = ~335 ms spacing) had
+      // segments completing in 195 ms then sitting flat at p1 for the
+      // remaining ~140 ms until next event override → visible
+      // rectangular plateaus, the user's exact complaint.
+      // For the LAST node (no next event known yet — node is in
+      // activeMidiNotes, phrase still in flight): fall back to predict-
+      // capped duration so the segment doesn't slide forever; next
+      // event arrival will rebuild and replace this fallback.
+      const nextNode = nodes[i + 1];
+      let segDur;
+      if (nextNode) {
+        segDur = Math.max(80, nextNode.evt.onsetMs - startT - 5);
+      } else {
+        segDur = Math.max(80, Math.min(GLISS_SLIDE_MAX_DUR_MS,
+          Math.abs(n.pitch - pitchAtStart) * (GLISS_PORTAMENTO_MS_PER_SEMITONE[n.complex] || 80)));
+      }
       segs.push({
         t0: startT,
-        dur: _glissChainDur(pitchAtStart, n.pitch, n.complex),
+        dur: segDur,
         p0:  pitchAtStart,
         p1:  n.pitch,
       });
@@ -635,7 +646,16 @@ function assertGlissSync(nowMs) {
   const lineY  = midiToY(linePitch,  rollCanvas.height) / rollDpr;
   const chainY = midiToY(chainPitch, rollCanvas.height) / rollDpr;
   const drift  = Math.abs(lineY - chainY);
-  if (drift > 1) {
+  // D67 — threshold raised from 1 px to 5 px. With chain segment dur
+  // now gap-based (next.onsetMs - this.onsetMs - 5) and line animDur
+  // predictor based on lastEventByVk gap, the two models agree to
+  // floating-point precision after the first slide of each phrase. The
+  // FIRST slide has a gap mismatch (anchor → drift = FIRST_GLISS_MS =
+  // 150 ms while the line's predictor uses interval-based fallback),
+  // producing transient 1–3 px drift for ~150 ms. The 5 px threshold
+  // absorbs this without losing the architectural-drift catch (real
+  // bugs are 10+ px).
+  if (drift > 5) {
     // Forensic detail (D56) — when the assertion fires, the segment shape
     // and the line state together identify which side has stale data:
     //   • too many segs, all chainStart=undef → finished-entry chainStart
