@@ -435,8 +435,8 @@ function _glissPitchAt(t, segs) {
 function _buildGlissSegments(nodes) {
   const segs = [];
   if (nodes.length === 0) return segs;
-  // First node — stationary at its pitch. Bend nodes have an explicit
-  // p0 too, but as the FIRST node we use its p0 (the audible start).
+  // First node — stationary at its pitch. Bend nodes use their stated
+  // p0 (no prior segment to inherit from).
   const first = nodes[0].evt;
   if (first.isBend) {
     segs.push({ t0: first.onsetMs, dur: first.bendDur, p0: first.p0, p1: first.pitch });
@@ -445,14 +445,25 @@ function _buildGlissSegments(nodes) {
   }
   for (let i = 1; i < nodes.length; i++) {
     const n = nodes[i].evt;
+    const startT = n.onsetMs;
+    const pitchAtStart = _glissPitchAt(startT, segs);
     if (n.isBend) {
-      // D59 bend segment — explicit p0 (the audible start at bend time)
-      // and explicit duration. Don't recompute via `_glissPitchAt` — the
-      // bridge's bend authoritatively defines the slide curve.
-      segs.push({ t0: n.onsetMs, dur: n.bendDur, p0: n.p0, p1: n.pitch });
+      // D65 — bend's p0 inherits the audible pitch at the bend's start
+      // from prior segments, NOT the bend's stated `fromPitch`. The
+      // bridge's stated fromPitch is the LOGICAL source noteOn pitch;
+      // the AUDIBLE at bend-start is wherever the prior portamento had
+      // reached by then, which differs when MIN_GLISS_SPACING_MS is
+      // shorter than the prior segment's slide duration (e.g., a 9-semi
+      // C5 slide is 450 ms but the next event fires at 200 ms — the
+      // portamento is only 45% complete when the bend overlays). Using
+      // stated fromPitch makes the chain model diverge from the line
+      // model (which always retargets via `_displayedPitch`), producing
+      // the user-reported GLISS SYNC FAIL with ~4-semi drift during
+      // normal wild-gliss play — a real model divergence, not a bug
+      // either side could fix alone. Inheriting unifies both models so
+      // the assertion only fires on actual architectural drift.
+      segs.push({ t0: startT, dur: n.bendDur, p0: pitchAtStart, p1: n.pitch });
     } else {
-      const startT = n.onsetMs;
-      const pitchAtStart = _glissPitchAt(startT, segs);
       segs.push({
         t0: startT,
         dur: _glissChainDur(pitchAtStart, n.pitch, n.complex),
