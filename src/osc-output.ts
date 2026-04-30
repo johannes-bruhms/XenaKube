@@ -7,7 +7,7 @@
 
 import type { XenaKubeState } from './types.js';
 import type { ExpressionState } from './expression.js';
-import type { SpellMatch } from './spells.js';
+import type { CubeAlgorithmMatch } from './cube-algorithm.js';
 import { OSC, vertexAddr, complexAddr } from './osc-schema.js';
 
 /** OSC message: address + args */
@@ -80,9 +80,9 @@ export function expressionToOsc(expr: ExpressionState): OscMessage[] {
   ];
 }
 
-/** Spell detection → single OSC message */
-export function spellToOsc(match: SpellMatch): OscMessage {
-  return { address: OSC.SPELL, args: [match.spell.name] };
+/** Cube algorithm detection → single OSC message */
+export function algorithmToOsc(match: CubeAlgorithmMatch): OscMessage {
+  return { address: OSC.ALGORITHM, args: [match.algorithm.name] };
 }
 
 /** Cube solved (unsolved → solved edge) → single OSC message with no args */

@@ -1,9 +1,9 @@
 // === Mode Manager: tracks current performance state ===
 //
-// Receives spell detections, updates mode accordingly.
-// Effect-to-action mapping is intentionally empty — just tracks what's active.
+// Receives cube algorithm detections, updates mode accordingly.
+// Effect-to-action mapping is intentionally minimal — just tracks what's active.
 
-import type { SpellMatch } from './spells.js';
+import type { CubeAlgorithmMatch } from './cube-algorithm.js';
 import type { VoiceMode } from './voice-engine.js';
 
 export interface PerformanceMode {
@@ -15,7 +15,7 @@ export interface PerformanceMode {
   frozen: boolean;
 }
 
-export type ModeChangeListener = (mode: PerformanceMode, trigger: SpellMatch) => void;
+export type ModeChangeListener = (mode: PerformanceMode, trigger: CubeAlgorithmMatch) => void;
 
 export class ModeManager {
   mode: PerformanceMode = {
@@ -26,7 +26,7 @@ export class ModeManager {
   };
 
   private listeners: ModeChangeListener[] = [];
-  private spellHistory: SpellMatch[] = [];
+  private algorithmHistory: CubeAlgorithmMatch[] = [];
 
   /** Register a listener for mode changes */
   onChange(listener: ModeChangeListener): () => void {
@@ -34,17 +34,17 @@ export class ModeManager {
     return () => { this.listeners = this.listeners.filter(l => l !== listener); };
   }
 
-  /** Apply a detected spell. Returns true if mode changed. */
-  applySpell(match: SpellMatch): boolean {
-    this.spellHistory.push(match);
+  /** Apply a detected cube algorithm. Returns true if mode changed. */
+  applyAlgorithm(match: CubeAlgorithmMatch): boolean {
+    this.algorithmHistory.push(match);
     const prev = { ...this.mode };
 
-    switch (match.spell.effect) {
+    switch (match.algorithm.effect) {
       case 'sexy-move':
-        // V1 ↔ V2 path toggle is handled in engine.ts (EngineMode.path lives
-        // there, not on PerformanceMode). The old voiceMode toggle moved out
-        // 2026-04-24 (user reassigned the V-mode swap to sexy-move; if a
-        // sequential/polyphonic toggle is needed elsewhere, wire it here).
+        // Bow-pressure accent ping only (handled in max/xk_swam.js
+        // handleAlgorithm). No mode change. The V1↔V2 path toggle was removed
+        // 2026-04-30 — V is now only programmatically settable via
+        // engine.setMode({path}); no algorithm auto-triggers it.
         break;
       case 'sune':
         // Detection stub — freeze effect removed 2026-04-18. Effect TBD.
@@ -63,9 +63,8 @@ export class ModeManager {
         this.mode.palette = 'default';
         break;
       case 'niklas':
-        // No mode change. Niklas now keeps only its CTRL harmonic-ping accent
-        // (handled in max/xk_swam.js handleSpell). The V mode toggle moved to
-        // sexy-move 2026-04-24.
+        // No mode change. CTRL harmonic-ping accent only (handled in
+        // max/xk_swam.js handleAlgorithm).
         break;
     }
 
@@ -94,9 +93,9 @@ export class ModeManager {
     return this.mode.frozen;
   }
 
-  /** Get spell history (for dashboard) */
-  getHistory(): SpellMatch[] {
-    return this.spellHistory;
+  /** Get cube algorithm history (for dashboard) */
+  getHistory(): CubeAlgorithmMatch[] {
+    return this.algorithmHistory;
   }
 
   /** Get current mode (snapshot) */
@@ -106,10 +105,10 @@ export class ModeManager {
 
   reset(): void {
     this.mode = { voiceMode: 'sequential', palette: 'default', variant: 'default', frozen: false };
-    this.spellHistory = [];
+    this.algorithmHistory = [];
   }
 
-  private emit(trigger: SpellMatch): void {
+  private emit(trigger: CubeAlgorithmMatch): void {
     for (const listener of this.listeners) {
       listener(this.mode, trigger);
     }

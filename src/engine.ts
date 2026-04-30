@@ -22,7 +22,7 @@ import { ComplexCube } from './complexes.js';
 import { DiagramTraversal, getBuiltinDiagrams, type KinematicDiagram } from './kinematic.js';
 import { SieveState } from './sieve.js';
 import { snapToNearest, distanceToNearest, getQuaternion } from './quaternion.js';
-import { SpellDetector, type SpellMatch } from './spells.js';
+import { CubeAlgorithmDetector, type CubeAlgorithmMatch } from './cube-algorithm.js';
 import { scrambleFactor } from './scramble.js';
 import { VoiceEngine, type VoiceOutput } from './voice-engine.js';
 import { ExpressionProcessor, type ExpressionState } from './expression.js';
@@ -31,7 +31,7 @@ import { TurnRateTracker, type Regime } from './turn-rate.js';
 import { parseFace } from './face-gesture.js';
 
 export type StateListener = (state: XenaKubeState) => void;
-export type SpellListener = (match: SpellMatch) => void;
+export type CubeAlgorithmListener = (match: CubeAlgorithmMatch) => void;
 export type VoiceListener = (output: VoiceOutput) => void;
 export type SolveListener = () => void;
 
@@ -65,7 +65,7 @@ export class XenaKubeEngine {
   private expressionState: import('./expression.js').ExpressionState = { tilt: 0.5, spin: 0, deviation: 0, scramble: 0 };
 
   // === New v2 modules ===
-  readonly spellDetector = new SpellDetector();
+  readonly algorithmDetector = new CubeAlgorithmDetector();
   readonly voiceEngine = new VoiceEngine();
   readonly expression = new ExpressionProcessor();
   readonly modeManager = new ModeManager();
@@ -73,7 +73,7 @@ export class XenaKubeEngine {
 
   // === Listeners ===
   private listeners: StateListener[] = [];
-  private spellListeners: SpellListener[] = [];
+  private algorithmListeners: CubeAlgorithmListener[] = [];
   private voiceListeners: VoiceListener[] = [];
   private solveListeners: SolveListener[] = [];
 
@@ -89,11 +89,11 @@ export class XenaKubeEngine {
     };
   }
 
-  /** Subscribe to spell detections */
-  onSpell(listener: SpellListener): () => void {
-    this.spellListeners.push(listener);
+  /** Subscribe to cube algorithm detections */
+  onAlgorithm(listener: CubeAlgorithmListener): () => void {
+    this.algorithmListeners.push(listener);
     return () => {
-      this.spellListeners = this.spellListeners.filter(l => l !== listener);
+      this.algorithmListeners = this.algorithmListeners.filter(l => l !== listener);
     };
   }
 
@@ -148,22 +148,14 @@ export class XenaKubeEngine {
     // Track turn timing for regime detection
     this.turnRateTracker.push(Date.now());
 
-    // Check for spells (layered — multiple can fire on the same move)
+    // Check for cube algorithms (layered — multiple can fire on the same move)
     // Apply shortest-first so longest (hardest to execute) wins on conflicts
-    const spellMatches = this.spellDetector.pushAll(move);
-    for (let i = spellMatches.length - 1; i >= 0; i--) {
-      const match = spellMatches[i];
-      this.modeManager.applySpell(match);
+    const algorithmMatches = this.algorithmDetector.pushAll(move);
+    for (let i = algorithmMatches.length - 1; i >= 0; i--) {
+      const match = algorithmMatches[i];
+      this.modeManager.applyAlgorithm(match);
       this.voiceEngine.setMode(this.modeManager.mode.voiceMode);
-      // sexy-move — V1 ↔ V2 path toggle. EngineMode lives on the engine, not
-      // on ModeManager, so the flip happens here. Reassigned from niklas
-      // 2026-04-24 (user preference: niklas keeps only its harmonic-ping
-      // accent; sexy-move now drives the V mode swap so the V-axis is reachable
-      // via a 4-move trigger instead of the 7-move commutator).
-      if (match.spell.effect === 'sexy-move') {
-        this.mode.path = this.mode.path === 'V1' ? 'V2' : 'V1';
-      }
-      for (const listener of this.spellListeners) listener(match);
+      for (const listener of this.algorithmListeners) listener(match);
     }
 
     // If frozen, emit state but don't advance
@@ -320,7 +312,7 @@ export class XenaKubeEngine {
     this.gyro = [0, 0, 0, 1];
     this.kDiagram?.reset();
     this.cDiagram?.reset();
-    this.spellDetector.reset();
+    this.algorithmDetector.reset();
     this.expression.reset();
     this.modeManager.reset();
     this.turnRateTracker.reset();

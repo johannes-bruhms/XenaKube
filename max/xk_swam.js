@@ -53,18 +53,18 @@ function max_active(v) {
 	log("max_active = " + MAX_ACTIVE + " (pool size = " + POOL_SIZE + ")");
 	outlet(DEBUG_OUTLET, "max_active", MAX_ACTIVE);
 }
-outlets = 4;                    // 0 → midievent → [vst~ SWAM Cello], 1 → debug, 2 → MIDI echo, 3 → detected moves/spells
+outlets = 4;                    // 0 → midievent → [vst~ SWAM Cello], 1 → debug, 2 → MIDI echo, 3 → detected moves/algorithms
 var MIDI_OUTLET  = 0;
 var DEBUG_OUTLET = 1;
 var ECHO_OUTLET  = 2;           // Phase E tier 2 — noteon/noteoff echo to relay (UDP 57122)
-var MOVES_OUTLET = 3;           // 2026-04-24 — detected face-moves + spell completions for Max-side display/routing
+var MOVES_OUTLET = 3;           // 2026-04-24 — detected face-moves + cube-algorithm completions for Max-side display/routing
 
 // Inlet / outlet tooltip labels — shown in Max on hover.
 setinletassist(0,            "OSC /xk/* from relay (port 57121) + bang/on/off/debug");
 setoutletassist(MIDI_OUTLET,  "midievent → [vst~ SWAM Cello 3]");
 setoutletassist(DEBUG_OUTLET, "debug → [print xk_swam]");
 setoutletassist(ECHO_OUTLET,  "/xk/midi/{noteon,noteoff,panic} → [udpsend 127.0.0.1 57122] → relay → dashboard rolling score");
-setoutletassist(MOVES_OUTLET, "detected: 'face <L|L'|R|R'|...>' on every quarter-turn, 'spell <name>' on every algorithm match — wire to [route face spell]");
+setoutletassist(MOVES_OUTLET, "detected: 'face <L|L'|R|R'|...>' on every quarter-turn, 'algorithm <name>' on every algorithm match — wire to [route face algorithm]");
 
 // Pulls in all data tables (OSC addresses, SWAM enums, CC band centers,
 // INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE, FACE_MAP,
@@ -290,8 +290,14 @@ var state = {
 	lastTurnTime: 0,
 	lastVoiceTime: 0,           // for panic watchdog (any instance)
 
-	// Continuous expression inputs
+	// Continuous expression inputs.
+	// Each EMA absorbs gyro static-pose noise so a held cube doesn't flicker
+	// the rounded CC value between two adjacent integers at 30 Hz (perceived
+	// as a sub-vibrato bow buzz). tiltEMA was missing pre-2026-04-30 — the
+	// only handleExpr* without smoothing — and produced exactly that bow-
+	// position wobble on sustained voices. Initialised at rest pose (0.5).
 	tilt: 0.5,
+	tiltEMA: 0.5,
 	spin: 0,
 	spinEMA: 0,
 	dev: 0,
@@ -322,7 +328,7 @@ var state = {
 	faceOffVelOverride: null,
 	faceReleaseMult: 1.0,
 
-	// Spell / last-voice routing
+	// Cube algorithm / last-voice routing
 	lastAllocatedInstance: 0
 };
 
@@ -418,6 +424,31 @@ function makeInstance(id) {
 		phraseArcDir: null,    // 'cresc' | 'dim' | null
 		phraseArcStart: 0,
 		phraseArcEnd: 0,
+
+		// D47 Phase 2 — chain candidacy. When a cresc arc completes (natural
+		// end OR steal), `lastArcDir` / `lastArcEndVal` / `lastArcEndTime`
+		// snapshot the exit state. The next voice's schedulePhraseArc
+		// inherits ccCache[CC.EXPRESSION] (no ccForce snap) when its
+		// direction matches AND the gap is ≤ ARC_CHAIN_GAP_MS — the
+		// listener hears one continuous swell across both voices instead of
+		// a step at the boundary. Direction mismatch / timeout breaks the
+		// chain naturally (lastArcDir cleared on the next chain candidate
+		// that doesn't qualify).
+		lastArcDir: null,
+		lastArcEndVal: 0,
+		lastArcEndTime: 0,
+
+		// D54 — bow-position flap counters. handleExprTilt writes CC 16 at
+		// 30 Hz; with raw `val` (no EMA) and tiny gyro static-pose noise,
+		// the rounded CC value flips between adjacent integers, producing
+		// a sub-vibrato bow buzz on sustained voices. tiltEMA + this
+		// telemetry is the invariant: per voice we count distinct CC 16
+		// reversals (value goes up after going down or vice versa); the
+		// natural-end log promotes to "BOW POS FLAP" if reversals/sec
+		// exceeds BOW_FLAP_RATE_FAIL. Reset on voice start.
+		bowPosWrites: 0,
+		bowPosReversals: 0,
+		bowPosLastDir: 0,      // -1 down, +1 up, 0 none
 
 		// KS sync guard
 		ksForceCount: 0,
@@ -711,6 +742,18 @@ function cancelPhrase(inst, preserveLegatoTail) {
 	}
 	inst.phraseTasks = [];
 
+	// D47 Phase 2 — capture chain candidacy BEFORE we cancel the rampCC
+	// so the next voice's schedulePhraseArc can decide whether to inherit
+	// the stolen arc's exit value. ccCache[CC.EXPRESSION] holds the most
+	// recent rampCC step value; that's the audible CC 11 the listener
+	// just heard. Direction match + within ARC_CHAIN_GAP_MS → chain.
+	if (inst.phraseArcDir) {
+		inst.lastArcDir = inst.phraseArcDir;
+		inst.lastArcEndVal = (inst.ccCache[CC.EXPRESSION] | 0);
+		inst.lastArcEndTime = Date.now();
+		inst.phraseArcDir = null;
+	}
+
 	cancelCCRamp(inst, CC.EXPRESSION);
 
 	// D52 — clear any in-flight Bow Pressure Accent spike whose scheduled
@@ -758,16 +801,22 @@ function scheduleRelease(inst, dur) {
 				    " face=" + (inst.faceEnvelope || "-") +
 				    " motion=" + (inst.faceMotion || "-") +
 				    " slides=0 leaps=0 dur=" + dur.toFixed(2));
-			} else if (maxRun > MAX_CONSECUTIVE_LEAPS) {
-				// D48 + D51 — leap-run exceeded MAX_CONSECUTIVE_LEAPS despite
-				// the post-leap nudge. Only happens when nudgeToSameString
-				// returned null (source at extreme of every string with no
-				// minLeap headroom in either direction). If frequent, narrow
-				// pickPitch's C5 register or lower MIN_LEAP.
+			} else if (maxRun > maxLeapsFor(inst.activeComplex)) {
+				// D48 + D51 + D58 — leap-run exceeded per-complex tolerance
+				// despite the post-leap nudge. Only happens when
+				// nudgeToSameString returned null (source at extreme of
+				// every string with no minLeap headroom in either
+				// direction). For C6/C7 (maxLeaps=0), ANY leap trips this
+				// — would indicate a regression in nudge logic since post-
+				// D58 those complexes should never leap. For C5 (maxLeaps=1),
+				// >1 consecutive leaps trip it. If frequent, narrow
+				// pickPitch's register or lower MIN_LEAP.
 				log("GLISS RUN FAIL inst " + inst.id + " C" + inst.activeComplex +
 				    " face=" + (inst.faceEnvelope || "-") +
 				    " slides=" + slides + " leaps=" + leaps +
-				    " consecLeapMax=" + maxRun + " dur=" + dur.toFixed(2));
+				    " consecLeapMax=" + maxRun +
+				    " (max for C" + inst.activeComplex + " = " + maxLeapsFor(inst.activeComplex) + ")" +
+				    " dur=" + dur.toFixed(2));
 			} else {
 				log("inst " + inst.id + " C" + inst.activeComplex +
 				    " face=" + (inst.faceEnvelope || "-") +
@@ -804,7 +853,36 @@ function scheduleRelease(inst, dur) {
 				    " " + inst.phraseArcStart + "->" + landed +
 				    " dur=" + dur.toFixed(2));
 			}
+			// D47 Phase 2 — refresh chain candidacy on natural end. The
+			// next voice's schedulePhraseArc reads these to decide whether
+			// to inherit ccCache[CC.EXPRESSION] (chain) or ccForce a fresh
+			// startVal. Direction-bearing voices that arrive within
+			// ARC_CHAIN_GAP_MS AND share dir → smooth dynamic across the
+			// boundary. Direction mismatch / timeout → no chain (legacy
+			// snap behaviour for that voice).
+			inst.lastArcDir = inst.phraseArcDir;
+			inst.lastArcEndVal = landed;
+			inst.lastArcEndTime = Date.now();
 			inst.phraseArcDir = null;
+		}
+
+		// D54 — bow-position flap telemetry. Always-on per-phrase log
+		// shows reversal count + rate so the user can audit smoothness;
+		// promotes to BOW POS FLAP when the rate exceeds threshold (means
+		// the EMA isn't doing its job — flap is back).
+		if (inst.bowPosWrites > 0) {
+			var revs = inst.bowPosReversals | 0;
+			var revRate = revs / Math.max(0.5, dur);
+			if (revRate > BOW_FLAP_RATE_FAIL) {
+				log("BOW POS FLAP inst " + inst.id + " C" + inst.activeComplex +
+				    " reversals=" + revs + " writes=" + inst.bowPosWrites +
+				    " dur=" + dur.toFixed(2) +
+				    " (rate=" + revRate.toFixed(1) + "/s, fail>" + BOW_FLAP_RATE_FAIL + ")");
+			} else {
+				log("inst " + inst.id + " bowPosFlap rev=" + revs +
+				    " writes=" + inst.bowPosWrites +
+				    " rate=" + revRate.toFixed(1) + "/s");
+			}
 		}
 
 		var offT = new Task(function() {
@@ -863,23 +941,58 @@ function phraseArcDirection(inst) {
 
 // D47 — phrase-spanning linear CC 11 ramp. Replaces scheduleExprEnvelope's
 // 3-stage attack/peak/sustain shape with a single sweep from ARC_FLOOR ×
-// peakExpr to ARC_CEIL × peakExpr (cresc) or vice versa (dim). ccForce snaps
-// to startVal so the new voice starts at the intended dynamic instead of
-// inheriting the previous voice's tail; rampCC walks the rest. Voice steal
-// cancels the ramp via cancelPhrase → cancelCCRamp(CC.EXPRESSION) — the new
-// voice's snapshot overwrites phraseArcDir before its own scheduleRelease
-// fires, so the FAIL telemetry only triggers on natural ends. REGIME ramp
-// multiplier still applies so contemplative regime stretches the arc and
-// burst regime tightens it.
+// peakExpr to ARC_CEIL × peakExpr (cresc) or vice versa (dim).
+//
+// Phase 1 (original): ccForce snapped to startVal at every voice; the new
+// voice started at the intended dynamic regardless of where the previous
+// arc ended. Audible side effect: a CC 11 step at every voice boundary
+// during continuous play — "predictable jump in dynamics, at the same
+// rate each time" (user report 2026-04-30).
+//
+// Phase 2 (this commit): consecutive same-direction voices arriving within
+// ARC_CHAIN_GAP_MS of the previous arc's exit (natural-end OR steal)
+// CHAIN — the new arc inherits ccCache[CC.EXPRESSION] (no ccForce snap)
+// and rampCC walks from there to the new endVal. Direction mismatch /
+// timeout / first arc breaks the chain (legacy snap behaviour for that
+// voice). Result: long swells span multiple cube turns smoothly; only
+// intentional direction changes produce the audible boundary.
+//
+// Voice steal cancels the ramp via cancelPhrase → cancelCCRamp(CC.
+// EXPRESSION); cancelPhrase also snapshots the chain state so a stolen
+// arc still seeds a chain candidate.
+//
+// REGIME ramp multiplier still applies so contemplative regime stretches
+// the arc and burst regime tightens it.
 function schedulePhraseArc(inst, peakExpr, dir, durMs) {
 	var rm = REGIME_EXPR_RAMP_MULT[state.regime] || 1.0;
 	var rampMs = Math.max(60, Math.round(durMs * rm));
 	var lo = clamp(Math.round(peakExpr * ARC_FLOOR), 0, 127);
 	var hi = clamp(Math.round(peakExpr * ARC_CEIL),  0, 127);
-	var startVal = (dir === 'cresc') ? lo : hi;
-	var endVal   = (dir === 'cresc') ? hi : lo;
+	var endVal = (dir === 'cresc') ? hi : lo;
 
-	ccForce(inst, CC.EXPRESSION, startVal);
+	var now = Date.now();
+	var gap = now - (inst.lastArcEndTime | 0);
+	var canChain = (
+		inst.lastArcDir === dir &&
+		inst.lastArcEndTime > 0 &&
+		gap <= ARC_CHAIN_GAP_MS
+	);
+
+	var startVal;
+	if (canChain) {
+		// Inherit ccCache — rampCC will continue from whatever the
+		// previous arc landed at (or where it was when stolen). No
+		// ccForce snap → no boundary step.
+		var cached = inst.ccCache[CC.EXPRESSION];
+		startVal = (cached != null) ? cached : ((dir === 'cresc') ? lo : hi);
+		log("inst " + inst.id + " arcChain dir=" + dir +
+		    " inheritStart=" + startVal + " endVal=" + endVal +
+		    " gap=" + gap + "ms");
+	} else {
+		startVal = (dir === 'cresc') ? lo : hi;
+		ccForce(inst, CC.EXPRESSION, startVal);
+	}
+
 	rampCC(inst, CC.EXPRESSION, endVal, rampMs);
 
 	inst.phraseArcDir   = dir;
@@ -889,7 +1002,8 @@ function schedulePhraseArc(inst, peakExpr, dir, durMs) {
 	log("inst " + inst.id + " phraseArc dir=" + dir +
 	    " face=" + (inst.faceEnvelope || "-") +
 	    " start=" + startVal + " end=" + endVal +
-	    " dur=" + Math.round(durMs) + "ms");
+	    " dur=" + Math.round(durMs) + "ms" +
+	    (canChain ? " [chained gap=" + gap + "ms]" : ""));
 }
 
 // ================================================================
@@ -1069,13 +1183,13 @@ var WILD_MIN_COUNT = 12;
 
 // D52 — wild gliss (C5) bow pressure accent. SWAM Cello's Expressivity →
 // Bow Pressure Accent slider is MIDI-Learned to CC 18 in the user's preset
-// (already used by sexy-move and u-perm spells for transient pressure
-// accents). Spiking CC 18 just before each slide noteOn applies a per-event
-// pressure accent that SWAM hears as a fresh bow attack — without touching
-// velocity (which would shrink portamento time per Velocity → P.MaxTime,
-// the failure mode of D50 v1). Decouples slide intent (vel) from attack
-// character (BPA spike), so wild gliss gets audible per-slide attacks while
-// portamento stays fully engaged.
+// (already used by sexy-move and u-perm cube algorithms for transient
+// pressure accents). Spiking CC 18 just before each slide noteOn applies a
+// per-event pressure accent that SWAM hears as a fresh bow attack — without
+// touching velocity (which would shrink portamento time per Velocity →
+// P.MaxTime, the failure mode of D50 v1). Decouples slide intent (vel) from
+// attack character (BPA spike), so wild gliss gets audible per-slide attacks
+// while portamento stays fully engaged.
 //
 // Spike value 80 is moderate (sexy-move uses 110, u-perm 100); reset to 0
 // after BPA_RESET_MS sustains the accent through the start of the slide
@@ -1121,6 +1235,38 @@ var WILD_GLISS_VEL = 22;
 // which the user's original wild character relied on).
 var MAX_CONSECUTIVE_LEAPS = 1;
 
+// D58 (2026-04-30) — per-complex leap tolerance. The single global
+// MAX_CONSECUTIVE_LEAPS = 1 applied uniformly produced 50/50 slide/leap
+// alternation on high-anchored phrases that descended across the
+// 57 (A-string lower bound) — user-reported "top-half phrases dropping
+// down play as two regular notes with leaps". The fundamental cause is
+// physical: cellos can't slide cross-string with portamento (D46),
+// and sameString() correctly returns false above 69 (A-string-only)
+// targeting <57.
+//   • C5 wild gliss keeps maxLeaps = 1: occasional cross-string punch
+//     IS the wild character. The phraseC5 anchor seed
+//     (`inst.consecutiveLeapCurrent = MAX_CONSECUTIVE_LEAPS`) still
+//     forces the FIRST event to slide; subsequent events can leap up
+//     to 1 in a row before being nudged.
+//   • C6 ord. gliss: maxLeaps = 0. Every cross-string outcome is
+//     nudged to same-string. Counter starts at 0 (default in
+//     handleVoice) and the gate `0 >= 0` is always true on cross-
+//     string, so no anchor seed is needed for C6 — the existing
+//     handleVoice reset is sufficient.
+//   • C7 tasto: maxLeaps = 0. Same as C6.
+// The right long-term answer for cross-string slides is pitchbend
+// (D59 design in docs/research_notes.md § Cross-String Pitchbend
+// Slides) — bendStep on a single held note, audible pitch curve via
+// pitchbend wheel regardless of which string the held note is on.
+// Until D59 lands, D58's same-string force is the lever for "no
+// leaps in C6/C7" and "1 max consecutive leap in C5."
+var MAX_LEAPS_BY_COMPLEX = { 5: 1, 6: 0, 7: 0 };
+
+function maxLeapsFor(complexType) {
+	var m = MAX_LEAPS_BY_COMPLEX[complexType];
+	return m != null ? (m | 0) : MAX_CONSECUTIVE_LEAPS;
+}
+
 // D47 (Phrase Dynamic Arcs, Phase 1) — sustained multi-note complexes
 // (C2/C3/C4/C8) replace the legacy 3-stage attack/peak/sustain CC 11 envelope
 // with a single linear ramp across the full phrase duration. Direction
@@ -1136,7 +1282,43 @@ var MAX_CONSECUTIVE_LEAPS = 1;
 // and docs/research_notes.md § Phrase Dynamic Arcs.
 var ARC_FLOOR = 0.30;
 var ARC_CEIL  = 1.00;
-var ARC_COMPLEXES = { 2: true, 3: true, 4: true, 8: true };
+// Phase 2 (2026-04-30): all multi-note complexes get the linear arc when
+// face envelope is direction-bearing (swell/fade/burst). Pre-Phase-2 only
+// sustained complexes (2/3/4/8) used the arc; gliss complexes (5/6/7)
+// stayed on the legacy 3-stage envelope and produced an audibly stepped
+// 25%/70% shape — the user-reported "predictable jump in middle of
+// phrases" symptom. C1 (pizz) keeps the 3-stage envelope since the pluck
+// attack character belongs there. isSingle face envelopes (pluck/stab/
+// drone) resolve to one note and short-circuit to the legacy path via
+// phraseArcDirection() returning null.
+var ARC_COMPLEXES = { 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: true };
+
+// Phase 2 chain window. Consecutive same-direction voices arriving within
+// this gap chain into a single arc — the new voice inherits ccCache[CC.
+// EXPRESSION] (no ccForce snap) so the listener hears one continuous
+// dynamic across both voices. 1000 ms is the longest typical inter-turn
+// interval at conversational regime (~1 turn/sec); above that the
+// listener has heard the previous arc's natural decay and a fresh start
+// reads as intentional. Lower threshold = stricter chains (more snaps
+// preserved); higher = more chaining (smoother but might chain across
+// intentional pauses).
+var ARC_CHAIN_GAP_MS = 1000;
+
+// D54 — handleExprTilt EMA coefficient. spinEMA uses 0.08; tilt is the
+// always-on always-emitting modulator (no deadband like spin's 200 ms low-
+// spin gate), so it gets stronger smoothing (0.05). Lower = smoother (more
+// lag); higher = more responsive (more flicker). The 30 Hz transmit rate
+// means τ ≈ 1 / (α × 30) ≈ 670 ms at α=0.05 — gyro static noise is fully
+// absorbed; intentional cube tilts respond within ~half a second.
+var TILT_EMA_ALPHA = 0.05;
+
+// D54 — bow-position flap fail threshold (CC 16 reversals per second of
+// voice duration). At rest with the EMA fix, 0–1 reversals/sec is normal
+// (rounded-int boundary crossings as EMA settles). During active tilting,
+// 5–10/sec is legitimate (the user is moving). Above 10/sec means the
+// EMA isn't doing its job — flap is back. Promotes the per-phrase log
+// line to BOW POS FLAP. The per-phrase line itself is always-on.
+var BOW_FLAP_RATE_FAIL = 10;
 
 function legatoNoteOverlap(inst, pitch, vel, overlapMs) {
 	var oldNotes = inst.activeNotes.slice();
@@ -1167,6 +1349,44 @@ var GLISS_VEL = 18;
 // for a per-event attack character without touching velocity. Reset to 0
 // after BPA_RESET_MS so subsequent events aren't affected.
 function glissNote(inst, pitch, vel, accent) {
+	// D55 diagnostic — every slide noteOn must be backed by SWAM being in
+	// the right state for portamento to engage. Three CCs gate it:
+	//   • CC 5 (PORTAMENTO_TIME) must equal cmx.portamento.time. SWAM v3
+	//     "wiggles through 0" trick in setupComplex/handleVoice can race
+	//     a noteon if the two ccForce writes straddle a MIDI buffer
+	//     boundary — SWAM ends up latched at 0 → instant glide → no
+	//     audible slide. The dashboard meanwhile sees noteon-overlap and
+	//     draws as gliss, producing the user-reported
+	//     "expected but not played, drawn as gliss" symptom.
+	//   • CC 64 (PORTAMENTO_ON) must equal 127.
+	//   • CC 81 (BOW_POLYPHONY) must equal Mono Poly Release for the
+	//     slide to engage cleanly (D44 invariant).
+	// Cache vs expected catches bridge-internal bugs (skipped writes,
+	// diff-guard suppression). It does NOT catch SWAM↔bridge wire drift
+	// (would need a SWAM-side read-back via vst~ pattr — deferred). When
+	// PORT TIME FAIL fires, the next fix is the wiggle-without-zero
+	// approach (write `time+1` then `time` so a racing noteon at worst
+	// sees a 1-unit-slower slide, never silent failure).
+	var cmx = COMPLEX[inst.activeComplex];
+	if (cmx && cmx.portamento && cmx.portamento.on) {
+		var wantTime = cmx.portamento.time | 0;
+		var gotTime  = (inst.ccCache[CC.PORTAMENTO_TIME] | 0);
+		var gotOn    = (inst.ccCache[CC.PORTAMENTO_ON]   | 0);
+		var polyOk   = true;
+		if (HAS_BOW_POLY_CC && cmx.bowPoly != null) {
+			var wantPoly = BOW_POLY_CC_VAL[cmx.bowPoly] | 0;
+			var gotPoly  = (inst.ccCache[CC.BOW_POLYPHONY] | 0);
+			polyOk = (gotPoly === wantPoly);
+		}
+		if (gotTime !== wantTime || gotOn !== 127 || !polyOk) {
+			log("PORT TIME FAIL inst " + inst.id + " C" + inst.activeComplex +
+			    " pitch=" + pitch +
+			    " wantTime=" + wantTime + " gotTime=" + gotTime +
+			    " gotOn=" + gotOn + " (want 127)" +
+			    " polyOk=" + polyOk);
+		}
+	}
+
 	if (accent && HAS_BOW_PRESS_ACCENT) {
 		ccForce(inst, CC.BOW_PRESS_ACCENT, accent);
 	}
@@ -1331,7 +1551,11 @@ function enforceLeap(sourcePitch, targetPitch, minLeap) {
 // Returns the actual (post-coercion) pitch so callers can chain.
 function glissStep(inst, sourcePitch, targetPitch, minLeap, glissVel, accent) {
 	var p = enforceLeap(sourcePitch, targetPitch, minLeap);
-	if ((inst.consecutiveLeapCurrent | 0) >= MAX_CONSECUTIVE_LEAPS && !sameString(sourcePitch, p)) {
+	// D58 — per-complex leap tolerance. C5 keeps 1 (wild punch); C6/C7
+	// drop to 0 (always nudge cross-string to same-string). The single
+	// table MAX_LEAPS_BY_COMPLEX is the authoritative source.
+	var maxLeaps = maxLeapsFor(inst.activeComplex);
+	if ((inst.consecutiveLeapCurrent | 0) >= maxLeaps && !sameString(sourcePitch, p)) {
 		var nudged = nudgeToSameString(sourcePitch, p, minLeap);
 		if (nudged != null) p = nudged;
 	}
@@ -1945,6 +2169,13 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	inst.consecutiveLeapCurrent = 0;
 	inst.consecutiveLeapMax = 0;
 
+	// D54 — bow-position flap counters reset per voice; scheduleRelease
+	// reads them at natural-end and promotes to BOW POS FLAP if the
+	// reversal rate exceeds threshold.
+	inst.bowPosWrites = 0;
+	inst.bowPosReversals = 0;
+	inst.bowPosLastDir = 0;
+
 	var intMap = INTENSITY_MAP[intensity] || INTENSITY_MAP["mf"];
 	inst.baseExpr = intMap.expr;
 	var baseVel = intMap.vel;
@@ -2023,15 +2254,28 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 			releaseRampMs:  cmx.exprEnv.releaseRampMs
 		};
 	}
-	// D47 — sustained multi-note complexes get a phrase-spanning linear
-	// CC 11 arc (cresc TO K-dynamic / dim FROM K-dynamic) driven by face
-	// envelope. Single-note faces (pluck/stab/drone, isSingle) and gliss
-	// complexes (C5/C6/C7) keep the legacy 3-stage envelope — single notes
-	// don't have an arc, gliss owns its own contour. phraseArcDir = null
-	// in the fallback path so scheduleRelease's FAIL check stays silent.
+	// Expression dispatch — three paths:
+	//   • D47 Phase 1+2: ARC_COMPLEXES + direction-bearing face envelope →
+	//     phrase-spanning linear arc (chains across consecutive same-dir
+	//     voices via Phase 2).
+	//   • D57 (2026-04-30): C1 pizz → static `peakExpr` (no envelope). The
+	//     dynamic for pizz lives in per-pluck velocity, not in CC 11.
+	//     The legacy 3-stage envelope ramped CC 11 over the full phrase
+	//     duration — but rapid pizz clusters fire all plucks in the first
+	//     ~200 ms, before CC 11 reaches its peak (at 25% of duration).
+	//     The plucks fire at attack-time velocity, so post-pluck CC 11
+	//     movement modulates only the decay tail — perceived as
+	//     "dynamics change after all the pizz arrived, meaningless."
+	//   • Everything else (isSingle face on multi-note complex; faces
+	//     without a direction): legacy 3-stage envelope, appropriate for
+	//     short single-note gestures.
 	var arcDir = ARC_COMPLEXES[complexType] ? phraseArcDirection(inst) : null;
 	if (arcDir) {
 		schedulePhraseArc(inst, inst.peakExpr, arcDir, Math.max(duration * 1000, 250));
+	} else if (complexType === 1) {
+		// D57 — pizz: static expression. Per-pluck velocity is the dynamic.
+		inst.phraseArcDir = null;
+		ccForce(inst, CC.EXPRESSION, Math.round(inst.peakExpr));
 	} else {
 		inst.phraseArcDir = null;
 		scheduleExprEnvelope(inst, inst.peakExpr, envForPhrase, Math.max(duration * 1000, 250));
@@ -2081,15 +2325,37 @@ function shouldTransmit(now) {
 
 function handleExprTilt(val) {
 	state.tilt = val;
+	// D54 — EMA the input so the rounded CC 16 emit doesn't flicker between
+	// two adjacent integers from gyro static-pose noise (perceived as a
+	// 30 Hz bow buzz on sustained voices). spinEMA / devEMA had this from
+	// the start; tilt was the only handleExpr* without smoothing.
+	state.tiltEMA = state.tiltEMA + TILT_EMA_ALPHA * (val - state.tiltEMA);
+
 	var now = Date.now();
 	if (!shouldTransmit(now)) return;
-	var jitter = (val - 0.5) * 60;
+	var jitter = (state.tiltEMA - 0.5) * 60;
 	for (var i = 0; i < POOL_SIZE; i++) {
 		var inst = instances[i];
 		if (inst.status === 'IDLE') continue;
 		var cmx = COMPLEX[inst.activeComplex];
 		if (!cmx || cmx.bowPos == null) continue;
-		cc(inst, CC.BOW_POSITION, Math.round(cmx.bowPos + jitter + state.scrambleBowBias));
+		var newVal = clamp(Math.round(cmx.bowPos + jitter + state.scrambleBowBias), 0, 127);
+		var oldVal = inst.ccCache[CC.BOW_POSITION];
+		cc(inst, CC.BOW_POSITION, newVal);
+		// D54 flap telemetry — count reversals (direction changes in the
+		// emitted CC sequence). One up→down or down→up flip per voice
+		// during a held position is normal; >10 per second of voice
+		// duration is the bow buzz signature, scheduleRelease's
+		// natural-end task promotes to BOW POS FLAP if it crosses
+		// BOW_FLAP_RATE_FAIL. Counters reset in handleVoice.
+		if (oldVal != null && newVal !== oldVal) {
+			var dir = (newVal > oldVal) ? 1 : -1;
+			if (inst.bowPosLastDir !== 0 && dir !== inst.bowPosLastDir) {
+				inst.bowPosReversals++;
+			}
+			inst.bowPosLastDir = dir;
+			inst.bowPosWrites++;
+		}
 	}
 }
 
@@ -2216,26 +2482,26 @@ function handleSieve() {
 }
 
 // ================================================================
-// SPELL REACTIONS — harmonic-ping spells (oll-cross / sune / niklas /
-// u-perm) allocate via the normal pool so they respect MAX_ACTIVE;
-// accent spells (sexy-move / anti-sune) ride the most-recent voice so
+// CUBE ALGORITHM REACTIONS — harmonic-ping algorithms (oll-cross / sune /
+// niklas / u-perm) allocate via the normal pool so they respect MAX_ACTIVE;
+// accent algorithms (sexy-move / anti-sune) ride the most-recent voice so
 // the accent lands on a currently-sounding cello.
 // ================================================================
 
-// Allocate a pool instance for a spell-triggered ping. Goes through the
+// Allocate a pool instance for an algorithm-triggered ping. Goes through the
 // normal cap-aware allocator so the ping steals the oldest RELEASING /
-// PLAYING when MAX_ACTIVE is hit — prevents spells from layering extra
-// cellos on top of the 2-voice cap.
-function allocateSpellPing() {
+// PLAYING when MAX_ACTIVE is hit — prevents algorithm pings from layering
+// extra cellos on top of the 2-voice cap.
+function allocateAlgorithmPing() {
 	var p = allocateInstance();
 	p.status = 'PLAYING';
 	p.lastVoiceTime = Date.now();
 	return p;
 }
 
-function handleSpell(name) {
-	log("spell: " + name);
-	outlet(MOVES_OUTLET, "spell", name);
+function handleAlgorithm(name) {
+	log("algorithm: " + name);
+	outlet(MOVES_OUTLET, "algorithm", name);
 	var lastInst = instances[state.lastAllocatedInstance != null ? state.lastAllocatedInstance : 0];
 
 	switch (name) {
@@ -2248,7 +2514,7 @@ function handleSpell(name) {
 			break;
 
 		case "oll-cross":
-			var inst0 = allocateSpellPing();
+			var inst0 = allocateAlgorithmPing();
 			setHarmonics(inst0, HARMONICS.OCT);
 			var harmPitch = foldToRange(pickPitch(4, inst0) + 12);
 			noteOn(inst0, harmPitch, 60);
@@ -2262,7 +2528,7 @@ function handleSpell(name) {
 			break;
 
 		case "u-perm":
-			var inst0 = allocateSpellPing();
+			var inst0 = allocateAlgorithmPing();
 			var burstCount = rrand(3, 5);
 			ccForce(inst0, CC.BOW_PRESS_ACCENT, 100);
 			for (var i = 0; i < burstCount; i++) {
@@ -2286,7 +2552,7 @@ function handleSpell(name) {
 			break;
 
 		case "sune":
-			var inst0 = allocateSpellPing();
+			var inst0 = allocateAlgorithmPing();
 			setHarmonics(inst0, HARMONICS.OCT_5TH);
 			var sunePitch = foldToRange(pickPitch(4, inst0));
 			noteOn(inst0, sunePitch, 55);
@@ -2308,11 +2574,11 @@ function handleSpell(name) {
 
 		case "t-perm":
 			bang();
-			log("spell reset (t-perm)");
+			log("algorithm reset (t-perm)");
 			break;
 
 		case "niklas":
-			var inst0 = allocateSpellPing();
+			var inst0 = allocateAlgorithmPing();
 			setHarmonics(inst0, HARMONICS.CTRL);
 			var niklasPitch = foldToRange(pickPitch(4, inst0) - 3);
 			noteOn(inst0, niklasPitch, 52);
@@ -2399,7 +2665,7 @@ function anything() {
 	else if (addr === OSC.REGIME)        { handleRegime(args[0]); }
 	else if (addr === OSC.RATE)          { handleRate(args[0]); }
 	else if (addr === OSC.SIEVE)         { handleSieve.apply(this, args); }
-	else if (addr === OSC.SPELL)         { handleSpell(args[0]); }
+	else if (addr === OSC.ALGORITHM)     { handleAlgorithm(args[0]); }
 	else if (addr === OSC.SCRAMBLE)      { handleExprScramble(args[0]); }
 	else if (addr === OSC.PANIC)         { handlePanic(); }
 	else if (addr === OSC.TREM_LEARN)    { handleTremLearn(args[0]); }
@@ -2448,6 +2714,12 @@ function resetInstance(inst) {
 	inst.phraseArcDir = null;
 	inst.phraseArcStart = 0;
 	inst.phraseArcEnd = 0;
+	inst.lastArcDir = null;
+	inst.lastArcEndVal = 0;
+	inst.lastArcEndTime = 0;
+	inst.bowPosWrites = 0;
+	inst.bowPosReversals = 0;
+	inst.bowPosLastDir = 0;
 	inst.lastWasLeap = false;
 	inst.consecutiveLeapCurrent = 0;
 	inst.consecutiveLeapMax = 0;

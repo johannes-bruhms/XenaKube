@@ -1,6 +1,6 @@
 # XenaKube
 
-A real-time musical instrument that transforms a GAN i4 smart Rubik's cube into a live performance tool. Cube turns produce sound; Rubik's algorithms are "spells" that trigger mode changes. Built on S4 group math (24 rotation symmetries) inspired by Xenakis' *Nomos Alpha*.
+A real-time musical instrument that transforms a GAN i4 smart Rubik's cube into a live performance tool. Cube turns produce sound; named Rubik's algorithms (sexy-move, sune, t-perm, …) trigger musical gestures. Built on S4 group math (24 rotation symmetries) inspired by Xenakis' *Nomos Alpha*.
 
 ## Overview
 
@@ -8,7 +8,7 @@ XenaKube is a performance system with four parts working together:
 
 - A GAN i4 smart cube provides turn and gyro data.
 - Chrome connects to the cube over Web Bluetooth and forwards events to `relay.js`.
-- `XenaKubeEngine` maps those events into `S4` state, parameter permutations, sound-complex assignments, spell detections, and expression values.
+- `XenaKubeEngine` maps those events into `S4` state, parameter permutations, sound-complex assignments, cube-algorithm detections, and expression values.
 - Max/MSP + SWAM Cello turn the resulting voice events into playable phrases, while the browser dashboard visualizes the session in real time.
 
 In practice, each turn is more than a note trigger. A turn can:
@@ -16,12 +16,12 @@ In practice, each turn is more than a note trigger. A turn can:
 - permute the active `K_i` parameter bundle (density, intensity, duration)
 - permute the active `C_i` sound complex (`C1`-`C8`)
 - trigger a phrase shaped by face identity and current engine state
-- contribute to a Rubik's algorithm "spell" that changes higher-level musical behavior
+- contribute to a Rubik's algorithm match that changes higher-level musical behavior
 - update the live GUI with cube state, sieve state, rolling-score output, and mode badges
 
-The browser GUI is a full performance HUD: it shows the live cube, ghost/snap orientation, active vertices and complexes, spell buffer, right-edge pitch sieve, and a rolling score fed by the actual MIDI echo coming back from the Max bridge.
+The browser GUI is a full performance HUD: it shows the live cube, ghost/snap orientation, active vertices and complexes, cube-algorithm buffer, right-edge pitch sieve, and a rolling score fed by the actual MIDI echo coming back from the Max bridge.
 
-For the full report, including a GUI walkthrough based on `docs/current-gui.png`, see [docs/project-report.md](docs/project-report.md).
+For a screenshot of the live HUD, see `docs/webgui/current-gui.png`.
 
 ## How It Works
 
@@ -31,7 +31,7 @@ GAN i4 Cube (BLE) --> Chrome Web Bluetooth --> relay.js (Node)
                                              XenaKubeEngine (TS)
                                          ┌────────┼──────────┐
                                          │        │          │
-                                   SpellDetector  VoiceEngine  Expression
+                              CubeAlgorithmDetector VoiceEngine  Expression
                                          │        │          │
                                          ▼        ▼          ▼
                                    ModeManager  OSC:57121  WS
@@ -47,13 +47,13 @@ Following Xenakis' method, two S4 group cubes operate simultaneously:
 - **K_i cube** -- maps 8 vertices to parameter triples (Density × Intensity × Duration). Each turn permutes which parameters apply to which voice.
 - **C_i cube** -- maps 8 vertices to sound complex types (C1-C8). Transformations reassign which synthesis method each voice uses.
 
-### Spell System
+### Cube Algorithms
 
-The spell book is the 6 **CFOP** fundamentals (Cross, F2L, OLL, PLL) plus Niklas (archetypal 3-cycle commutator). All are orientation-independent (each canonical algorithm × 24 whole-cube rotations), so the same finger pattern is recognized on any face pair.
+The algorithm book is the 6 **CFOP** fundamentals (Cross, F2L, OLL, PLL) plus Niklas (archetypal 3-cycle commutator). All are orientation-independent (each canonical algorithm × 24 whole-cube rotations), so the same finger pattern is recognized on any face pair.
 
-| Spell | Algorithm | Role | Effect |
-|-------|-----------|------|--------|
-| sexy-move | R U R' U' | CFOP F2L trigger | Toggle path V1 ↔ V2 + bow-pressure accent ping |
+| Algorithm | Moves | Role | Effect |
+|-----------|-------|------|--------|
+| sexy-move | R U R' U' | CFOP F2L trigger | Bow-pressure accent ping |
 | oll-cross | F R U R' U' F' | 2-look OLL edges | Variant → drone |
 | sune | R U R' U R U2 R' | 2-look OLL corners | Harmonic ping → OCT_5TH (perfect 12th) |
 | anti-sune | R U2 R' U' R U' R' | 2-look OLL inverse corners | Palette → V1 |
@@ -61,7 +61,7 @@ The spell book is the 6 **CFOP** fundamentals (Cross, F2L, OLL, PLL) plus Niklas
 | u-perm | R U' R U R U R U' R' U' R2 | 2-look PLL edges | Variant → burst |
 | t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 2-look PLL corners+edges | Reset palette + variant |
 
-Spells layer — short algorithms fire immediately even if they're the prefix of a longer one in progress. The spell book is being extended toward a phrase-library model (see `docs/todo.md` Phase B).
+Algorithms layer — shorter algorithms fire immediately even if they're the prefix of a longer one in progress. The algorithm book is being extended toward a phrase-library model (see `docs/todo.md` Phase B).
 
 ### Phrase Generation (Max/SWAM)
 
@@ -114,7 +114,7 @@ Turn the cube. Sound happens.
 ## Project Structure
 
 ```
-src/              TypeScript engine (S4 group, spells, voice, expression, scramble)
+src/              TypeScript engine (S4 group, cube algorithms, voice, expression, scramble)
 max/              Max/MSP SWAM Cello bridge (xk_swam.js for v8 object)
 public/           Browser dashboard (live visualizer + cube connect)
 relay.js          BLE-to-OSC bridge with XenaKubeEngine

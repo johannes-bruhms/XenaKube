@@ -613,7 +613,7 @@ The user's mental model was slightly off (CC 11 is per-voice, not per-note — `
 **Why faceEnvelope and not the alternatives** (full discussion in `docs/research_notes.md` § Phrase Dynamic Arcs):
 
 - **Tetra-orbit parity** rejected: already spent on `harmonicsForC4` (V1+even = OCT, V1+odd = OCT_5TH, V2+even = OCT_5TH, V2+odd = CTRL); doubling onto expression direction tangles two unrelated mappings on the same axis. Performers can't perceive orbit parity directly mid-performance.
-- **Sexy-move toggle** (regime flip) rejected as sole driver: sexy-move already has two jobs (V1↔V2 path toggle + bow-pressure accent ping); a third job couples path and dynamic so they can never be decoupled. Exploratory non-CFOP play wouldn't trigger it for long stretches. Loses face-identity reinforcement.
+- **Sexy-move toggle** (regime flip) rejected as sole driver: even when sexy-move was carrying the V1↔V2 toggle (since removed 2026-04-30), coupling path/dynamic onto a single 4-move trigger meant they could never be decoupled, and exploratory non-CFOP play wouldn't trigger it for long stretches. Loses face-identity reinforcement.
 - **Sexy-move coin flip** rejected outright: random direction strips both per-face predictability AND per-regime semantics (less Xenakian, more dice).
 - **Face envelope** chosen: clean 3 cresc / 3 dim split across multi-note faces; reinforces Temporal Identity directly (L vs L' now differ in dynamic *direction*, not just motion / articulation); performer agency through face choice; Phase 2 chain detection layers naturally on top.
 

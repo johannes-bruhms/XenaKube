@@ -92,9 +92,9 @@
   }
   .ovl-tl::-webkit-scrollbar { display: none; }
 
-  /* Top-right — spell buffer + spell notification (compact, matches left
-     column typography). Right-aligned column that cannot exceed cluster
-     width. */
+  /* Top-right — cube-algorithm buffer + algorithm notification (compact,
+     matches left column typography). Right-aligned column that cannot
+     exceed cluster width. */
   .ovl-tr {
     top: 12px;
     right: calc(var(--sieve-strip-w) + 14px);
@@ -546,7 +546,7 @@
   }
 
   /* Hidden (JS still writes to these) */
-  .log-panel, .gyro-panel, .sequence-panel, .vertices-panel, .complexes-panel, .spell-panel { display: none !important; }
+  .log-panel, .gyro-panel, .sequence-panel, .vertices-panel, .complexes-panel, .algorithm-panel { display: none !important; }
   /* Keep active vertex/complex cards visible even though grid containers hide by default */
   .ovl-tl .vertex-grid, .ovl-tl .complex-grid { display: block !important; }
   .active-cards { display: flex; flex-direction: column; gap: 6px; }
@@ -612,30 +612,30 @@
 
   /* === V2 Panels === */
 
-  /* Spell area (top-right, compact, right-aligned to match left column).
-     The persistent .spell-notification is hidden in the redesign — every
-     spell fire pushes a transient .spell-toast into .spell-history (now
-     anchored just below the move-buffer, so toasts pop up and disappear
-     in the same top-right column as the moves log). The DOM node stays
-     so handleSpellEvent's writes don't NPE. */
-  .spell-row {
+  /* Cube-algorithm area (top-right, compact, right-aligned to match left
+     column). The persistent .algorithm-notification is hidden in the
+     redesign — every algorithm fire pushes a transient .algorithm-toast
+     into .algorithm-history (now anchored just below the move-buffer, so
+     toasts pop up and disappear in the same top-right column as the moves
+     log). The DOM node stays so handleAlgorithmEvent's writes don't NPE. */
+  .algorithm-row {
     display: flex;
     flex-direction: column;
     gap: 4px;
     align-items: flex-end;
     pointer-events: none;
   }
-  .spell-notification {
+  .algorithm-notification {
     display: none;
   }
-  .spell-buffer {
+  .algorithm-buffer {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
     justify-content: flex-end;
     font-size: 16px;
   }
-  .spell-buffer-move {
+  .algorithm-buffer-move {
     padding: 0;
     font-size: 16px;
     font-weight: 600;
@@ -646,20 +646,20 @@
     transition: color 0.15s;
     letter-spacing: 2px;
   }
-  .spell-buffer-move.matched {
+  .algorithm-buffer-move.matched {
     color: var(--gold);
   }
-  .spell-partials {
+  .algorithm-partials {
     font-size: 10px;
     color: var(--dim);
     min-width: 120px;
     text-align: right;
   }
-  .spell-partials .partial-name {
+  .algorithm-partials .partial-name {
     color: var(--text);
     font-weight: 600;
   }
-  .spell-partials .partial-bar {
+  .algorithm-partials .partial-bar {
     display: inline-block;
     height: 3px;
     background: var(--gold);
@@ -817,11 +817,11 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* Spell-history toast — top-right, just below the move-buffer + spell-row.
+  /* Algorithm-history toast — top-right, just below the move-buffer + algorithm-row.
      Toasts slide in from the right, hold ~1.4 s, then slide back out
-     fading. Stack vertically for rapid-fire spells. Pointer-events off so
-     they never block the cube-rotate / sieve / gizmo cluster underneath. */
-  .spell-history {
+     fading. Stack vertically for rapid-fire algorithm matches. Pointer-events
+     off so they never block the cube-rotate / sieve / gizmo cluster underneath. */
+  .algorithm-history {
     position: fixed;
     top: 50px;
     right: calc(var(--sieve-strip-w) + 14px);
@@ -832,7 +832,7 @@
     gap: 4px;
     pointer-events: none;
   }
-  .spell-toast {
+  .algorithm-toast {
     padding: 5px 12px;
     font-size: 14px;
     font-weight: 700;

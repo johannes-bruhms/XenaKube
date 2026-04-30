@@ -1,28 +1,29 @@
-// === Spell Detection: Rubik's algorithms as mode triggers ===
+// === Cube Algorithm Detection: Rubik's algorithms as mode triggers ===
 //
 // Maintains a rolling move buffer. When the tail matches a known
-// algorithm, fires the spell. Longest match wins to prevent
-// short prefixes (e.g. sexy move) from triggering during long algorithms.
+// algorithm, fires a CubeAlgorithmMatch. Longest match wins to prevent
+// short prefixes (e.g. sexy-move) from triggering during long algorithms.
 //
-// Spells are orientation-independent: each canonical algorithm is expanded
-// into all 24 whole-cube-rotation variants so the same finger pattern is
-// detected regardless of which faces/edges it is performed on.
+// Cube algorithms are orientation-independent: each canonical algorithm is
+// expanded into all 24 whole-cube-rotation variants so the same finger
+// pattern is detected regardless of which faces/edges it is performed on.
 
 import type { MoveString } from './types.js';
 
 /** Named effect — sound/behavior TBD, just an identifier for now */
-export type SpellEffect = string;
+export type CubeAlgorithmEffect = string;
 
-export interface Spell {
+export interface CubeAlgorithm {
   name: string;
-  algorithm: MoveString[];
-  effect: SpellEffect;
-  /** If this is a rotated variant, the canonical spell it came from */
+  /** The move sequence that defines this algorithm */
+  moves: MoveString[];
+  effect: CubeAlgorithmEffect;
+  /** If this is a rotated variant, the canonical algorithm name it came from */
   canonical?: string;
 }
 
-export interface SpellMatch {
-  spell: Spell;
+export interface CubeAlgorithmMatch {
+  algorithm: CubeAlgorithm;
   timestamp: number;
 }
 
@@ -94,27 +95,27 @@ function rotateMove(move: MoveString, faceMap: FaceMap): MoveString {
   return faceMap[face] + suffix;
 }
 
-/** Apply a face permutation to an entire algorithm */
-function rotateAlgorithm(alg: MoveString[], faceMap: FaceMap): MoveString[] {
-  return alg.map(m => rotateMove(m, faceMap));
+/** Apply a face permutation to an entire move sequence */
+function rotateMoves(moves: MoveString[], faceMap: FaceMap): MoveString[] {
+  return moves.map(m => rotateMove(m, faceMap));
 }
 
-/** Expand a canonical spell book into orientation-independent variants */
-export function expandSpellBook(canonical: Spell[]): Spell[] {
-  const expanded: Spell[] = [];
+/** Expand a canonical algorithm book into orientation-independent variants */
+export function expandCubeAlgorithmBook(canonical: CubeAlgorithm[]): CubeAlgorithm[] {
+  const expanded: CubeAlgorithm[] = [];
   const seen = new Set<string>();
 
-  for (const spell of canonical) {
+  for (const alg of canonical) {
     for (const rot of ALL_ROTATIONS) {
-      const rotated = rotateAlgorithm(spell.algorithm, rot);
+      const rotated = rotateMoves(alg.moves, rot);
       const key = rotated.join(' ');
       if (!seen.has(key)) {
         seen.add(key);
         expanded.push({
-          name: spell.name,
-          algorithm: rotated,
-          effect: spell.effect,
-          canonical: spell.name,
+          name: alg.name,
+          moves: rotated,
+          effect: alg.effect,
+          canonical: alg.name,
         });
       }
     }
@@ -123,11 +124,11 @@ export function expandSpellBook(canonical: Spell[]): Spell[] {
   return expanded;
 }
 
-// === Spell Book ===
+// === Cube Algorithm Book ===
 // Canonical algorithms — one representative orientation each.
 // The detector expands these into all 24 rotation variants automatically.
 
-// Minimal CFOP fundamentals — 6 spells covering the essential vocabulary
+// Minimal CFOP fundamentals — 6 algorithms covering the essential vocabulary
 // needed to solve any state using 2-look OLL + 2-look PLL.
 //
 //   F2L trigger:    sexy-move
@@ -138,30 +139,30 @@ export function expandSpellBook(canonical: Spell[]): Spell[] {
 // (e.g. U2 → U' U'). GAN hardware only reports 90° clicks, so the detector
 // never sees a single "X2" token. Performers habitually flick half-turns
 // CCW (left-index pull); reversing direction will fail to trigger.
-export const CANONICAL_SPELLS: Spell[] = [
+export const CANONICAL_CUBE_ALGORITHMS: CubeAlgorithm[] = [
   // --- F2L building block (4 moves) ---
   {
     name: 'sexy-move',
-    algorithm: ['R', 'U', "R'", "U'"],
+    moves: ['R', 'U', "R'", "U'"],
     effect: 'sexy-move',
   },
 
   // --- 2-look OLL (edges, then corners) ---
   {
     name: 'oll-cross',
-    algorithm: ['F', 'R', 'U', "R'", "U'", "F'"],
+    moves: ['F', 'R', 'U', "R'", "U'", "F'"],
     effect: 'oll-cross',
   },
   {
     // Canonical: R U R' U R U2 R' (7). U2 expanded CCW → 8 quarter-turns.
     name: 'sune',
-    algorithm: ['R', 'U', "R'", 'U', 'R', "U'", "U'", "R'"],
+    moves: ['R', 'U', "R'", 'U', 'R', "U'", "U'", "R'"],
     effect: 'sune',
   },
   {
     // Canonical: R U2 R' U' R U' R' (7). U2 expanded CCW → 8 quarter-turns.
     name: 'anti-sune',
-    algorithm: ['R', "U'", "U'", "R'", "U'", 'R', "U'", "R'"],
+    moves: ['R', "U'", "U'", "R'", "U'", 'R', "U'", "R'"],
     effect: 'anti-sune',
   },
 
@@ -169,13 +170,13 @@ export const CANONICAL_SPELLS: Spell[] = [
   {
     // Canonical: R U' R U R U R U' R' U' R2 (11). R2 expanded CCW → 12.
     name: 'u-perm',
-    algorithm: ['R', "U'", 'R', 'U', 'R', 'U', 'R', "U'", "R'", "U'", "R'", "R'"],
+    moves: ['R', "U'", 'R', 'U', 'R', 'U', 'R', "U'", "R'", "U'", "R'", "R'"],
     effect: 'u-perm',
   },
   {
     // Canonical: R U R' U' R' F R2 U' R' U' R U R' F' (14). R2 expanded CCW → 15.
     name: 't-perm',
-    algorithm: ['R', 'U', "R'", "U'", "R'", 'F', "R'", "R'", "U'", "R'", "U'", 'R', 'U', "R'", "F'"],
+    moves: ['R', 'U', "R'", "U'", "R'", 'F', "R'", "R'", "U'", "R'", "U'", 'R', 'U', "R'", "F'"],
     effect: 't-perm',
   },
 
@@ -183,30 +184,30 @@ export const CANONICAL_SPELLS: Spell[] = [
   // Niklas: archetypal 3-cycle corner commutator. See revision_roadmap.md D19.
   {
     name: 'niklas',
-    algorithm: ['R', "U'", "L'", 'U', "R'", "U'", 'L'],
+    moves: ['R', "U'", "L'", 'U', "R'", "U'", 'L'],
     effect: 'niklas',
   },
 ];
 
-/** Backwards-compatible: expanded spell book with all rotation variants */
-export const SPELL_BOOK: Spell[] = expandSpellBook(CANONICAL_SPELLS);
+/** Expanded algorithm book with all rotation variants */
+export const CUBE_ALGORITHM_BOOK: CubeAlgorithm[] = expandCubeAlgorithmBook(CANONICAL_CUBE_ALGORITHMS);
 
 const BUFFER_TIMEOUT_MS = 2000;
 const MAX_BUFFER = 20;
 
-export class SpellDetector {
+export class CubeAlgorithmDetector {
   private buffer: { move: MoveString; time: number }[] = [];
-  private spellBook: Spell[];
-  /** Tracks the buffer position (total push count) at which each spell last fired */
+  private algorithmBook: CubeAlgorithm[];
+  /** Tracks the buffer position (total push count) at which each algorithm last fired */
   private lastFired = new Map<string, number>();
   private pushCount = 0;
 
   /**
    * Overlap suppression: prevents rotation variants from triggering on
    * overlapping buffer windows (e.g. cycling F U' F' U fires 3 different
-   * 4-move spells without this). After a spell fires, other spells whose
+   * 4-move algorithms without this). After an algorithm fires, others whose
    * buffer window PARTIALLY overlaps are suppressed. Full containment
-   * (longer spell encompasses shorter) is still allowed (layered detection).
+   * (longer algorithm encompasses shorter) is still allowed (layered detection).
    *
    * Math: previous match at `E` with length `Lp`, candidate length `L`, gap = pushCount - E.
    *   - No overlap (allow):         gap >= L
@@ -216,28 +217,28 @@ export class SpellDetector {
   private lastMatchEnd = 0;
   private lastMatchLength = 0;
 
-  constructor(spellBook: Spell[] = SPELL_BOOK) {
-    // Validate: no two DIFFERENT spells share the same algorithm
+  constructor(algorithmBook: CubeAlgorithm[] = CUBE_ALGORITHM_BOOK) {
+    // Validate: no two DIFFERENT algorithms share the same move sequence
     const seen = new Map<string, string>();
-    for (const spell of spellBook) {
-      const key = spell.algorithm.join(' ');
+    for (const alg of algorithmBook) {
+      const key = alg.moves.join(' ');
       const existing = seen.get(key);
-      if (existing && existing !== spell.name) {
-        throw new Error(`Algorithm collision: "${spell.name}" and "${existing}" share moves [${key}]`);
+      if (existing && existing !== alg.name) {
+        throw new Error(`Algorithm collision: "${alg.name}" and "${existing}" share moves [${key}]`);
       }
-      seen.set(key, spell.name);
+      seen.set(key, alg.name);
     }
-    this.spellBook = [...spellBook].sort((a, b) => b.algorithm.length - a.algorithm.length);
+    this.algorithmBook = [...algorithmBook].sort((a, b) => b.moves.length - a.moves.length);
   }
 
-  /** Push a move. Returns the longest spell that fired, or null. */
-  push(move: MoveString, now: number = Date.now()): SpellMatch | null {
+  /** Push a move. Returns the longest algorithm that fired, or null. */
+  push(move: MoveString, now: number = Date.now()): CubeAlgorithmMatch | null {
     const matches = this.pushAll(move, now);
     return matches.length > 0 ? matches[0] : null;
   }
 
-  /** Push a move and return ALL spells that fired (layered — multiple can fire on one move). */
-  pushAll(move: MoveString, now: number = Date.now()): SpellMatch[] {
+  /** Push a move and return ALL algorithms that fired (layered — multiple can fire on one move). */
+  pushAll(move: MoveString, now: number = Date.now()): CubeAlgorithmMatch[] {
     // Flush stale moves (gap > timeout)
     if (this.buffer.length > 0) {
       const last = this.buffer[this.buffer.length - 1];
@@ -261,24 +262,24 @@ export class SpellDetector {
     const prevMatchEnd = this.lastMatchEnd;
     const prevMatchLength = this.lastMatchLength;
 
-    const matches: SpellMatch[] = [];
+    const matches: CubeAlgorithmMatch[] = [];
     let bestMatchLength = 0;
 
-    for (const spell of this.spellBook) {
-      if (this.tailMatches(spell.algorithm)) {
-        const lastPos = this.lastFired.get(spell.name) ?? -1;
+    for (const alg of this.algorithmBook) {
+      if (this.tailMatches(alg.moves)) {
+        const lastPos = this.lastFired.get(alg.name) ?? -1;
         if (this.pushCount > lastPos) {
           // Overlap suppression: suppress partial overlap, allow full containment
           if (prevMatchEnd > 0) {
             const gap = this.pushCount - prevMatchEnd;
-            const L = spell.algorithm.length;
+            const L = alg.moves.length;
             if (L - prevMatchLength < gap && gap < L) {
               continue; // partial overlap with recent match — suppress
             }
           }
-          this.lastFired.set(spell.name, this.pushCount);
-          matches.push({ spell, timestamp: now });
-          bestMatchLength = Math.max(bestMatchLength, spell.algorithm.length);
+          this.lastFired.set(alg.name, this.pushCount);
+          matches.push({ algorithm: alg, timestamp: now });
+          bestMatchLength = Math.max(bestMatchLength, alg.moves.length);
         }
       }
     }
@@ -292,14 +293,14 @@ export class SpellDetector {
     return matches;
   }
 
-  /** Check if the buffer tail matches an algorithm */
-  private tailMatches(algorithm: MoveString[]): boolean {
-    const len = algorithm.length;
+  /** Check if the buffer tail matches a move sequence */
+  private tailMatches(moves: MoveString[]): boolean {
+    const len = moves.length;
     if (this.buffer.length < len) return false;
 
     const offset = this.buffer.length - len;
     for (let i = 0; i < len; i++) {
-      if (this.buffer[offset + i].move !== algorithm[i]) return false;
+      if (this.buffer[offset + i].move !== moves[i]) return false;
     }
     return true;
   }
@@ -309,47 +310,47 @@ export class SpellDetector {
     return this.buffer.map(b => b.move);
   }
 
-  /** Get all spells in the book (includes rotation variants) */
-  getSpellBook(): Spell[] {
-    return this.spellBook;
+  /** Get all algorithms in the book (includes rotation variants) */
+  getAlgorithmBook(): CubeAlgorithm[] {
+    return this.algorithmBook;
   }
 
-  /** Get unique spell names (one entry per canonical spell, for UI display) */
-  getCanonicalSpells(): Spell[] {
+  /** Get unique algorithm names (one entry per canonical algorithm, for UI display) */
+  getCanonicalAlgorithms(): CubeAlgorithm[] {
     const seen = new Set<string>();
-    const result: Spell[] = [];
-    for (const spell of this.spellBook) {
-      if (!seen.has(spell.name)) {
-        seen.add(spell.name);
-        result.push(spell);
+    const result: CubeAlgorithm[] = [];
+    for (const alg of this.algorithmBook) {
+      if (!seen.has(alg.name)) {
+        seen.add(alg.name);
+        result.push(alg);
       }
     }
     return result;
   }
 
-  /** How far the current buffer is into each spell (for UI prefix highlighting).
-   *  Deduplicates by spell name — returns the longest partial match per canonical spell. */
-  getPartialMatches(): { spell: Spell; matched: number }[] {
-    const best = new Map<string, { spell: Spell; matched: number }>();
-    for (const spell of this.spellBook) {
-      const matched = this.prefixMatchLength(spell.algorithm);
+  /** How far the current buffer is into each algorithm (for UI prefix highlighting).
+   *  Deduplicates by algorithm name — returns the longest partial match per canonical algorithm. */
+  getPartialMatches(): { algorithm: CubeAlgorithm; matched: number }[] {
+    const best = new Map<string, { algorithm: CubeAlgorithm; matched: number }>();
+    for (const alg of this.algorithmBook) {
+      const matched = this.prefixMatchLength(alg.moves);
       if (matched > 0) {
-        const existing = best.get(spell.name);
+        const existing = best.get(alg.name);
         if (!existing || matched > existing.matched) {
-          best.set(spell.name, { spell, matched });
+          best.set(alg.name, { algorithm: alg, matched });
         }
       }
     }
     return [...best.values()];
   }
 
-  private prefixMatchLength(algorithm: MoveString[]): number {
+  private prefixMatchLength(moves: MoveString[]): number {
     const bufMoves = this.buffer.map(b => b.move);
-    for (let start = Math.max(0, bufMoves.length - algorithm.length); start < bufMoves.length; start++) {
+    for (let start = Math.max(0, bufMoves.length - moves.length); start < bufMoves.length; start++) {
       const slice = bufMoves.slice(start);
       let match = true;
       for (let i = 0; i < slice.length; i++) {
-        if (slice[i] !== algorithm[i]) { match = false; break; }
+        if (slice[i] !== moves[i]) { match = false; break; }
       }
       if (match) return slice.length;
     }

@@ -30,7 +30,7 @@ export const ROLL_PITCH_RANGE = ROLL_MAX_MIDI - ROLL_MIN_MIDI;   // 48 semitones
 // Pitch-axis insets (CSS px). The rolling-score canvas stays full-
 // viewport so the background scrolls under everything, but the pitch
 // axis is restricted to the inner rectangle so high notes (~C6) don't
-// render under the spell row and low notes (~C2) don't render under
+// render under the algorithm row and low notes (~C2) don't render under
 // the bottom-right gizmo cluster. These MUST match the
 // `.ovl-sieve-right` CSS top/bottom values exactly so each MIDI pitch
 // lines up vertically with its sieve cell.

@@ -1,0 +1,2954 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>XenaKube</title>
+<link rel="stylesheet" href="./css/main.css">
+</head>
+<body>
+
+<canvas id="rolling-score"></canvas>
+<canvas id="cube-canvas"></canvas>
+<canvas id="line-overlay"></canvas>
+
+<div class="algorithm-history" id="algorithm-history"></div>
+
+<!-- Top-left: title + connect/reset/zero row + mode pills + active K/C cards -->
+<div class="ovl ovl-tl">
+  <div class="ovl-section">
+    <h1 class="title">XENAKUBE</h1>
+    <div class="conn-row">
+      <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
+      <div class="btn-row">
+        <button id="connectBtn">Connect</button>
+        <button id="resetBtnVisible" class="ctrl-btn" title="Re-sync cube (tell it 'you are solved') + reset S4 engine state. Use after physically solving.">Reset</button>
+        <button id="zeroBtn" class="ctrl-btn" title="Capture rest pose for engine + visual zero">Zero</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="mode-row">
+    <span class="mode-badge palette" id="mode-palette">default</span>
+    <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
+    <span class="mode-badge regime-contemplative" id="mode-regime">CONTEMPLATIVE</span>
+    <span class="mode-badge solved dim" id="mode-solved">SOLVED</span>
+    <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
+  </div>
+
+  <!-- Active K + C cards (only the active pair render; legacy 8-grids hidden). -->
+  <div class="active-cards">
+    <div class="vertex-grid" id="vertex-grid"></div>
+    <div class="complex-grid" id="complex-grid"></div>
+  </div>
+</div>
+
+<!-- Bottom-left: STATE panel + permutation. Expression display rows are
+     hidden in the redesign (DOM kept for legacy JS write-throughs). -->
+<div class="ovl ovl-bl">
+  <div class="state-rows">
+    <div class="panel-title">State</div>
+    <div class="state-row">
+      <span class="state-label">active voice</span>
+      <span class="state-val accent" id="s-active-vertex">K1</span>
+    </div>
+    <div class="state-row" title="Phase A1 face identity — last quarter-turn's gesture type. Half-turns produce no face.">
+      <span class="state-label">face</span>
+      <span class="state-val accent2" id="s-face">—</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">S4 element</span>
+      <span class="state-val accent" id="s-k-group">0</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">path</span>
+      <span class="state-val clickable" id="s-path" title="click to toggle V1 / V2">V1</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">step</span>
+      <span class="state-val" id="s-step">0</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">snap</span>
+      <span class="state-val" id="s-snap">--</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">complex phase</span>
+      <span class="state-val gold" id="s-cycle">alpha</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">orbit</span>
+      <span class="state-val" id="s-tetra">even</span>
+    </div>
+    <div class="state-row">
+      <span class="state-label">scramble</span>
+      <div class="scramble-wrap" style="margin-left:0">
+        <div class="scramble-bar-outer">
+          <div class="scramble-bar-inner" id="scramble-bar"></div>
+        </div>
+        <span class="scramble-val" id="scramble-val">0.0</span>
+      </div>
+    </div>
+    <div class="state-row perm-row">
+      <span class="state-label">permutation</span>
+      <div class="perm-display" id="s-perm"></div>
+    </div>
+  </div>
+
+  <!-- Expression panel — hidden in the redesign. Kept as DOM nodes so the
+       JS that writes #expr-tilt / #expr-spin / #expr-dev / #expr-scramble
+       and the bars don't NPE during gyro updates. -->
+  <div class="expression-panel" aria-hidden="true">
+    <div class="expr-grid">
+      <div class="expr-item">
+        <div class="expr-value" id="expr-tilt">0.50</div>
+        <div class="expr-bar-wrap"><div class="expr-bar" id="expr-tilt-bar"></div></div>
+      </div>
+      <div class="expr-item">
+        <div class="expr-value" id="expr-spin">0.00</div>
+        <div class="expr-bar-wrap"><div class="expr-bar" id="expr-spin-bar"></div></div>
+      </div>
+      <div class="expr-item">
+        <div class="expr-value" id="expr-dev">0.00</div>
+        <div class="expr-bar-wrap"><div class="expr-bar" id="expr-dev-bar"></div></div>
+      </div>
+      <div class="expr-item">
+        <div class="expr-value" id="expr-scramble">0.00</div>
+        <div class="expr-bar-wrap"><div class="expr-bar" id="expr-scramble-bar"></div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Top-right: cube-algorithm buffer + algorithm notification (compact, right-aligned;
+     anchored just left of the sieve strip so it never collides with it). -->
+<div class="ovl ovl-tr">
+  <div class="algorithm-row">
+    <div class="algorithm-buffer" id="algorithm-buffer"></div>
+    <div class="algorithm-notification" id="algorithm-notification"></div>
+    <div class="algorithm-partials" id="algorithm-partials" style="display:none"></div>
+  </div>
+</div>
+
+<!-- Right edge: vertical sieve strip. 49 cells (C2..C6) stacked
+     column-reverse so cell index 0 sits at the bottom. Each cell hosts an
+     inline pitch label that's only filled in for octave-C cells. The sieve
+     strip's vertical extent is exactly the rolling-score's pitch-axis
+     range, so a note of pitch P emerges from cell (P − 36). -->
+<div class="ovl ovl-sieve-right">
+  <div class="sieve-strip" id="sieve-strip"></div>
+</div>
+
+<!-- Bottom-right cluster: rotation gizmo + cam/live/ghost/rotate toggles +
+     smooth/ghost/score sliders. Transparent panel sits OVER the sieve so
+     the bins remain visible (and tickable) through it. Slider track + value
+     colors = --slider-color (gold) for legibility against bright cyan
+     active sieve cells. -->
+<div class="ovl ovl-br">
+  <div class="cube-rotate-ctrl" id="rotate-ctrl">
+    <span class="cr-label">rotate</span>
+    <button class="cr-btn active" data-target="camera">cam</button>
+    <button class="cr-btn" data-target="live">live</button>
+    <button class="cr-btn" data-target="ghost">ghost</button>
+    <button class="cr-reset" title="reset selected view">&#x21ba;</button>
+  </div>
+  <div class="gizmo-wrap" id="gizmo-wrap"></div>
+  <div class="br-slider-row">
+    <label>smooth</label>
+    <input type="range" id="gyroSmoothing" min="0" max="1" step="0.05" value="0.50">
+    <span class="slider-val" id="gyroSmoothVal">0.50</span>
+  </div>
+  <div class="br-slider-row">
+    <label>ghost</label>
+    <input type="range" id="ghostSize" min="0.2" max="2.5" step="0.05" value="1.00">
+    <span class="slider-val" id="ghostSizeVal">1.00</span>
+  </div>
+  <div class="br-slider-row">
+    <label>score</label>
+    <input type="range" id="scoreSpeed" min="60" max="900" step="30" value="360">
+    <span class="slider-val" id="scoreSpeedVal">360</span>
+  </div>
+</div>
+
+<!-- Hidden elements kept for JS compatibility -->
+<div class="ovl-legacy">
+  <select id="diagram-select"><option value="">direct (free)</option></select>
+  <select id="path-select"><option value="V1">V1</option><option value="V2">V2</option></select>
+  <select id="cmode-select"><option value="algorithmic">algorithmic</option><option value="gyro">gyro snap</option></select>
+  <button id="resetBtn">Reset</button>
+  <div id="seq-vertex-bar"></div>
+  <div id="move-log"><div id="waiting-msg"></div></div>
+</div>
+
+<script type="importmap">
+{
+  "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+  }
+}
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { connectGanCube } from 'https://cdn.jsdelivr.net/npm/gan-web-bluetooth@latest/+esm';
+// Phase 2.1 — shared dashboard constants extracted to ./js/constants.js.
+// Mutable state (slider-driven scroll speed, dynamically-measured
+// sieve-strip width) stays inline below; everything else lives in the
+// module so future Phase 2 modules import the same source of truth.
+import {
+  ROLL_MIN_MIDI, ROLL_MAX_MIDI, ROLL_PITCH_RANGE,
+  ROLL_TOP_INSET_PX, ROLL_BOTTOM_INSET_PX,
+  ROLL_BRUSH_SCALE,
+  PENDING_MAX_AGE_MS, PIZZ_FADE_MIN_MS, PIZZ_FADE_MAX_MS,
+  GLISS_GAP_MS, GLISS_COMPLEXES,
+  PORTAMENTO_MS_PER_SEMITONE, GLISS_PORTAMENTO_MS_PER_SEMITONE,
+  COMPLEX_COLOR,
+} from './js/constants.js';
+// Phase 2.3 — WebSocket transport extracted to ./js/transport.js.
+// Aliased to short names since dashboard.html still has many callsites
+// (BLE move forwarding, mode toggles, diagram selection, panic, etc.)
+// that pre-date the modular split.
+import {
+  connect as transportConnect,
+  send    as transportSend,
+  on      as transportOn,
+} from './js/transport.js';
+// Phase 2.4 — sieve strip module. Cell construction, the Phase 1.1
+// `assertSieveLayout` invariant, the per-cell emanation-glow envelope,
+// active-sieve highlighting, and read-only cell-rect access for the
+// rolling-score (Phase 1.2) + triangle (2.7) cross-module reads.
+// Aliased to the original inline names to keep callsites unchanged.
+import {
+  noteOn        as startGlow,
+  noteOff       as endGlow,
+  panic         as clearAllGlows,
+  setActive     as setActiveSieve,
+  getCellRect   as getSieveCellRect,
+  SIEVE_RANGE,
+  BLACK_KEYS,
+} from './js/sieve.js';
+
+// ============================================================
+// Constants
+// ============================================================
+
+const COMPLEX_SHORT = {
+  1: 'pizz scatter',
+  2: 'bowed sweep',
+  3: 'bowed sustain',
+  4: 'harm+legno',
+  5: 'wild gliss',
+  6: 'ord. gliss',
+  7: 'tasto sust.',
+  8: 'ponticello',
+};
+
+const COMPLEX_ABBR = {
+  1: 'pizz', 2: 'bow', 3: 'sust', 4: 'harm',
+  5: 'glsW', 6: 'glsM', 7: 'glsS', 8: 'pont'
+};
+
+// Ghost-cube dot palette. Cool-spectrum hue sweep from cyan → violet → pink
+// so each C-identity has a distinct dot color while staying in the ghost's
+// "cool landmark" aesthetic. Ghost wireframe stays 0x00ccff (edges are
+// structure, dots are identity). Paired dim colours for the abbreviation
+// line on labels are ~60% luminance of the main hue.
+const GHOST_VERT_COLORS = [
+  0x00ccff, // C1 cyan (reference)
+  0x00ffdd, // C2 teal
+  0x55bbff, // C3 sky blue
+  0x8899ff, // C4 periwinkle
+  0xbb88ff, // C5 lavender
+  0xdd77ff, // C6 violet
+  0xff66ee, // C7 orchid
+  0xff5599, // C8 hot pink
+];
+const GHOST_VERT_COLORS_HEX = [
+  '#00ccff', '#00ffdd', '#55bbff', '#8899ff',
+  '#bb88ff', '#dd77ff', '#ff66ee', '#ff5599',
+];
+const GHOST_VERT_COLORS_DIM = [
+  '#0099cc', '#00ccaa', '#4488cc', '#6677cc',
+  '#8866cc', '#aa55cc', '#cc5599', '#cc4477',
+];
+
+const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.75, 'fff': 0.92 };
+
+// Phase A1 — mirror of FACE_SIGNATURES (envelope/articulation/motion +
+// registerBias for notation). Source of truth lives in src/face-gesture.ts;
+// this is for HUD + tier-1 notation. Half-turns (L2/R2/...) and non-face
+// moves return null.
+const FACE_SIG = {
+  'U':  { envelope: 'pluck', articulation: 'attack',    motion: 'up',        registerBias:  0.8 },
+  "U'": { envelope: 'fade',  articulation: 'release',   motion: 'down',      registerBias:  0.8 },
+  'D':  { envelope: 'stab',  articulation: 'attack',    motion: 'down',      registerBias: -0.8 },
+  "D'": { envelope: 'drone', articulation: 'sustained', motion: 'static',    registerBias: -0.8 },
+  'L':  { envelope: 'swell', articulation: 'sustained', motion: 'up',        registerBias:  0.0 },
+  "L'": { envelope: 'fade',  articulation: 'release',   motion: 'down',      registerBias:  0.0 },
+  'R':  { envelope: 'stab',  articulation: 'attack',    motion: 'static',    registerBias:  0.0 },
+  "R'": { envelope: 'burst', articulation: 'iterative', motion: 'oscillate', registerBias:  0.0 },
+  'F':  { envelope: 'swell', articulation: 'sustained', motion: 'up',        registerBias:  0.3 },
+  "F'": { envelope: 'swell', articulation: 'sustained', motion: 'down',      registerBias:  0.3 },
+  'B':  { envelope: 'pluck', articulation: 'attack',    motion: 'static',    registerBias: -0.3 },
+  "B'": { envelope: 'drone', articulation: 'sustained', motion: 'oscillate', registerBias: -0.3 },
+};
+
+// NOTE_NAMES + semitoneName moved to ./js/sieve.js (Phase 2.4) — they
+// were only used for octave-cell labels at construction time.
+
+// Cube vertex positions (matching group.ts labeling)
+const CUBE_VERTS = [
+  new THREE.Vector3( 1,  1,  1),  // 0 FTR
+  new THREE.Vector3(-1,  1,  1),  // 1 FTL
+  new THREE.Vector3(-1,  1, -1),  // 2 BTL
+  new THREE.Vector3( 1,  1, -1),  // 3 BTR
+  new THREE.Vector3( 1, -1,  1),  // 4 FBR
+  new THREE.Vector3(-1, -1,  1),  // 5 FBL
+  new THREE.Vector3(-1, -1, -1),  // 6 BBL
+  new THREE.Vector3( 1, -1, -1),  // 7 BBR
+];
+
+const CUBE_EDGES = [
+  [0,1],[1,2],[2,3],[3,0],
+  [4,5],[5,6],[6,7],[7,4],
+  [0,4],[1,5],[2,6],[3,7],
+];
+
+const TETRA_A = [0, 2, 5, 7];
+const TETRA_B = [1, 3, 4, 6];
+
+// ============================================================
+// Three.js Cube Scene
+// ============================================================
+
+const canvas = document.getElementById('cube-canvas');
+const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
+renderer.setPixelRatio(window.devicePixelRatio);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
+camera.position.set(4, 3, 4);
+camera.lookAt(0, 0, 0);
+
+// On cube connect, orbit the camera by this azimuth (around world Y) so the
+// on-screen cube matches the performer's physical perspective. Empirically
+// -135° = the user's "drag left 135°" gesture. Flip sign if the world Y
+// convention in your Three.js build rotates the other way.
+const CUBE_VIEW_AZIMUTH_RAD = -135 * Math.PI / 180;
+const _pristineCameraPos = camera.position.clone();
+let _cubeViewApplied = false;
+function applyCubeConnectView() {
+  if (_cubeViewApplied) return;
+  const q = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), CUBE_VIEW_AZIMUTH_RAD);
+  const offset = camera.position.clone().sub(controls.target);
+  offset.applyQuaternion(q);
+  camera.position.copy(controls.target).add(offset);
+  camera.lookAt(controls.target);
+  controls.update();
+  _cubeViewApplied = true;
+  // Adopt the first BLE quaternion as the zero reference, so the
+  // camera angle is a pure viewing preference — independent of how
+  // the cube happens to be held at the moment of connect.
+  autoZeroPending = true;
+}
+function revertCubeConnectView() {
+  if (!_cubeViewApplied) return;
+  camera.position.copy(_pristineCameraPos);
+  camera.lookAt(controls.target);
+  controls.update();
+  _cubeViewApplied = false;
+}
+
+// Wireframe cube
+const edgeGeo = new THREE.BufferGeometry();
+const edgePositions = [];
+for (const [a, b] of CUBE_EDGES) {
+  edgePositions.push(CUBE_VERTS[a].x, CUBE_VERTS[a].y, CUBE_VERTS[a].z);
+  edgePositions.push(CUBE_VERTS[b].x, CUBE_VERTS[b].y, CUBE_VERTS[b].z);
+}
+edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
+const edgeMat = new THREE.LineBasicMaterial({ color: 0x333355 });
+const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
+scene.add(edgeLines);
+
+// Tetrahedra wireframes
+function makeTetraLines(indices, color) {
+  const geo = new THREE.BufferGeometry();
+  const pos = [];
+  for (let i = 0; i < indices.length; i++) {
+    for (let j = i + 1; j < indices.length; j++) {
+      const a = CUBE_VERTS[indices[i]], b = CUBE_VERTS[indices[j]];
+      pos.push(a.x, a.y, a.z, b.x, b.y, b.z);
+    }
+  }
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+  return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.3 }));
+}
+const tetraALines = makeTetraLines(TETRA_A, 0x00ff88);
+const tetraBLines = makeTetraLines(TETRA_B, 0xff6644);
+scene.add(tetraALines);
+scene.add(tetraBLines);
+
+// Vertex spheres + labels
+const vertexMeshes = [];
+const vertexLabels = [];
+
+// Active vertex glow ring
+const activeRingGeo = new THREE.RingGeometry(0.15, 0.22, 16);
+const activeRingMat = new THREE.MeshBasicMaterial({
+  color: 0x00ff88,
+  transparent: true,
+  opacity: 0.7,
+  side: THREE.DoubleSide,
+});
+const activeRing = new THREE.Mesh(activeRingGeo, activeRingMat);
+activeRing.visible = false;
+
+function makeLabel(text, color) {
+  const c = document.createElement('canvas');
+  c.width = 128; c.height = 80;
+  const ctx = c.getContext('2d');
+  ctx.font = 'bold 20px monospace';
+  ctx.fillStyle = color;
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(text, 64, 2);
+  const tex = new THREE.CanvasTexture(c);
+  const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+  const sprite = new THREE.Sprite(mat);
+  sprite.scale.set(1.0, 0.625, 1);
+  return { sprite, canvas: c, ctx, tex };
+}
+
+for (let i = 0; i < 8; i++) {
+  const isTetraA = TETRA_A.includes(i);
+  const geo = new THREE.SphereGeometry(0.06, 8, 8);
+  const mat = new THREE.MeshBasicMaterial({ color: isTetraA ? 0x00ff88 : 0xff6644 });
+  const mesh = new THREE.Mesh(geo, mat);
+  mesh.position.copy(CUBE_VERTS[i]);
+  scene.add(mesh);
+  vertexMeshes.push(mesh);
+
+  const label = makeLabel(`K${i + 1}`, isTetraA ? '#00ff88' : '#ff6644');
+  label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.55);
+  scene.add(label.sprite);
+  vertexLabels.push(label);
+}
+
+// Rotation group for gyro
+const cubeGroup = new THREE.Group();
+scene.add(cubeGroup);
+cubeGroup.add(edgeLines, tetraALines, tetraBLines, activeRing);
+vertexMeshes.forEach(m => cubeGroup.add(m));
+vertexLabels.forEach(l => cubeGroup.add(l.sprite));
+
+// Ghost cube — shows the S4 element the gyro is currently snapping to.
+// Faint cyan wireframe + 8 small markers, oriented at state.snapQuat.
+// When the live cube and ghost overlap → gyro is locked on a snap target.
+// When they diverge → drifting toward the next snap (deviation factor).
+const ghostGroup = new THREE.Group();
+ghostGroup.visible = false;
+scene.add(ghostGroup);
+
+const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.35 });
+const ghostEdges = new THREE.LineSegments(edgeGeo.clone(), ghostEdgeMat);
+ghostGroup.add(ghostEdges);
+
+// Ghost dots + labels are identity-bound: mesh/label k represents C_{k+1}.
+// Per-C color from GHOST_VERT_COLORS; each mesh gets its own cloned material
+// so updateSnapOverlay can modulate opacity per mesh without cross-talk.
+// Text on the label (`C{n}` + abbreviation) never changes — only the label's
+// position animates as the complex's slot shifts on each turn.
+const ghostVertGeo = new THREE.SphereGeometry(0.05, 6, 6);
+const ghostVertMeshes = [];
+const ghostLabels = [];
+for (let i = 0; i < 8; i++) {
+  const mat = new THREE.MeshBasicMaterial({
+    color: GHOST_VERT_COLORS[i], transparent: true, opacity: 0.55,
+  });
+  const m = new THREE.Mesh(ghostVertGeo.clone(), mat);
+  m.position.copy(CUBE_VERTS[i]);
+  ghostGroup.add(m);
+  ghostVertMeshes.push(m);
+
+  // Two-line identity label: C# on top, playing-mode abbreviation below.
+  // Bypasses makeLabel's single-line default by overwriting the canvas.
+  const label = makeLabel(`C${i + 1}`, GHOST_VERT_COLORS_HEX[i]);
+  const ctx = label.ctx;
+  ctx.clearRect(0, 0, 128, 80);
+  ctx.font = 'bold 16px monospace';
+  ctx.fillStyle = GHOST_VERT_COLORS_HEX[i];
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'top';
+  ctx.fillText(`C${i + 1}`, 64, 2);
+  ctx.font = '12px monospace';
+  ctx.fillStyle = GHOST_VERT_COLORS_DIM[i];
+  ctx.fillText(COMPLEX_ABBR[i + 1] || '', 64, 22);
+  label.tex.needsUpdate = true;
+  label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.45);
+  label.sprite.scale.set(0.7, 0.44, 1);
+  ghostGroup.add(label.sprite);
+  ghostLabels.push(label);
+}
+
+// K↔C connection line. Active K-dot (live cube, scaled-up sphere) connected
+// to its geometrically nearest C-dot (ghost cube) with a thin white line —
+// one visible "performance pair" across the two cubes. Added directly to
+// scene (not cubeGroup / ghostGroup) so the vertices live in world space;
+// animate loop computes both endpoints via getWorldPosition. depthTest off
+// + renderOrder 1 so the line draws over both cubes instead of being
+// clipped by intervening geometry. At deviation≈0 the nearest-C is the
+// same-slot C and the line collapses to zero length (invisible naturally).
+const kcLineGeo = new THREE.BufferGeometry();
+const kcLinePositions = new Float32Array(6);
+kcLineGeo.setAttribute('position', new THREE.BufferAttribute(kcLinePositions, 3));
+const kcLineMat = new THREE.LineBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.7,
+  depthTest: false,
+});
+const kcLine = new THREE.Line(kcLineGeo, kcLineMat);
+kcLine.renderOrder = 1;
+kcLine.visible = false;
+kcLine.frustumCulled = false;
+scene.add(kcLine);
+const _kcKWorld = new THREE.Vector3();
+const _kcCWorld = new THREE.Vector3();
+const _kcTmpWorld = new THREE.Vector3();
+
+// OrbitControls for camera mode
+const controls = new OrbitControls(camera, canvas);
+controls.enableDamping = true;
+controls.dampingFactor = 0.1;
+controls.enablePan = false;
+controls.minDistance = 3;
+controls.maxDistance = 24;
+
+// Per-cube view offsets (premultiplied onto the live/ghost rotation).
+const liveViewOffset = new THREE.Quaternion(0, 0, 0, 1);
+const ghostViewOffset = new THREE.Quaternion(0, 0, 0, 1);
+let rotateTarget = 'camera'; // 'camera' | 'live' | 'ghost'
+
+// ---- Rotation Gizmo (mini-canvas, mounted inside the bottom-right cluster
+// `.gizmo-wrap` so it sizes proportionally with the cluster instead of being
+// pinned to fixed pixel coordinates). ----
+const gizmoCanvas = document.createElement('canvas');
+gizmoCanvas.width = 200; gizmoCanvas.height = 200;
+gizmoCanvas.style.cssText = 'touch-action:none;border-radius:50%;cursor:grab;';
+const gizmoMount = document.getElementById('gizmo-wrap') || document.body;
+gizmoMount.appendChild(gizmoCanvas);
+
+const gizmoRenderer = new THREE.WebGLRenderer({ canvas: gizmoCanvas, antialias: true, alpha: true });
+gizmoRenderer.setPixelRatio(window.devicePixelRatio);
+
+// Resize the gizmo's drawing buffer to match the cluster-driven CSS size so
+// the rendered gizmo stays sharp on layout changes (window resize, portrait
+// vs landscape). Without this the canvas internal resolution stays at the
+// initial 200×200 and stretches blurrily on large viewports.
+function resizeGizmo() {
+  const r = gizmoCanvas.getBoundingClientRect();
+  if (r.width > 0 && r.height > 0) {
+    gizmoRenderer.setSize(r.width, r.height, false);
+  }
+}
+window.addEventListener('resize', resizeGizmo);
+requestAnimationFrame(resizeGizmo);
+const gizmoScene = new THREE.Scene();
+const gizmoCamera = new THREE.OrthographicCamera(-2, 2, 2, -2, 0.1, 100);
+gizmoCamera.position.set(3, 2.5, 3);
+gizmoCamera.lookAt(0, 0, 0);
+
+const GIZMO_COLORS = { x: 0xff4444, y: 0x44ff44, z: 0x4488ff };
+const GIZMO_HIGHLIGHT = { x: 0xff8888, y: 0x88ff88, z: 0x88bbff };
+const gizmoAxes = {
+  x: new THREE.Vector3(1, 0, 0),
+  y: new THREE.Vector3(0, 1, 0),
+  z: new THREE.Vector3(0, 0, 1),
+};
+const gizmoRotations = {
+  x: new THREE.Euler(0, Math.PI / 2, 0),
+  y: new THREE.Euler(Math.PI / 2, 0, 0),
+  z: new THREE.Euler(0, 0, 0),
+};
+
+const gizmoRings = {};
+const gizmoHitRings = {};
+
+for (const axis of ['x', 'y', 'z']) {
+  const ring = new THREE.Mesh(
+    new THREE.TorusGeometry(1.2, 0.04, 12, 64),
+    new THREE.MeshBasicMaterial({ color: GIZMO_COLORS[axis], transparent: true, opacity: 0.85, depthTest: false })
+  );
+  ring.rotation.copy(gizmoRotations[axis]);
+  ring.renderOrder = 999;
+  ring.userData.axis = axis;
+  gizmoScene.add(ring);
+  gizmoRings[axis] = ring;
+
+  const hitRing = new THREE.Mesh(
+    new THREE.TorusGeometry(1.2, 0.18, 8, 48),
+    new THREE.MeshBasicMaterial({ visible: false })
+  );
+  hitRing.rotation.copy(gizmoRotations[axis]);
+  hitRing.userData.axis = axis;
+  gizmoScene.add(hitRing);
+  gizmoHitRings[axis] = hitRing;
+}
+
+// Axis nubs (small spheres at axis tips with labels)
+for (const [axis, color] of Object.entries(GIZMO_COLORS)) {
+  const pos = gizmoAxes[axis].clone().multiplyScalar(1.45);
+  const dot = new THREE.Mesh(
+    new THREE.SphereGeometry(0.09, 8, 8),
+    new THREE.MeshBasicMaterial({ color, depthTest: false })
+  );
+  dot.position.copy(pos);
+  dot.renderOrder = 1000;
+  gizmoScene.add(dot);
+
+  // Axis letter sprite
+  const c = document.createElement('canvas');
+  c.width = 32; c.height = 32;
+  const ctx = c.getContext('2d');
+  ctx.font = 'bold 22px monospace';
+  ctx.fillStyle = '#' + color.toString(16).padStart(6, '0');
+  ctx.textAlign = 'center';
+  ctx.textBaseline = 'middle';
+  ctx.fillText(axis.toUpperCase(), 16, 16);
+  const sprite = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(c), depthTest: false }));
+  sprite.position.copy(pos).addScaledVector(gizmoAxes[axis], 0.25);
+  sprite.scale.set(0.35, 0.35, 1);
+  sprite.renderOrder = 1001;
+  gizmoScene.add(sprite);
+}
+
+const gizmoRaycaster = new THREE.Raycaster();
+const gizmoPointer = new THREE.Vector2();
+let gizmoDragging = false;
+let gizmoActiveAxis = null;
+let gizmoDragAngleStart = 0;
+
+function getGizmoAngle(clientX, clientY) {
+  const rect = gizmoCanvas.getBoundingClientRect();
+  const cx = rect.left + rect.width / 2;
+  const cy = rect.top + rect.height / 2;
+  return Math.atan2(clientY - cy, clientX - cx);
+}
+
+function hitTestGizmo(clientX, clientY) {
+  const rect = gizmoCanvas.getBoundingClientRect();
+  gizmoPointer.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+  gizmoPointer.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+  gizmoRaycaster.setFromCamera(gizmoPointer, gizmoCamera);
+  const hits = gizmoRaycaster.intersectObjects(Object.values(gizmoHitRings));
+  return hits.length > 0 ? hits[0].object.userData.axis : null;
+}
+
+gizmoCanvas.addEventListener('pointerdown', (e) => {
+  if (rotateTarget === 'camera') return;
+  const axis = hitTestGizmo(e.clientX, e.clientY);
+  if (!axis) return;
+  e.stopPropagation();
+  gizmoDragging = true;
+  gizmoActiveAxis = axis;
+  gizmoDragAngleStart = getGizmoAngle(e.clientX, e.clientY);
+  gizmoCanvas.setPointerCapture(e.pointerId);
+  for (const a of ['x', 'y', 'z']) {
+    gizmoRings[a].material.color.setHex(a === axis ? GIZMO_HIGHLIGHT[a] : GIZMO_COLORS[a]);
+    gizmoRings[a].material.opacity = a === axis ? 1.0 : 0.2;
+  }
+});
+
+window.addEventListener('pointermove', (e) => {
+  if (!gizmoDragging) {
+    if (rotateTarget !== 'camera') {
+      const rect = gizmoCanvas.getBoundingClientRect();
+      const inside = e.clientX >= rect.left && e.clientX <= rect.right &&
+                     e.clientY >= rect.top && e.clientY <= rect.bottom;
+      if (inside) {
+        const axis = hitTestGizmo(e.clientX, e.clientY);
+        gizmoCanvas.style.cursor = axis ? 'grab' : 'default';
+        for (const a of ['x', 'y', 'z']) {
+          gizmoRings[a].material.opacity = (a === axis) ? 1.0 : 0.85;
+        }
+      }
+    }
+    return;
+  }
+  const angle = getGizmoAngle(e.clientX, e.clientY);
+  let delta = angle - gizmoDragAngleStart;
+  // Wrap delta to avoid jumps crossing ±PI
+  if (delta > Math.PI) delta -= 2 * Math.PI;
+  if (delta < -Math.PI) delta += 2 * Math.PI;
+
+  // Flip if gizmo camera looks at the negative side of the axis
+  const camDir = gizmoCamera.position.clone().normalize();
+  if (camDir.dot(gizmoAxes[gizmoActiveAxis]) < 0) delta = -delta;
+
+  gizmoDragAngleStart = angle;
+  const offset = (rotateTarget === 'live') ? liveViewOffset : ghostViewOffset;
+  offset.premultiply(new THREE.Quaternion().setFromAxisAngle(gizmoAxes[gizmoActiveAxis], -delta));
+});
+
+const endGizmoDrag = (e) => {
+  if (!gizmoDragging) return;
+  gizmoDragging = false;
+  gizmoActiveAxis = null;
+  gizmoCanvas.style.cursor = 'grab';
+  if (gizmoCanvas.hasPointerCapture(e.pointerId)) gizmoCanvas.releasePointerCapture(e.pointerId);
+  for (const a of ['x', 'y', 'z']) {
+    gizmoRings[a].material.color.setHex(GIZMO_COLORS[a]);
+    gizmoRings[a].material.opacity = 0.85;
+  }
+};
+window.addEventListener('pointerup', endGizmoDrag);
+window.addEventListener('pointercancel', endGizmoDrag);
+
+// ---- Mode toggle ----
+const rotateCtrl = document.getElementById('rotate-ctrl');
+rotateCtrl.querySelectorAll('.cr-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    rotateTarget = btn.dataset.target;
+    rotateCtrl.querySelectorAll('.cr-btn').forEach(b => b.classList.toggle('active', b === btn));
+    controls.enabled = (rotateTarget === 'camera');
+    gizmoCanvas.style.opacity = (rotateTarget === 'camera') ? '0.3' : '1';
+    gizmoCanvas.style.pointerEvents = (rotateTarget === 'camera') ? 'none' : 'auto';
+  });
+});
+rotateCtrl.querySelector('.cr-reset').addEventListener('click', () => {
+  if (rotateTarget === 'live') liveViewOffset.identity();
+  else if (rotateTarget === 'ghost') ghostViewOffset.identity();
+  else controls.reset();
+});
+// Initial state: camera mode, gizmo dimmed
+gizmoCanvas.style.opacity = '0.3';
+gizmoCanvas.style.pointerEvents = 'none';
+
+let idleAngle = 0;
+let currentGyro = new THREE.Quaternion(0, 0, 0, 1);
+let currentSnap = new THREE.Quaternion(0, 0, 0, 1);
+let hasGyro = false;
+let hasSnap = false;
+let currentActiveVertex = 0;
+
+// Ghost snap animation. When the S4 snap element changes, we SLERP the
+// displayed ghost from its current pose to the new target over
+// GHOST_SNAP_MS. Interrupt-safe: if a new snap lands mid-flight, we
+// recapture the currently-displayed `ghostAnimated` as the new `ghostFrom`
+// so the ghost keeps flowing toward the latest target without jumping.
+// `ghostTarget` is always the latest authoritative snap, so rapid turns
+// can never lose track — worst case the ghost chases behind and catches
+// up once turns stop.
+const ghostFrom = new THREE.Quaternion(0, 0, 0, 1);
+const ghostTarget = new THREE.Quaternion(0, 0, 0, 1);
+const ghostAnimated = new THREE.Quaternion(0, 0, 0, 1);
+let ghostAnimStart = 0;
+let ghostAnimReady = false;
+let lastSnapElement = -1;
+const GHOST_SNAP_MS = 100;
+
+// Active-vertex step animation. Same interrupt-safe pattern as the ghost
+// snap: on active-vertex change, capture the currently displayed sphere
+// scales and ring position as the animation start, then LERP them toward
+// the new target over ACTIVE_STEP_MS. Rapid stepping just keeps rewriting
+// the start pose from whatever the animate loop last painted.
+const ACTIVE_STEP_MS = 100;
+const sphereScaleFrom = new Float32Array(8).fill(1.0);
+const activeRingFrom = new THREE.Vector3();
+const activeRingAnimated = new THREE.Vector3();
+let activeAnimStart = 0;
+let activeAnimReady = false;
+let currentActiveK = 0;
+
+// Vertex-position animation. `vertexMeshes[k]` and `vertexLabels[k]` are
+// identity-bound (mesh k represents K_{k+1}); each S4 permutation moves the
+// identity to a new slot, and we LERP the dot + label from old slot to new
+// slot over VERTEX_STEP_MS instead of teleporting the label text in place.
+// LABEL_OFFSET_FACTOR places the sprite 0.55 along the outward normal of a
+// unit cube corner — scalar because |CUBE_VERTS| = sqrt(3) is constant, so
+// label.position = sphere.position * factor throughout the animation.
+// Interrupt-safe: a new perm mid-flight captures the currently painted
+// positions as the new `from`.
+const VERTEX_STEP_MS = 100;
+const LABEL_OFFSET_FACTOR = 1 + 0.55 / Math.sqrt(3);
+const vertexPosFrom     = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const vertexPosTarget   = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const vertexPosAnimated = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+let vertexAnimStart = 0;
+let vertexAnimReady = false;
+let lastPermKey = '';
+
+// Ghost-vertex position animation. Mirrors the K-vertex pattern but for the
+// C-cube: `ghostVertMeshes[k]` / `ghostLabels[k]` represent C_{k+1}, and
+// each turn moves that C-type to a new slot per `state.cAssignments`. On a
+// pure S4 turn the dots slide coherently; on an α↔β↔γ phase boundary the
+// baseMapping changes so multiple dots may reshuffle simultaneously — the
+// LERP makes that reshuffle legible instead of instant. Offset factor uses
+// the ghost label's 0.45 distance (vs K's 0.55).
+const GHOST_VERT_STEP_MS = 100;
+const GHOST_LABEL_OFFSET_FACTOR = 1 + 0.45 / Math.sqrt(3);
+const ghostVertPosFrom     = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const ghostVertPosTarget   = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const ghostVertPosAnimated = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+let ghostVertAnimStart = 0;
+let ghostVertAnimReady = false;
+let lastCAssignKey = '';
+
+// Gyro zero calibration
+let gyroZeroInv = new THREE.Quaternion(0, 0, 0, 1);
+
+// Decouples on-screen orientation from however the cube is physically
+// held at connect time. Set by applyCubeConnectView; consumed by the
+// gyro_tick handler on the first sample, which adopts it as the zero.
+let autoZeroPending = false;
+
+document.getElementById('zeroBtn').addEventListener('click', () => {
+  gyroZeroInv.copy(currentGyro).invert();
+  // Mirror the zero over to the relay so the engine's snap cells re-center
+  // on the user's rest pose — without this, snap thresholds stay anchored
+  // to the raw sensor frame and feel asymmetric (see relay.js's
+  // `engineGyroZeroInv` comment).
+  wsSend({ type: 'zero_gyro' });
+});
+
+// Auto-fit ensures the cube + K/C labels stay visible in any viewport
+// shape. In portrait the canvas is taller than wide, so the horizontal
+// FOV (= 2·atan(tan(fovy/2)·aspect)) shrinks; without auto-fit the cube
+// (radius √3 ≈ 1.73 from origin) overflows the sides on a 1080-wide
+// portrait. We push the camera back conservatively — only outward, never
+// closer — so the user can still wheel-zoom in if they want.
+const FIT_RADIUS = 1.95;     // cube √3 + small buffer for labels
+function fitCameraToAspect(aspect) {
+  const halfFov = camera.fov * Math.PI / 360;
+  const tanHalf = Math.tan(halfFov);
+  const distV = FIT_RADIUS / tanHalf;
+  const distH = FIT_RADIUS / (tanHalf * aspect);
+  const minDist = Math.max(distV, distH);
+  const cur = camera.position.length();
+  if (cur < minDist - 0.01) {
+    camera.position.normalize().multiplyScalar(minDist);
+    if (typeof controls !== 'undefined' && controls) controls.update();
+  }
+}
+
+function resizeCube() {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width <= 0 || rect.height <= 0) return;   // layout not settled yet
+  renderer.setSize(rect.width, rect.height, false);
+  const aspect = rect.width / rect.height;
+  camera.aspect = aspect;
+  camera.updateProjectionMatrix();
+  fitCameraToAspect(aspect);
+}
+resizeCube();
+// Re-fire on the next paint in case GBCR returned 0 on the synchronous
+// call (replaced-element layout sometimes settles after the first frame).
+requestAnimationFrame(resizeCube);
+window.addEventListener('resize', resizeCube);
+
+const calibratedGyro = new THREE.Quaternion();
+
+// Pulse animation for active ring
+let ringPulse = 0;
+
+function animateCube() {
+  requestAnimationFrame(animateCube);
+  controls.update();
+  if (hasGyro) {
+    calibratedGyro.copy(gyroZeroInv).multiply(currentGyro);
+  } else {
+    idleAngle += 0.003;
+    calibratedGyro.setFromEuler(new THREE.Euler(0.3, idleAngle, 0.15));
+  }
+  cubeGroup.quaternion.copy(liveViewOffset).multiply(calibratedGyro);
+
+  // Ghost cube — stays in world frame (no gyroZeroInv) so Zero Gyro only
+  // recenters the live cube. The ghost remains a fixed S4-snap reference.
+  // SLERP from ghostFrom to ghostTarget over GHOST_SNAP_MS so the ghost
+  // glides between S4 elements instead of teleporting.
+  if (hasSnap) {
+    ghostGroup.visible = true;
+    const elapsed = performance.now() - ghostAnimStart;
+    const t = elapsed >= GHOST_SNAP_MS ? 1 : elapsed / GHOST_SNAP_MS;
+    ghostAnimated.copy(ghostFrom).slerp(ghostTarget, t);
+    ghostGroup.quaternion.copy(ghostViewOffset).multiply(ghostAnimated);
+  } else {
+    ghostGroup.visible = false;
+  }
+
+  // Active-vertex step animation — scales the active sphere up (2.5×) and
+  // all others down (1×), plus slides the glow ring to the active slot,
+  // over ACTIVE_STEP_MS. Sphere scaling is identity-bound (currentActiveK =
+  // perm[slot]); the ring stays slot-bound. See updateActiveVertexIn3D.
+  if (activeAnimReady) {
+    const elapsed = performance.now() - activeAnimStart;
+    const t = elapsed >= ACTIVE_STEP_MS ? 1 : elapsed / ACTIVE_STEP_MS;
+    for (let k = 0; k < 8; k++) {
+      const target = (k === currentActiveK) ? 2.5 : 1.0;
+      const s = sphereScaleFrom[k] + (target - sphereScaleFrom[k]) * t;
+      vertexMeshes[k].scale.setScalar(s);
+    }
+    activeRingAnimated.copy(activeRingFrom).lerp(CUBE_VERTS[currentActiveVertex], t);
+    activeRing.position.copy(activeRingAnimated);
+    activeRing.lookAt(camera.position);
+  }
+
+  // Vertex-position animation — each K-identity slides from its previous
+  // slot to its new slot on each turn. See updateState for perm-change
+  // capture. Label position follows the sphere via LABEL_OFFSET_FACTOR.
+  if (vertexAnimReady) {
+    const elapsed = performance.now() - vertexAnimStart;
+    const t = elapsed >= VERTEX_STEP_MS ? 1 : elapsed / VERTEX_STEP_MS;
+    for (let k = 0; k < 8; k++) {
+      vertexPosAnimated[k].copy(vertexPosFrom[k]).lerp(vertexPosTarget[k], t);
+      vertexMeshes[k].position.copy(vertexPosAnimated[k]);
+      vertexLabels[k].sprite.position.copy(vertexPosAnimated[k]).multiplyScalar(LABEL_OFFSET_FACTOR);
+    }
+  }
+
+  // Ghost-vertex position animation — each C-identity slides to its new
+  // slot per state.cAssignments. Runs in ghostGroup's local frame, so the
+  // dots compose naturally with the ghost's SLERP'd orientation.
+  if (ghostVertAnimReady) {
+    const elapsed = performance.now() - ghostVertAnimStart;
+    const t = elapsed >= GHOST_VERT_STEP_MS ? 1 : elapsed / GHOST_VERT_STEP_MS;
+    for (let k = 0; k < 8; k++) {
+      ghostVertPosAnimated[k].copy(ghostVertPosFrom[k]).lerp(ghostVertPosTarget[k], t);
+      ghostVertMeshes[k].position.copy(ghostVertPosAnimated[k]);
+      ghostLabels[k].sprite.position.copy(ghostVertPosAnimated[k]).multiplyScalar(GHOST_LABEL_OFFSET_FACTOR);
+    }
+  }
+
+  // Pulse active ring
+  ringPulse += 0.04;
+  if (activeRing.visible) {
+    activeRingMat.opacity = 0.4 + 0.3 * Math.sin(ringPulse);
+  }
+
+  // K↔C connection line. Compute world positions of active K-dot and each
+  // ghost C-dot, find the nearest, update the line's 2 vertices. Requires
+  // explicit updateMatrixWorld since rAF renders after this block — without
+  // it, getWorldPosition reads stale matrices from the previous frame.
+  if (hasGyro && hasSnap) {
+    cubeGroup.updateMatrixWorld(true);
+    ghostGroup.updateMatrixWorld(true);
+    vertexMeshes[currentActiveK].getWorldPosition(_kcKWorld);
+    let bestDist2 = Infinity;
+    for (let c = 0; c < 8; c++) {
+      ghostVertMeshes[c].getWorldPosition(_kcTmpWorld);
+      const d2 = _kcKWorld.distanceToSquared(_kcTmpWorld);
+      if (d2 < bestDist2) {
+        bestDist2 = d2;
+        _kcCWorld.copy(_kcTmpWorld);
+      }
+    }
+    kcLinePositions[0] = _kcKWorld.x;
+    kcLinePositions[1] = _kcKWorld.y;
+    kcLinePositions[2] = _kcKWorld.z;
+    kcLinePositions[3] = _kcCWorld.x;
+    kcLinePositions[4] = _kcCWorld.y;
+    kcLinePositions[5] = _kcCWorld.z;
+    kcLineGeo.attributes.position.needsUpdate = true;
+    kcLine.visible = true;
+  } else {
+    kcLine.visible = false;
+  }
+
+  renderer.render(scene, camera);
+  gizmoRenderer.render(gizmoScene, gizmoCamera);
+}
+animateCube();
+
+function updateActiveVertexIn3D(slot, activeK) {
+  if (!activeAnimReady) {
+    // First call — skip the animation so the active highlight doesn't
+    // sweep in from origin on connect.
+    for (let k = 0; k < 8; k++) {
+      const s = (k === activeK) ? 2.5 : 1.0;
+      sphereScaleFrom[k] = s;
+      vertexMeshes[k].scale.setScalar(s);
+    }
+    activeRingFrom.copy(CUBE_VERTS[slot]);
+    activeRingAnimated.copy(CUBE_VERTS[slot]);
+    activeAnimStart = performance.now() - ACTIVE_STEP_MS;
+    activeAnimReady = true;
+    activeRing.visible = true;
+    currentActiveVertex = slot;
+    currentActiveK = activeK;
+  } else if (slot !== currentActiveVertex || activeK !== currentActiveK) {
+    // Capture the actually-displayed scales and ring pos as the animation
+    // start, so interrupted animations flow smoothly into the new step.
+    for (let k = 0; k < 8; k++) {
+      sphereScaleFrom[k] = vertexMeshes[k].scale.x;
+    }
+    activeRingFrom.copy(activeRingAnimated);
+    activeAnimStart = performance.now();
+    currentActiveVertex = slot;
+    currentActiveK = activeK;
+  }
+  // Same slot+activeK → no-op; the animate loop keeps painting from the
+  // current `sphereScaleFrom` / `activeRingFrom` toward the (unchanged) target.
+}
+
+function updateVertexLabels(perm, vertices, complexTypes, activeIdx) {
+  // Labels are identity-bound: label k always reads "K{k+1}". Its D/G/U
+  // values come from the slot currently occupied by identity k — state.
+  // kVertices is slot-indexed (`kVertices[slot] = basevertices[perm[slot]]`),
+  // so looking up by `perm.indexOf(k)` yields identity k's own values.
+  const activeK = perm ? perm[activeIdx] : activeIdx;
+  for (let k = 0; k < 8; k++) {
+    const slot = perm ? perm.indexOf(k) : k;
+    const isTetraA = TETRA_A.includes(k);
+    const isActive = k === activeK;
+    const color = isActive ? '#ffffff' : (isTetraA ? '#00ff88' : '#ff6644');
+    const dimColor = isActive ? '#cccccc' : (isTetraA ? '#00cc66' : '#cc5533');
+    const label = vertexLabels[k];
+    const ctx = label.ctx;
+    const W = 128, H = 80;
+    ctx.clearRect(0, 0, W, H);
+
+    // No background pill — active vertex is indicated by the glow ring
+    // in the 3D scene and the active-card in the bottom-left overlay.
+
+    // Line 1: K# only. Complex labels live on the GHOST cube — the live
+    // cube is the K_i (parameter) domain, the ghost is the C_i (complex)
+    // domain. Previously both cubes rendered complex abbreviations, which
+    // (together with the engine's old lockstep advance) made it look like
+    // `pizz/bow/harm` were glued to K#s. Keep K# exclusive to the live cube.
+    ctx.font = 'bold 18px monospace';
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`K${k + 1}`, W / 2, 2);
+
+    // Line 2: intensity + density
+    if (vertices) {
+      const v = vertices[slot];
+      ctx.font = '14px monospace';
+      ctx.fillStyle = dimColor;
+      ctx.fillText(`${v.intensity} d${v.density.toFixed(1)}`, W / 2, 24);
+
+      // Line 3: duration
+      ctx.fillText(`${v.duration}s`, W / 2, 42);
+    }
+
+    label.tex.needsUpdate = true;
+  }
+}
+
+// Ghost labels are identity-bound and painted once at setup
+// (see the per-C-type `makeLabel` loop); the label text never changes.
+// Only the label position animates as the complex slides between slots,
+// and opacity is modulated by updateSnapOverlay from gyro deviation.
+
+function updateSnapOverlay(snapElement, deviation) {
+  const snapVal = document.getElementById('s-snap');
+  if (snapElement != null) {
+    if (snapVal) snapVal.textContent = `S4 #${snapElement}`;
+    // Ghost opacity: more opaque when locked, faint when drifting
+    const ghostOpacity = 0.15 + 0.55 * (1 - deviation);
+    ghostEdgeMat.opacity = ghostOpacity;
+    ghostVertMeshes.forEach(m => { m.material.opacity = ghostOpacity + 0.1; });
+    ghostLabels.forEach(l => { l.sprite.material.opacity = ghostOpacity + 0.2; });
+  }
+}
+
+// ============================================================
+// Build static DOM elements
+// ============================================================
+
+const vertexGrid = document.getElementById('vertex-grid');
+const vertexCards = [];
+for (let i = 0; i < 8; i++) {
+  const card = document.createElement('div');
+  card.className = 'vertex-card';
+  card.innerHTML = `
+    <div class="vertex-label">K${i + 1}</div>
+    <div class="vertex-param">D <span class="val" data-v="d">--</span></div>
+    <div class="vertex-param">G <span class="val" data-v="g">--</span></div>
+    <div class="vertex-param">U <span class="val" data-v="u">--</span>s</div>
+    <div class="intensity-bar"><div class="intensity-fill" data-v="bar"></div></div>
+  `;
+  vertexGrid.appendChild(card);
+  vertexCards.push(card);
+}
+
+const complexGrid = document.getElementById('complex-grid');
+const complexCards = [];
+for (let i = 0; i < 8; i++) {
+  const card = document.createElement('div');
+  card.className = 'complex-card';
+  card.innerHTML = `
+    <div class="complex-num">C${i + 1}</div>
+    <div class="complex-name">--</div>
+  `;
+  complexGrid.appendChild(card);
+  complexCards.push(card);
+}
+
+// Sequence vertex bar (shows all 8 positions, highlights active)
+const seqVertexBar = document.getElementById('seq-vertex-bar');
+const seqPips = [];
+for (let i = 0; i < 8; i++) {
+  const pip = document.createElement('div');
+  pip.className = 'seq-vertex-pip';
+  pip.innerHTML = `K${i + 1}<span class="pip-complex"></span>`;
+  seqVertexBar.appendChild(pip);
+  seqPips.push(pip);
+}
+
+// Sieve cells, BLACK_KEYS, SIEVE_RANGE, semitoneName, the Phase 1.1
+// assertSieveLayout invariant, and the per-cell glow envelope all moved
+// to ./js/sieve.js (Phase 2.4). Read-only cell-rect access exposed via
+// the imported `getSieveCellRect(pitch)` for Phase 1.2's
+// `assertPitchAxis` and (Phase 2.7) the white-line `sieveCellLeftEdgePos`.
+
+const permDisplay = document.getElementById('s-perm');
+const permSlots = [];
+for (let i = 0; i < 8; i++) {
+  const slot = document.createElement('div');
+  slot.className = 'perm-slot';
+  slot.textContent = i + 1;
+  permDisplay.appendChild(slot);
+  permSlots.push(slot);
+}
+
+// ============================================================
+// State Update
+// ============================================================
+
+let moveCount = 0;
+
+function updateState(state, move) {
+  const activeIdx = state.activeVertex ?? 0;
+  // currentActiveVertex is written by updateActiveVertexIn3D below — doing
+  // it here too would pre-equalize the idx check and defeat the animation.
+
+  document.getElementById('s-step').textContent = state.step;
+  document.getElementById('s-path').textContent = state.path;
+  // Mirror into the hidden legacy pathSelect so it stays coherent if ever unhidden.
+  // getElementById avoids a TDZ reference if updateState ever fires before
+  // the module-scope `const pathSelect` initializer.
+  const pathSel = document.getElementById('path-select');
+  if (pathSel && pathSel.value !== state.path) pathSel.value = state.path;
+
+  document.getElementById('s-k-group').textContent = state.kGroup;
+  document.getElementById('s-tetra').textContent = state.tetraIndex === 0 ? 'even' : 'odd';
+  document.getElementById('s-tetra').className = 'state-val ' + (state.tetraIndex === 0 ? 'accent' : 'warm');
+  document.getElementById('s-cycle').textContent = state.cyclicPhase;
+  const activeKIdx = state.kPermutation ? state.kPermutation[activeIdx] : activeIdx;
+  document.getElementById('s-active-vertex').textContent = `K${activeKIdx + 1}`;
+
+  // Phase A1 — face identity. Only refresh on a real turn (gyro_state passes
+  // move=null and would otherwise blank the display between turns). Half-turn
+  // moves still trigger a turn but produce no face signature → show "—".
+  if (move) {
+    const faceEl = document.getElementById('s-face');
+    if (faceEl) {
+      const sig = FACE_SIG[move];
+      if (sig) {
+        faceEl.textContent = `${move} · ${sig.envelope}`;
+        faceEl.title = `envelope: ${sig.envelope} · articulation: ${sig.articulation} · motion: ${sig.motion}`;
+        faceEl.className = 'state-val accent2';
+      } else {
+        faceEl.textContent = `${move} · —`;
+        faceEl.title = 'half-turn or non-face move — no face signature';
+        faceEl.className = 'state-val';
+      }
+    }
+  }
+
+  if (state.kPermutation) {
+    for (let i = 0; i < 8; i++) {
+      permSlots[i].textContent = state.kPermutation[i] + 1;
+      permSlots[i].className = 'perm-slot' + (i === activeIdx ? ' active' : '');
+    }
+  }
+
+  tetraALines.material.opacity = state.tetraIndex === 0 ? 0.6 : 0.15;
+  tetraBLines.material.opacity = state.tetraIndex === 1 ? 0.6 : 0.15;
+
+  if (state.kVertices) {
+    // state.kVertices[i] = basevertices[perm[i]] — already permuted. The card
+    // at screen-position i must therefore be labelled with the K-number of
+    // whichever vertex currently occupies that position, i.e. perm[i]+1. The
+    // old static `K${i+1}` label showed the slot position instead of the
+    // vertex identity, so e.g. K2's values could appear under a card labelled
+    // K3. Rename on every render.
+    for (let i = 0; i < 8; i++) {
+      const v = state.kVertices[i];
+      const card = vertexCards[i];
+      const kIdx = state.kPermutation ? state.kPermutation[i] : i;
+      card.querySelector('.vertex-label').textContent = `K${kIdx + 1}`;
+      card.querySelector('[data-v="d"]').textContent = v.density.toFixed(1);
+      card.querySelector('[data-v="g"]').textContent = v.intensity;
+      card.querySelector('[data-v="u"]').textContent = v.duration;
+      const pct = (INTENSITY_LEVELS[v.intensity] || 0.5) * 100;
+      card.querySelector('[data-v="bar"]').style.width = pct + '%';
+      card.className = 'vertex-card' + (i === activeIdx ? ' active' : ' inactive');
+    }
+  }
+
+  if (state.cAssignments) {
+    for (let i = 0; i < 8; i++) {
+      const ct = state.cAssignments[i];
+      const card = complexCards[i];
+      const isActive = i === activeIdx;
+      card.className = `complex-card ct-${ct}` + (isActive ? ' active' : ' inactive');
+      card.querySelector('.complex-num').textContent = `C${ct}`;
+      card.querySelector('.complex-name').textContent = COMPLEX_SHORT[ct] || '';
+    }
+
+    for (let i = 0; i < 8; i++) {
+      const ct = state.cAssignments[i];
+      const kIdx = state.kPermutation ? state.kPermutation[i] : i;
+      seqPips[i].className = 'seq-vertex-pip' + (i === activeIdx ? ' active' : '');
+      // Keep the pip's K-label in sync with whichever vertex currently sits
+      // in this slot (same fix as vertex cards above). Re-create the inner
+      // HTML since the K-number prefix is a plain text node.
+      seqPips[i].innerHTML = `K${kIdx + 1}<span class="pip-complex">${COMPLEX_SHORT[ct] || ''}</span>`;
+    }
+  }
+
+  // Vertex-position animation: meshes/labels are identity-bound, so on a
+  // perm change each K-identity needs a new target slot position. Capture
+  // the currently-painted positions as the new `from` for interrupt safety.
+  if (state.kPermutation) {
+    const permKey = state.kPermutation.join(',');
+    if (permKey !== lastPermKey) {
+      const slotOfK = new Array(8);
+      for (let i = 0; i < 8; i++) slotOfK[state.kPermutation[i]] = i;
+      if (!vertexAnimReady) {
+        // First perm — teleport to avoid sweeping in from identity perm on connect.
+        for (let k = 0; k < 8; k++) {
+          vertexPosFrom[k].copy(CUBE_VERTS[slotOfK[k]]);
+          vertexPosTarget[k].copy(CUBE_VERTS[slotOfK[k]]);
+          vertexPosAnimated[k].copy(CUBE_VERTS[slotOfK[k]]);
+        }
+        vertexAnimStart = performance.now() - VERTEX_STEP_MS;
+        vertexAnimReady = true;
+      } else {
+        for (let k = 0; k < 8; k++) {
+          vertexPosFrom[k].copy(vertexPosAnimated[k]);
+          vertexPosTarget[k].copy(CUBE_VERTS[slotOfK[k]]);
+        }
+        vertexAnimStart = performance.now();
+      }
+      lastPermKey = permKey;
+    }
+  }
+
+  // Ghost-vertex animation: mirror the K-perm pattern for C-identities.
+  // `cAssignments[slot]` = C-type (1..8) at that slot; always a full
+  // permutation of {1..8}, so each C-type has exactly one slot every turn.
+  // slotOfC[c-1] = state.cAssignments.indexOf(c).
+  if (state.cAssignments) {
+    const cKey = state.cAssignments.join(',');
+    if (cKey !== lastCAssignKey) {
+      const slotOfC = new Array(8);
+      for (let slot = 0; slot < 8; slot++) {
+        slotOfC[state.cAssignments[slot] - 1] = slot;
+      }
+      if (!ghostVertAnimReady) {
+        for (let k = 0; k < 8; k++) {
+          ghostVertPosFrom[k].copy(CUBE_VERTS[slotOfC[k]]);
+          ghostVertPosTarget[k].copy(CUBE_VERTS[slotOfC[k]]);
+          ghostVertPosAnimated[k].copy(CUBE_VERTS[slotOfC[k]]);
+        }
+        ghostVertAnimStart = performance.now() - GHOST_VERT_STEP_MS;
+        ghostVertAnimReady = true;
+      } else {
+        for (let k = 0; k < 8; k++) {
+          ghostVertPosFrom[k].copy(ghostVertPosAnimated[k]);
+          ghostVertPosTarget[k].copy(CUBE_VERTS[slotOfC[k]]);
+        }
+        ghostVertAnimStart = performance.now();
+      }
+      lastCAssignKey = cKey;
+    }
+  }
+
+  // Update 3D cube labels with full vertex params
+  updateVertexLabels(
+    state.kPermutation,
+    state.kVertices || null,
+    state.cAssignments || null,
+    activeIdx
+  );
+  updateActiveVertexIn3D(activeIdx, activeKIdx);
+
+  setActiveSieve(new Set(state.sieve));
+
+  // currentGyro / hasGyro are driven solely by the gyro_tick handler, which
+  // ships the SLERP-interpolated visual quat. Writing them here too would
+  // superimpose a fresh-but-choppy 10 Hz stream on top of the smooth 60 Hz
+  // lagged stream — visible as the cube strobing between two poses once per
+  // BLE packet. Only non-gyro HUD state (snap, sieve, active vertex, etc.)
+  // belongs in updateState.
+
+  if (state.snapQuat) {
+    const [sx, sy, sz, sw] = state.snapQuat;
+    const snapEl = state.snapElement;
+    currentSnap.set(-sx, sz, sy, sw);
+    ghostTarget.copy(currentSnap);
+    if (!ghostAnimReady) {
+      // First snap — skip the animation so the ghost doesn't sweep from
+      // identity on connect. Mark the animation already-finished by
+      // backdating the start by GHOST_SNAP_MS.
+      ghostFrom.copy(currentSnap);
+      ghostAnimated.copy(currentSnap);
+      ghostAnimStart = performance.now() - GHOST_SNAP_MS;
+      ghostAnimReady = true;
+    } else if (snapEl !== lastSnapElement) {
+      // New snap element — start a fresh animation from whatever the
+      // ghost is currently displaying, so interrupted animations never
+      // jump. `ghostAnimated` is written by the animate loop on every
+      // rAF tick, so it reflects the last painted pose.
+      ghostFrom.copy(ghostAnimated);
+      ghostAnimStart = performance.now();
+    }
+    lastSnapElement = snapEl;
+    hasSnap = true;
+    updateSnapOverlay(state.snapElement, state.gyroDeviation ?? 0);
+  }
+
+  if (move) {
+    const waiting = document.getElementById('waiting-msg');
+    if (waiting) waiting.remove();
+
+    moveCount++;
+    const log = document.getElementById('move-log');
+    const entry = document.createElement('div');
+    entry.className = 'move-entry';
+    const ct = state.cAssignments ? state.cAssignments[activeIdx] : '?';
+    entry.innerHTML = `
+      <span class="move-name">${move}</span>
+      <span class="move-vertex">K${activeKIdx + 1}</span>
+      <span class="move-detail">C${ct} ${state.cyclicPhase} step ${state.step}</span>
+    `;
+    log.insertBefore(entry, log.firstChild);
+    while (log.children.length > 50) log.removeChild(log.lastChild);
+  }
+}
+
+
+// ============================================================
+// V2: Cube algorithms, Mode, Expression, Scramble
+// ============================================================
+
+let algorithmBook = [];
+let algorithmNotificationTimeout = null;
+
+// Move log — dashboard-side FIFO of the last RECENT_MOVES_MAX moves the
+// performer has executed (independent of the engine's `state.algorithmBuffer`,
+// which clears on its own 2 s timeout / algorithm-fire).
+const RECENT_MOVES_MAX = 8;
+const recentMoves = [];
+
+function updateV2State(state, move) {
+  // Scramble
+  if (typeof state.scrambleFactor === 'number') {
+    const sf = state.scrambleFactor;
+    const bar = document.getElementById('scramble-bar');
+    const val = document.getElementById('scramble-val');
+    bar.style.width = (sf * 100) + '%';
+    // Green (solved) → red (scrambled)
+    const hue = 140 - sf * 140;
+    bar.style.background = `hsl(${hue}, 70%, 50%)`;
+    val.textContent = sf.toFixed(2);
+
+    // Expression scramble
+    document.getElementById('expr-scramble').textContent = sf.toFixed(2);
+    document.getElementById('expr-scramble-bar').style.width = (sf * 100) + '%';
+  }
+
+  // Voice mode
+  if (state.voiceMode) {
+    const badge = document.getElementById('mode-voice');
+    if (state.voiceMode === 'polyphonic') {
+      badge.textContent = 'POLYPHONIC';
+      badge.className = 'mode-badge voice-poly';
+    } else {
+      badge.textContent = 'SEQUENTIAL';
+      badge.className = 'mode-badge voice-seq';
+    }
+  }
+
+  // Performance mode
+  if (state.performanceMode) {
+    const pm = state.performanceMode;
+    document.getElementById('mode-palette').textContent = pm.palette;
+  }
+
+  // Regime + turn rate
+  if (state.regime) {
+    const badge = document.getElementById('mode-regime');
+    badge.textContent = state.regime.toUpperCase();
+    badge.className = 'mode-badge regime-' + state.regime;
+  }
+  if (typeof state.turnRate === 'number') {
+    document.getElementById('turn-rate-val').textContent = state.turnRate.toFixed(1) + ' t/s';
+  }
+
+  // Move log — dashboard-side FIFO of the last RECENT_MOVES_MAX moves the
+  // performer has executed. Decoupled from the engine's `state.algorithmBuffer`
+  // (which clears on its own 2 s timeout / algorithm-fire) so the visible strip
+  // stays stable: each new turn pushes one move and drops the oldest, no
+  // empty-line flashes. Match highlighting still uses `state.algorithmPartials`
+  // and applies to the trailing N entries — both arrays are time-ordered
+  // so the "last N matched" overlay lines up regardless of length.
+  if (move) {
+    recentMoves.push(move);
+    if (recentMoves.length > RECENT_MOVES_MAX) recentMoves.shift();
+  }
+  {
+    const bufEl = document.getElementById('algorithm-buffer');
+    const matchedIndices = new Set();
+    if (state.algorithmPartials && state.algorithmPartials.length > 0) {
+      const best = state.algorithmPartials.reduce((a, b) =>
+        (b.matched / b.total) > (a.matched / a.total) ? b : a
+      );
+      const start = recentMoves.length - best.matched;
+      for (let i = start; i < recentMoves.length; i++) {
+        matchedIndices.add(i);
+      }
+    }
+    bufEl.innerHTML = '';
+    for (let i = 0; i < recentMoves.length; i++) {
+      const el = document.createElement('span');
+      el.className = 'algorithm-buffer-move' + (matchedIndices.has(i) ? ' matched' : '');
+      el.textContent = recentMoves[i];
+      bufEl.appendChild(el);
+    }
+  }
+
+  // Partial matches display
+  if (state.algorithmPartials) {
+    const partialsEl = document.getElementById('algorithm-partials');
+    if (state.algorithmPartials.length > 0) {
+      const best = state.algorithmPartials
+        .sort((a, b) => (b.matched / b.total) - (a.matched / a.total))
+        .slice(0, 2);
+      partialsEl.innerHTML = best.map(p => {
+        const pct = Math.round((p.matched / p.total) * 100);
+        const barW = Math.round((p.matched / p.total) * 40);
+        return `<span class="partial-name">${p.name}</span> ${p.matched}/${p.total} <span class="partial-bar" style="width:${barW}px"></span>`;
+      }).join('<br>');
+    } else {
+      partialsEl.innerHTML = '';
+    }
+  }
+
+  // expr-dev is driven by the gyro_tick handler (60 Hz). Writing it here
+  // would duplicate at BLE rate and beat visibly against the tick stream.
+}
+
+function handleAlgorithmEvent(data) {
+  // Toast notification
+  const history = document.getElementById('algorithm-history');
+  const toast = document.createElement('div');
+  toast.className = 'algorithm-toast';
+  toast.textContent = data.name.toUpperCase();
+  history.appendChild(toast);
+  setTimeout(() => toast.remove(), 2100);
+
+  // In-panel notification
+  const notifEl = document.getElementById('algorithm-notification');
+  notifEl.textContent = data.name.toUpperCase();
+  notifEl.className = 'algorithm-notification active';
+  if (algorithmNotificationTimeout) clearTimeout(algorithmNotificationTimeout);
+  algorithmNotificationTimeout = setTimeout(() => {
+    notifEl.className = 'algorithm-notification';
+  }, 1500);
+}
+
+// The SOLVED badge tracks live physical-cube state:
+//   - solved (gold + pulse animation on the unsolved→solved edge)
+//   - solved (gold, steady) while the cube stays solved
+//   - dim (grey) once the first turn after solved lands
+let solveBadgePulseTimeout = null;
+function setSolvedBadge(solved, pulse) {
+  const el = document.getElementById('mode-solved');
+  if (!el) return;
+  el.classList.toggle('dim', !solved);
+  if (pulse) {
+    el.classList.remove('pulse');
+    void el.offsetWidth;
+    el.classList.add('pulse');
+    if (solveBadgePulseTimeout) clearTimeout(solveBadgePulseTimeout);
+    solveBadgePulseTimeout = setTimeout(() => el.classList.remove('pulse'), 2400);
+  }
+}
+function handleSolveEvent() {
+  setSolvedBadge(true, true);
+}
+
+// ============================================================
+// Phase E tier 2 rev B (2026-04-24) — rolling piano-roll from SWAM MIDI echo
+//
+// The Max bridge mirrors every noteon/noteoff/panic it emits to the relay as
+// OSC /xk/midi/{noteon,noteoff,panic} on UDP 57122; the relay forwards each
+// as a WS `midi_echo` message with `{kind, voice, pitch, velocity, complex}`.
+// We render a continuous-time canvas where the right edge is "now" and notes
+// scroll left at ROLL_PX_PER_SEC; pitch is on the Y axis (cello range
+// C2..C6, 48 semitones); a note paints from its onsetMs to its offsetMs (or
+// to the right edge if still sounding). Note colour follows SWAM complex —
+// pizz/arco/harmonic/gliss/trem each get their own hue. Adjacent same-voice
+// notes in C5/C6/C7 are joined by a quadratic curve so the audible
+// portamento has a visible analogue.
+//
+// Rev B replaces the rev A VexFlow bass-clef staff: the staff quantised
+// duration into 5 buckets and laid notes out by nominal width, throwing
+// away the actual elapsed timing the performer hears. The roll trades
+// classical-notation legibility for time-accurate motion + gliss support.
+// Tier 3 will switch the data source from the Max echo to a TS-generated
+// note-list once the phrase library migration lands (Phase B + tier 3).
+// ============================================================
+
+// CSS-px scroll speed. Visible time window is derived from canvas width
+// (wider screen → more history visible). Mutable so the dashboard slider
+// can retune live; persisted in localStorage so the user's choice survives
+// reloads. Stays inline (not exported via constants.js) — ES module
+// imports are read-only bindings, so a slider-mutated `let` would need
+// a setter wrapper that adds noise without value.
+let ROLL_PX_PER_SEC = 360;
+// ROLL_MIN_MIDI / ROLL_MAX_MIDI / ROLL_PITCH_RANGE / ROLL_TOP_INSET_PX
+// / ROLL_BOTTOM_INSET_PX moved to ./js/constants.js (Phase 2.1).
+// Right-side inset = current sieve-strip width. The "now" line of the
+// rolling score is anchored to the sieve's LEFT edge so notes appear to
+// emerge from their matching pitch bin and scroll left across the cube
+// area. Recomputed each resize from the live element's bounding box, so
+// the proportional sieve width (clamp(72px, 7.5vw, 150px)) drives the
+// score's right-edge inset automatically. Default until first measure
+// matches the clamp's lower bound.
+let ROLL_RIGHT_INSET_CSS_PX = 90;
+// PENDING_MAX_AGE_MS, GLISS_GAP_MS, GLISS_COMPLEXES, COMPLEX_COLOR
+// moved to ./js/constants.js (Phase 2.1).
+
+// FIFO queue per (voice, pitch). The bridge legitimately emits overlapping
+// noteons for the same pitch (C8 trem rebows the same mainPitch every
+// iteration; the same companion pitch is reused across a whole phrase;
+// any humanPitch collision in C2/C3/C4 produces the same key on consecutive
+// iterations). A single-entry Map silently dropped the older noteon, so the
+// deferred noteoff 20 ms after the next iteration's overlap paired with the
+// *new* entry — the original phrase iteration showed up as a 20 ms blip and
+// most of its rendered duration was lost. FIFO pairing matches what the
+// bridge actually sends: oldest noteon pairs with first noteoff for that key.
+const activeMidiNotes = new Map();     // "voice:pitch" → Array<{ pitch, velocity, voice, complex, onsetMs }>
+const finishedMidiNotes = [];          // { pitch, velocity, voice, complex, onsetMs, offsetMs }
+
+let rollCanvas = null;
+let rollCtx    = null;
+let rollDpr    = 1;
+
+function initRollingScore() {
+  rollCanvas = document.getElementById('rolling-score');
+  if (!rollCanvas) return;
+  rollCtx = rollCanvas.getContext('2d');
+  resizeRollingScore();
+  window.addEventListener('resize', resizeRollingScore);
+  requestAnimationFrame(drawRollingScore);
+}
+
+function resizeRollingScore() {
+  if (!rollCanvas) return;
+  rollDpr = Math.max(1, window.devicePixelRatio || 1);
+  // Full-viewport background layer — pitch axis spans the whole height,
+  // time axis spans the whole width.
+  const cssW = window.innerWidth;
+  const cssH = window.innerHeight;
+  rollCanvas.style.width  = cssW + 'px';
+  rollCanvas.style.height = cssH + 'px';
+  rollCanvas.width  = Math.round(cssW * rollDpr);
+  rollCanvas.height = Math.round(cssH * rollDpr);
+  // Pull the sieve strip's actual rendered width as the right-edge inset.
+  // Sieve sizing is `clamp(72px, 7.5vw, 150px)` — proportional, so the
+  // measured value tracks layout changes (resize, portrait flip, etc.).
+  const sieveEl = document.querySelector('.ovl-sieve-right');
+  if (sieveEl) {
+    const r = sieveEl.getBoundingClientRect();
+    if (r.width > 0) ROLL_RIGHT_INSET_CSS_PX = r.width;
+  }
+  // Phase 1 Visual Invariant — midiToY ↔ sieve-cell agreement. After every
+  // resize, verify the canvas pitch axis still lines up with the sieve strip
+  // cells. Deferred one rAF so the browser has finished re-laying-out the
+  // sieve cells before we measure them (resize → reflow → paint; we want
+  // the post-reflow rects).
+  requestAnimationFrame(assertPitchAxis);
+}
+
+// Phase 1 Visual Invariant — midiToY ↔ sieve-cell-Y agreement.
+// For any pitch P in [36, 84], the rolling-score's `midiToY(P)` (device-px
+// in canvas) must equal the matching sieve cell's vertical centre (CSS-px
+// × dpr) to within the threshold below. Both axes derive from the same
+// insets / 49-bin centring formula; they drift only if either:
+//   • the JS constants ROLL_TOP_INSET_PX / ROLL_BOTTOM_INSET_PX fall out of
+//     sync with the CSS variables --roll-top-inset / --roll-bottom-inset
+//     that position .ovl-sieve-right, OR
+//   • midiToY's bin math gets refactored to N-bin (interval count) instead
+//     of (N+1)-bin (centre count), or
+//   • the sieve cell distribution itself breaks (Phase 1 sieve invariant —
+//     this assertion would also fire in that case, but the first one fires
+//     louder and earlier so the message naming is unambiguous).
+//
+// Threshold = 2 CSS px (was 1 in initial Phase 1.2). Pure browser
+// subpixel rendering — `canvas.height = round(window.innerHeight × dpr)`
+// integer rounding plus the browser's own subpixel snap for CSS-positioned
+// flex children at non-integer dpr or non-100% browser zoom — produces
+// ~1.0–1.2 px drift at the bottom cell (P=36) where the (48.5/49) ≈ 0.99
+// multiplier amplifies the canvas-vs-CSS innerH discrepancy. Real
+// architectural drift (49→48 bin error, JS/CSS inset constants desync,
+// flex regression) produces 10+ px drift, easily distinguishable.
+// Proper fix (compute midiToY off CSS-derived `window.innerHeight` so
+// both sides share an unrounded source, OR a dpr-aware threshold)
+// deferred to v2 → main reintegration; flagged in docs/todo.md.
+const PITCH_AXIS_DRIFT_THRESHOLD_PX = 2;
+
+function assertPitchAxis() {
+  if (!rollCanvas) return;
+  const h = rollCanvas.height;
+  if (h === 0) return;
+  const probes = [36, 48, 60, 72, 84];   // C2, C3, C4, C5, C6 — every octave anchor
+  let worst = null;
+  for (const P of probes) {
+    const r = getSieveCellRect(P);
+    if (!r || r.height === 0) return;    // strip not yet laid out — silent
+    const expected = r.top + r.height / 2;          // CSS px (viewport y of cell centre)
+    const got      = midiToY(P, h) / rollDpr;       // CSS px (canvas y of pitch P, normalised)
+    const drift    = Math.abs(got - expected);
+    if (!worst || drift > worst.drift) worst = { P, drift, expected, got };
+  }
+  if (worst && worst.drift > PITCH_AXIS_DRIFT_THRESHOLD_PX) {
+    console.error(
+      'PITCH AXIS FAIL P=' + worst.P + ' expected=' + worst.expected.toFixed(2) + 'px ' +
+      'got=' + worst.got.toFixed(2) + 'px drift=' + worst.drift.toFixed(2) + 'px ' +
+      '(midiToY canvas y vs sieve cell rect; threshold=' +
+      PITCH_AXIS_DRIFT_THRESHOLD_PX + 'px)'
+    );
+  }
+}
+
+// Pitch P sits at the CENTER of sieve cell (P − 36). The strip has 49 cells
+// dividing the inner pitch axis (h − top − bottom) into 49 equal vertical
+// bins, so cell i's center is at top + (48.5 − i) · innerH / 49. Continuous
+// pitches (gliss interpolation) smoothly traverse the bins.
+function midiToY(pitch, h) {
+  const clamped = Math.max(ROLL_MIN_MIDI, Math.min(ROLL_MAX_MIDI, pitch));
+  const i = clamped - ROLL_MIN_MIDI;
+  const topDev    = ROLL_TOP_INSET_PX    * rollDpr;
+  const bottomDev = ROLL_BOTTOM_INSET_PX * rollDpr;
+  const innerH    = Math.max(1, h - topDev - bottomDev);
+  return topDev + (48.5 - i) * innerH / 49;
+}
+
+// Right-edge of the rolling score (the "now" line) is the sieve strip's
+// LEFT edge in device px. Notes painted with x ≥ rightEdge are off-screen
+// behind the sieve and not visible; active notes draw from `x0` to the
+// rightEdge instead of all the way to the canvas's `w`.
+function rollRightEdge(w) {
+  return w - ROLL_RIGHT_INSET_CSS_PX * rollDpr;
+}
+
+function timeToX(tMs, nowMs, w) {
+  const dt = nowMs - tMs;
+  return rollRightEdge(w) - (dt / 1000) * ROLL_PX_PER_SEC * rollDpr;
+}
+
+// ============================================================
+// Brush palette — one rendering style per SWAM complex
+//
+// Each /xk/voice complex has a distinct sound; the rolling score should let
+// you read the technique at a glance, not just the colour. Rather than ship
+// raster brush textures, each style is a small procedural canvas routine
+// chosen to *evoke* the matching Photoshop brush family from
+// docs/brushes.png. Mapping (locked unless we revisit):
+//
+//   C1 pizz   → 15. Spatter             (percussive plucks → fine dots)
+//   C2 arco   → 18. Rough Wash          (breathy bowed cloud → translucent bands)
+//   C3 arco   → 19. Watercolor          (held painterly drone → defined body + pooling blobs)
+//   C4 harm   → 14. Airbrush Hard Round (bell overtone → radial-gradient halo)
+//   C5 wild   → 35. Calligraphy         (sweeping fluid pitch → variable-width sweep)
+//   C6 sieve  → 11. Ink                 (deliberate stepwise drawn line)
+//   C7 drift  → 27. Smoke               (wispy ephemeral wandering → multi-layer stroke)
+//   C8 trem   → 7. Chalk                (scratchy bridge friction → gritty textured band)
+//
+// Gliss complexes (C5/C6/C7) bypass the per-note brush dispatch entirely:
+// each gliss "chain" (a maximal run of same-voice, same-complex notes within
+// GLISS_GAP_MS of each other) is rendered as one stroked Path2D in the chain
+// pass below, so the alternating horizontal-segment / slant-transition
+// pattern reads as one continuous brush stroke with no visible junctions.
+// Non-gliss complexes get chunkier shapes so each technique stays visually
+// distinct.
+// ============================================================
+
+// Brush vertical dimensions are expressed as multiples of `rollRowH` (= the
+// device-px height of one semitone in the visible pitch range). This keeps
+// brushes proportional to the available pitch density: a 1.45-row chalk band
+// is always 1.45 semitones tall regardless of viewport. Without this scaling,
+// fixed CSS-px brushes (e.g. 28-px chalk band) covered ~1.4 rows on a 1080p
+// monitor but ~2 rows on a 13" MacBook (smaller innerHeight → smaller row),
+// which read as "everything is way too big" on smaller screens.
+//
+// Time-axis dimensions (note-width, dot density along note duration, slant
+// stretch) stay in CSS px — they're about temporal density, not pitch density.
+//
+// `ROLL_BRUSH_SCALE` is a single global multiplier for tuning. Bump up for
+// chunkier brushes everywhere, down for thinner. (1.0 matches the original
+// absolute-CSS look on 1080p / 1× DPR; 1.4 is the current thicker default
+// for legibility in dense passages.) Moved to ./js/constants.js (Phase 2.1).
+let rollRowH = 19;     // device-px per semitone — recomputed each frame in drawRollingScore
+
+// Stable per-note RNG. Brushes use scattered dots / specks; without a stable
+// seed they'd scintillate every frame. Hash the immutable note identity
+// (voice, pitch, onsetMs) into a mulberry32 stream that returns the same
+// sequence every redraw, so a given pizz cluster always looks the same as
+// it scrolls past.
+function noteSeed(evt) {
+  let s = ((evt.voice | 0) * 73856093) ^
+          ((evt.pitch | 0) * 19349663) ^
+          ((evt.onsetMs | 0) * 83492791);
+  return { s: s >>> 0 };
+}
+function lcg(ref) {
+  ref.s = (ref.s + 0x6D2B79F5) | 0;
+  let t = ref.s;
+  t = Math.imul(t ^ t >>> 15, t | 1);
+  t ^= t + Math.imul(t ^ t >>> 7, t | 61);
+  return ((t ^ t >>> 14) >>> 0) / 4294967296;
+}
+
+// `bu(factor)` returns a brush vertical dimension in device px, scaled to the
+// current row-height and the global brush-scale knob. Use for everything
+// pitch-axis sized: band heights, dot/blob radii, vertical scatter.
+const bu = (f) => rollRowH * f * ROLL_BRUSH_SCALE;
+
+// ── C1 Spatter — pizzicato plucks ──────────────────────────────────────
+function brushSpatter(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const seed = noteSeed(evt);
+  const dotCount = Math.max(12, Math.min(60, Math.floor(w / (2.2 * rollDpr))));
+  const spreadH = bu(1.15);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha;
+  for (let i = 0; i < dotCount; i++) {
+    const px = x + lcg(seed) * w;
+    const py = y + (lcg(seed) - 0.5) * spreadH;
+    const r  = bu(0.08 + lcg(seed) * 0.13);
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  // Heavier blobs for the pluck centres
+  for (let i = 0; i < 5; i++) {
+    const px = x + lcg(seed) * w;
+    const py = y + (lcg(seed) - 0.5) * bu(0.4);
+    const r  = bu(0.18 + lcg(seed) * 0.21);
+    ctx.beginPath();
+    ctx.arc(px, py, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── C2 Rough Wash — bowed legato cloud ─────────────────────────────────
+function brushRoughWash(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const bandH = bu(1.45);
+  // Vertical-fade gradient — soft "breathy" edge without raster blur
+  const grad = ctx.createLinearGradient(0, y - bandH, 0, y + bandH);
+  grad.addColorStop(0,   'rgba(0,0,0,0)');
+  grad.addColorStop(0.5, color);
+  grad.addColorStop(1,   'rgba(0,0,0,0)');
+  ctx.fillStyle = grad;
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.fillRect(x, y - bandH, w, bandH * 2);
+  // Solid core
+  const coreH = bu(0.5);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha * 0.8;
+  ctx.fillRect(x, y - coreH / 2, w, coreH);
+  ctx.globalAlpha = 1;
+}
+
+// ── C3 Watercolor — hovering flat ──────────────────────────────────────
+function brushWatercolor(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const bodyH = bu(1.0);
+  const seed = noteSeed(evt);
+  ctx.fillStyle = color;
+  // Soft halo
+  ctx.globalAlpha = alpha * 0.25;
+  ctx.fillRect(x, y - bodyH, w, bodyH * 2);
+  // Defined body
+  ctx.globalAlpha = alpha * 0.85;
+  ctx.fillRect(x, y - bodyH / 2, w, bodyH);
+  // Paint pooling blobs
+  ctx.globalAlpha = alpha * 0.6;
+  const blobCount = 2 + Math.floor(w / (35 * rollDpr));
+  for (let i = 0; i < blobCount; i++) {
+    const px = x + (0.1 + lcg(seed) * 0.8) * w;
+    const r = bu(0.3 + lcg(seed) * 0.3);
+    ctx.beginPath();
+    ctx.arc(px, y, r, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── C4 Airbrush Hard Round — harmonic atom ─────────────────────────────
+function brushAirbrush(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const radius = bu(1.15);
+  // Capsule of overlapping radial gradients so a long harmonic still reads
+  // as a continuous halo rather than a chain of dots.
+  const stepCount = Math.max(2, Math.floor(w / (radius * 0.6)));
+  ctx.globalAlpha = alpha * 0.75;
+  for (let i = 0; i < stepCount; i++) {
+    const px = x + (stepCount === 1 ? w / 2 : (i / (stepCount - 1)) * w);
+    const grad = ctx.createRadialGradient(px, y, 0, px, y, radius);
+    grad.addColorStop(0,    color);
+    grad.addColorStop(0.45, color);
+    grad.addColorStop(1,    'rgba(0,0,0,0)');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(px, y, radius, 0, Math.PI * 2);
+    ctx.fill();
+  }
+  ctx.globalAlpha = 1;
+}
+
+// ── C8 Chalk — sul-pont tremolo grit ───────────────────────────────────
+function brushChalk(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const bandH = bu(1.35);
+  const seed = noteSeed(evt);
+  // Translucent base — chalk press
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha * 0.55;
+  ctx.fillRect(x, y - bandH / 2, w, bandH);
+  // Scattered specks — chalk grit (slot density is time-axis: stays in CSS px;
+  // speck size is pitch-axis: scales with rowHeight)
+  ctx.globalAlpha = alpha;
+  const slotCount = Math.floor(w / (1.4 * rollDpr));
+  for (let i = 0; i < slotCount; i++) {
+    if (lcg(seed) < 0.5) continue;  // ~50% slot occupancy
+    const px = x + (i / Math.max(1, slotCount)) * w + lcg(seed) * 2 * rollDpr;
+    const py = y + (lcg(seed) - 0.5) * bandH * 1.1;
+    const sw = bu(0.08 + lcg(seed) * 0.13);
+    const sh = bu(0.08 + lcg(seed) * 0.10);
+    ctx.fillRect(px, py, sw, sh);
+  }
+  ctx.globalAlpha = 1;
+}
+
+// Fallback for complex 0 (unknown / pre-init / KS leak)
+function brushHardRound(ctx, x0, x1, y, color, alpha, evt) {
+  const x = Math.max(0, x0);
+  const w = Math.max(2 * rollDpr, x1 - x);
+  const rowH = bu(0.72);
+  ctx.fillStyle = color;
+  ctx.globalAlpha = alpha;
+  ctx.fillRect(x, y - rowH / 2, w, rowH);
+  ctx.globalAlpha = 1;
+}
+
+// Gliss complexes (C5/C6/C7) deliberately have no entry — drawNote skips
+// them and the chain pass renders each gliss phrase as a single Path2D so
+// the rect bodies and slant transitions read as one continuous brush stroke.
+const COMPLEX_BRUSH = {
+  0: brushHardRound,
+  1: brushSpatter,
+  2: brushRoughWash,
+  3: brushWatercolor,
+  4: brushAirbrush,
+  8: brushChalk,
+};
+
+function drawNote(ctx, evt, x0, x1, y, alpha) {
+  if (x1 < 0) return;
+  if (GLISS_COMPLEXES.has(evt.complex)) return;  // handled by chain pass
+  const color = COMPLEX_COLOR[evt.complex] || COMPLEX_COLOR[0];
+  const brush = COMPLEX_BRUSH[evt.complex] || brushHardRound;
+  brush(ctx, x0, x1, y, color, alpha, evt);
+}
+
+// ── Gliss chain renderer ────────────────────────────────────────────────
+// A "chain" is a maximal run of gliss-complex notes that share the same
+// voice + complex AND whose adjacent gaps are ≤ GLISS_GAP_MS. Each chain is
+// drawn as a single stroked Path2D with lineJoin='round' so the alternating
+// horizontal-segment / slant pattern reads as one continuous brush stroke
+// — no visible junctions. The path walks every note's exclusive-sounding
+// region (horizontal at its pitch) and bridges the overlap/gap to the next
+// note (slant from prev pitch to next pitch).
+function buildGlissChains(nowMs, w, h) {
+  const groups = new Map();  // "voice:complex" → Array<{evt, x0, x1, y}>
+  const push = (evt, x0, x1, y) => {
+    const k = `${evt.voice}:${evt.complex}`;
+    let arr = groups.get(k);
+    if (!arr) { arr = []; groups.set(k, arr); }
+    arr.push({ evt, x0, x1, y });
+  };
+  for (const evt of finishedMidiNotes) {
+    if (!GLISS_COMPLEXES.has(evt.complex)) continue;
+    push(evt, timeToX(evt.onsetMs, nowMs, w), timeToX(evt.offsetMs, nowMs, w), midiToY(evt.pitch, h));
+  }
+  const rightEdge = rollRightEdge(w);
+  for (const queue of activeMidiNotes.values()) {
+    for (const evt of queue) {
+      if (!GLISS_COMPLEXES.has(evt.complex)) continue;
+      push(evt, timeToX(evt.onsetMs, nowMs, w), rightEdge, midiToY(evt.pitch, h));
+    }
+  }
+  const chains = [];
+  for (const arr of groups.values()) {
+    arr.sort((a, b) => a.evt.onsetMs - b.evt.onsetMs);
+    let chain = null;
+    for (let i = 0; i < arr.length; i++) {
+      const node = arr[i];
+      const prev = i > 0 ? arr[i - 1] : null;
+      const prevOff = prev ? (prev.evt.offsetMs ?? nowMs) : -Infinity;
+      const gapMs = prev ? node.evt.onsetMs - prevOff : 0;
+      // chainStart (live-entry classifier set at noteon time) is the
+      // primary break signal — robust against voice steal at sub-25 ms gap.
+      // GLISS_GAP_MS remains as the UDP-reorder fallback. See handleMidiEcho.
+      const breakByCs  = !!node.evt.chainStart;
+      const breakByGap = gapMs > GLISS_GAP_MS;
+      if (!chain || breakByCs || breakByGap) {
+        // Diagnostic — opt-in via `localStorage.xkDebugGliss = '1'`.
+        // Logs each chain break with the trigger reason so a phrase that
+        // visually appears to fail breaking is identifiable from the
+        // console output alone.
+        if (window.xkDebugGliss && chain) {
+          console.log(
+            '[gliss break] complex=C' + node.evt.complex +
+            ' pitch=' + node.evt.pitch +
+            ' cs=' + breakByCs +
+            ' gap=' + (gapMs).toFixed(1) + 'ms' +
+            ' (>25? ' + breakByGap + ')'
+          );
+        }
+        chain = {
+          complex: node.evt.complex,
+          color:   COMPLEX_COLOR[node.evt.complex] || COMPLEX_COLOR[0],
+          nodes:   [],
+        };
+        chains.push(chain);
+      }
+      chain.nodes.push(node);
+    }
+  }
+  return chains;
+}
+
+// GLISS_PORTAMENTO_MS_PER_SEMITONE moved to ./js/constants.js (Phase 2.1).
+function _glissChainDur(fromP, toP, complex) {
+  const interval = Math.abs(toP - fromP);
+  const perSemi = GLISS_PORTAMENTO_MS_PER_SEMITONE[complex] || 80;
+  return Math.max(80, Math.min(2000, interval * perSemi));
+}
+// Cubic smoothstep — same ease used by the white triangle leg.
+function _glissEase(t) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t * t * (3 - 2 * t);
+}
+
+// Replay the bridge's pitch trajectory for one gliss chain. Each segment is
+// an in-flight or completed SWAM portamento: { t0, dur, p0, p1 }. Reading
+// pitchAt(t) walks the most-recent segment containing t and applies
+// smoothstep — so a portamento that gets RETARGETED mid-flight by the next
+// noteon (which the bridge does constantly, because MIN_GLISS_SPACING_MS
+// of 200 ms is shorter than most SWAM portamentos) cleanly hands off the
+// current interpolated pitch as the next segment's start, exactly as
+// SWAM's Mono Poly Release portamento would. The result is the audible
+// pitch curve, drawable as a smooth polyline.
+function _glissPitchAt(t, segs) {
+  for (let i = segs.length - 1; i >= 0; i--) {
+    const s = segs[i];
+    if (t >= s.t0) {
+      if (s.dur <= 0) return s.p1;
+      const f = Math.min(1, (t - s.t0) / s.dur);
+      return s.p0 + (s.p1 - s.p0) * _glissEase(f);
+    }
+  }
+  return segs[0].p0;
+}
+function _buildGlissSegments(nodes) {
+  const segs = [];
+  if (nodes.length === 0) return segs;
+  // First note: stationary at p0 (no portamento yet).
+  segs.push({ t0: nodes[0].evt.onsetMs, dur: 0, p0: nodes[0].evt.pitch, p1: nodes[0].evt.pitch });
+  for (let i = 1; i < nodes.length; i++) {
+    const n = nodes[i].evt;
+    const startT = n.onsetMs;
+    // Pitch handed off from the prior portamento at the moment this
+    // noteon arrives — this is what SWAM's portamento engine would itself
+    // be at when retargeted, so the visual curve matches the audio.
+    const pitchAtStart = _glissPitchAt(startT, segs);
+    segs.push({
+      t0: startT,
+      dur: _glissChainDur(pitchAtStart, n.pitch, n.complex),
+      p0:  pitchAtStart,
+      p1:  n.pitch,
+    });
+  }
+  return segs;
+}
+
+function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
+  const { complex, color, nodes } = chain;
+  if (nodes.length === 0) return;
+  const segs = _buildGlissSegments(nodes);
+  const lineW = bu(0.85);
+
+  // Sample the audible pitch trajectory across the chain's full X span
+  // and stroke as a polyline. Because pitch is computed from the segment
+  // model (not from per-note flat bodies + slant transitions), the result
+  // is one continuous smoothstep wave through every slide — no sharp
+  // 90° corners between body and transition, no narrow Bezier squeezed
+  // into the bridge's 20 ms overlap window. Sample density of 3 device
+  // px is dense enough that lineJoin: 'round' makes the polyline
+  // visually smooth without bezier overhead.
+  const startX = nodes[0].x0;
+  const endX   = nodes[nodes.length - 1].x1;
+  const span   = Math.max(1, endX - startX);
+  const samplePx = 3 * rollDpr;
+  const numSamples = Math.max(2, Math.ceil(span / samplePx));
+  const pxPerMs = ROLL_PX_PER_SEC * rollDpr / 1000;
+  const rightEdge = rollRightEdge(canvasW);
+
+  const strokePath = (dy, w, alpha) => {
+    ctx.strokeStyle = color;
+    ctx.lineWidth   = w;
+    ctx.lineCap     = 'round';
+    ctx.lineJoin    = 'round';
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    for (let i = 0; i <= numSamples; i++) {
+      const x = startX + span * i / numSamples;
+      const t = nowMs - (rightEdge - x) / pxPerMs;
+      const p = _glissPitchAt(t, segs);
+      const y = midiToY(p, canvasH);
+      if (i === 0) ctx.moveTo(x, y + dy);
+      else         ctx.lineTo(x, y + dy);
+    }
+    ctx.stroke();
+  };
+
+  // C7 smoke: faint halo strokes above and below the main path. Drawn
+  // first so the main stroke layers over them.
+  if (complex === 7) {
+    const haloOffset = lineW * 1.2;
+    strokePath(-haloOffset, lineW * 0.5, 0.22);
+    strokePath(+haloOffset, lineW * 0.5, 0.22);
+  }
+  strokePath(0, lineW, 0.95);
+  ctx.globalAlpha = 1;
+}
+
+function drawRollingScore() {
+  if (!rollCanvas || !rollCtx) {
+    requestAnimationFrame(drawRollingScore);
+    return;
+  }
+  const w = rollCanvas.width;
+  const h = rollCanvas.height;
+  const nowMs = performance.now();
+  // Recompute the brush sizing unit (device-px per semitone) from the current
+  // viewport so brushes scale with the available pitch density. Floor at
+  // 4 device px so brushes don't vanish on absurdly small windows.
+  const innerHDev = Math.max(48 * rollDpr, h - (ROLL_TOP_INSET_PX + ROLL_BOTTOM_INSET_PX) * rollDpr);
+  rollRowH = Math.max(4 * rollDpr, innerHDev / ROLL_PITCH_RANGE);
+  // Visible time window depends on canvas width (in CSS px); cull anything
+  // that's already scrolled off the left edge plus a small grace.
+  const visibleSec = (w / rollDpr) / ROLL_PX_PER_SEC;
+  const horizonMs = nowMs - visibleSec * 1000;
+
+  rollCtx.clearRect(0, 0, w, h);
+
+  // Cull finished notes that have scrolled fully off the left edge
+  while (finishedMidiNotes.length && finishedMidiNotes[0].offsetMs < horizonMs - 500) {
+    finishedMidiNotes.shift();
+  }
+
+  // Notes — finished first (lower z), then in-flight on top.
+  // Per-complex brush rendering via drawNote → COMPLEX_BRUSH dispatch.
+  for (const evt of finishedMidiNotes) {
+    const x0 = timeToX(evt.onsetMs,  nowMs, w);
+    const x1 = timeToX(evt.offsetMs, nowMs, w);
+    const y  = midiToY(evt.pitch, h);
+    const alpha = 0.55 + 0.45 * Math.min(1, evt.velocity / 110);
+    drawNote(rollCtx, evt, x0, x1, y, alpha);
+  }
+  const rightEdge = rollRightEdge(w);
+  for (const queue of activeMidiNotes.values()) {
+    for (const evt of queue) {
+      const x0 = timeToX(evt.onsetMs, nowMs, w);
+      const y  = midiToY(evt.pitch, h);
+      const alpha = 0.7 + 0.3 * Math.min(1, evt.velocity / 110);
+      drawNote(rollCtx, evt, x0, rightEdge, y, alpha);
+    }
+  }
+
+  // Gliss chains — each (voice, complex) chain of consecutive gliss notes
+  // is drawn as a single Path2D so junctions are seamless and the line
+  // reads as one fluid brush stroke.
+  const chains = buildGlissChains(nowMs, w, h);
+  for (const chain of chains) drawGlissChain(rollCtx, chain, nowMs, w, h);
+
+  // Phase 1 Visual Invariant — gliss-line trajectory ↔ rolling-chain
+  // trajectory drift. Throttled to ~1 Hz; silent unless any gliss line is
+  // active (mid-slide OR instant-snap). See assertGlissSync below.
+  assertGlissSync(nowMs);
+
+  requestAnimationFrame(drawRollingScore);
+}
+
+// Phase 1 Visual Invariant — gliss-line ↔ rolling-chain trajectory.
+// The white triangle leg endpoint Y (drawLineOverlay's per-frame `pitch`
+// derived from `lineNotes` + easeSlide) and the rolling-score gliss-chain
+// polyline Y (drawGlissChain's segment-model `_glissPitchAt`) MUST plot
+// the same audible pitch curve at every frame to ≤1 px drift. They share
+// the same easing (`easeSlide` ≡ `_glissEase`, both cubic smoothstep) and
+// the same per-complex portamento times (PORTAMENTO_MS_PER_SEMITONE ≡
+// GLISS_PORTAMENTO_MS_PER_SEMITONE). They diverge only if a refactor
+// alters one without the other — exactly the silent-failure mode this
+// assertion exists to catch.
+//
+// Sampled at ~1 Hz so live performance isn't paying for the segment
+// rebuild every frame; gated to "any active gliss line exists" so we
+// don't fire on the trivial-easy case (no live gliss to compare).
+// Compares both mid-slide (animDurMs > 0) and instant-snap (animDurMs
+// = 0, post-leap or post-chain-start) line states against the chain.
+// Both sides go through the SAME midiToY so this assertion isolates
+// trajectory drift only — pitch-axis drift is the separate Phase 1
+// sieve / pitch-axis assertion's job.
+let _glissSyncLastCheckMs = 0;
+const GLISS_SYNC_CHECK_INTERVAL_MS = 1000;
+
+// Replay just the latest chain (same voice + complex; gap ≤ GLISS_GAP_MS).
+// Mirrors the chain-grouping rule in buildGlissChains. Returns an array of
+// `{ evt }` shaped like buildGlissChains' chain.nodes so _buildGlissSegments
+// can consume it directly.
+function _findActiveGlissChain(voice, complex, nowMs) {
+  const evts = [];
+  for (const evt of finishedMidiNotes) {
+    if (evt.voice === voice && evt.complex === complex) evts.push(evt);
+  }
+  for (const queue of activeMidiNotes.values()) {
+    for (const evt of queue) {
+      if (evt.voice === voice && evt.complex === complex) evts.push(evt);
+    }
+  }
+  if (evts.length === 0) return null;
+  evts.sort((a, b) => a.onsetMs - b.onsetMs);
+  let start = 0;
+  for (let i = 1; i < evts.length; i++) {
+    // Primary: chainStart (live-entry classifier set at noteon receive
+    // time) — robust against voice steal where gap ≈ 0 ms. Fallback:
+    // GLISS_GAP_MS gap-magnitude (catches UDP reorders where the prior
+    // noteoff arrives after the new noteon and the live-entry check
+    // would have spuriously read "still active").
+    const prevOff = evts[i - 1].offsetMs ?? nowMs;
+    if (evts[i].chainStart || (evts[i].onsetMs - prevOff > GLISS_GAP_MS)) start = i;
+  }
+  const out = [];
+  for (let i = start; i < evts.length; i++) out.push({ evt: evts[i] });
+  return out;
+}
+
+function assertGlissSync(nowMs) {
+  if (nowMs - _glissSyncLastCheckMs < GLISS_SYNC_CHECK_INTERVAL_MS) return;
+  if (!rollCanvas) return;
+  // Find any active gliss line (mid-slide AND instant-snap states are
+  // both checked — the line and chain must agree at every gliss-active
+  // moment, not only when the line is interpolating).
+  let line = null;
+  for (const ln of lineNotes) {
+    if (ln.isGliss) { line = ln; break; }
+  }
+  if (!line) return;
+  _glissSyncLastCheckMs = nowMs;
+
+  const chainNodes = _findActiveGlissChain(line.voice, line.complex, nowMs);
+  if (!chainNodes || chainNodes.length === 0) return;
+  const segs = _buildGlissSegments(chainNodes);
+  if (segs.length === 0) return;
+
+  const linePitch  = _displayedPitch(line, nowMs);
+  const chainPitch = _glissPitchAt(nowMs, segs);
+  // Both pitches go through the SAME midiToY → drift is purely trajectory
+  // (segment-model) drift. Output in CSS px so the threshold matches the
+  // CLAUDE.md "≤1 px" wording (1 CSS px is what the eye sees regardless
+  // of dpr).
+  const lineY  = midiToY(linePitch,  rollCanvas.height) / rollDpr;
+  const chainY = midiToY(chainPitch, rollCanvas.height) / rollDpr;
+  const drift  = Math.abs(lineY - chainY);
+  if (drift > 1) {
+    console.error(
+      'GLISS SYNC FAIL voice=' + line.voice + ' complex=' + line.complex +
+      ' line=' + lineY.toFixed(2) + 'px chain=' + chainY.toFixed(2) + 'px' +
+      ' drift=' + drift.toFixed(2) + 'px linePitch=' + linePitch.toFixed(2) +
+      ' chainPitch=' + chainPitch.toFixed(2)
+    );
+  }
+}
+
+// Sieve-cell emanation glow + the COMPLEX_GLOW profile table moved to
+// ./js/sieve.js (Phase 2.4). startGlow / endGlow / clearAllGlows are
+// imported as aliases above so callsites in handleMidiEcho / panic
+// don't need renaming.
+
+// ---- Triangle leg lines (K → sieve cell, C → sieve cell) -------------------
+// For every active note, two white lines extend from the active K-vertex and
+// its nearest ghost C-vertex out to the left edge of the matching sieve cell.
+// Combined with the existing K↔C 3D line they form a triangle per note;
+// double-stops produce two triangles sharing the K↔C edge. The triangle
+// morphs in real-time:
+//   • K and C positions move as the cube rotates (gyro / view-offset)
+//   • Sieve endpoint moves as the active note's pitch changes
+//   • For C5/C6/C7 gliss: the endpoint smoothly interpolates between
+//     consecutive noteons over GLISS_INTERP_MS so the leg slides cell-to-
+//     cell at SWAM's portamento rate instead of jumping at the discrete
+//     MIDI rate
+//   • Lines are white at full alpha during sustain, fade with the same
+//     exp-release τ as the cell glow after noteoff (lifetime modes a + c
+//     unified — line stays full-bright while held, then decays in lockstep
+//     with the cell glow envelope)
+const lineOverlay = document.getElementById('line-overlay');
+const lineCtx = lineOverlay.getContext('2d');
+let lineDpr = 1;
+
+function resizeLineOverlay() {
+  lineDpr = Math.max(1, window.devicePixelRatio || 1);
+  const cssW = window.innerWidth;
+  const cssH = window.innerHeight;
+  lineOverlay.style.width  = cssW + 'px';
+  lineOverlay.style.height = cssH + 'px';
+  lineOverlay.width  = Math.round(cssW * lineDpr);
+  lineOverlay.height = Math.round(cssH * lineDpr);
+}
+
+// Per-note line state. Mirrors activeMidiNotes' lifecycle but is its own
+// array so we can keep drawing fade-out lines after noteoff (matching the
+// cell-glow release tail). Each entry carries the gliss interpolation
+// parameters so a single line can slide its endpoint between cells.
+const lineNotes = [];
+// PORTAMENTO_MS_PER_SEMITONE moved to ./js/constants.js (Phase 2.1).
+
+// Cubic smoothstep — the natural ease-in-out curve SWAM Cello's portamento
+// traces. Mirrored exactly by drawGlissChain's _glissEase so the white
+// triangle leg endpoint and the rolling-score chain plot the SAME Y at
+// the same time.
+function easeSlide(t) {
+  if (t <= 0) return 0;
+  if (t >= 1) return 1;
+  return t * t * (3 - 2 * t);
+}
+
+function predictGlissDuration(fromPitch, toPitch, complex) {
+  const interval = Math.abs(toPitch - fromPitch);
+  if (interval === 0) return 0;          // same-pitch retrigger → instant
+  const perSemi = PORTAMENTO_MS_PER_SEMITONE[complex] || 80;
+  return Math.min(2000, interval * perSemi);
+}
+
+// Compute the displayed pitch of an in-flight line at time `now`. Used by
+// startLine to pick the most-accurate fromPitch for a continuing gliss
+// (SWAM aborts in-progress slides when a new noteon arrives, retargeting
+// from wherever the audible pitch had reached — we mirror that visually).
+function _displayedPitch(ln, now) {
+  if (ln.animDurMs <= 0) return ln.toPitch;
+  const t = Math.min(1, Math.max(0, (now - ln.animStartMs) / ln.animDurMs));
+  return ln.fromPitch + (ln.toPitch - ln.fromPitch) * easeSlide(t);
+}
+
+// PIZZ_FADE_MIN_MS / PIZZ_FADE_MAX_MS moved to ./js/constants.js (Phase 2.1).
+
+// Find the live (sustaining) gliss line for this voice+complex, if any.
+// For gliss complexes, this presence/absence IS the slide-vs-leap
+// discriminator: a true slide's overlapping noteons mean the previous
+// line is still alive when the new noteon arrives; a leap or voice-steal
+// has already issued a clean noteoff, so the line was removed by endLine.
+// No auxiliary tracker needed.
+//
+// UNIFIED CLASSIFIER — the rolling-chain side runs the same live-entry
+// check at handleMidiEcho noteon time (storing `chainStart` on the
+// event); chain grouping breaks at chainStart=true. Both this function
+// and the chain-grouping pass therefore classify the SAME bridge MIDI
+// pattern using the SAME signal. If the bridge's LEAP_GAP_MS or
+// stealInstance behaviour ever changes such that "live entry at noteon
+// time" stops being a reliable slide-vs-leap signal, BOTH paths need a
+// coordinated review (search for `chainStart` to find the chain side).
+function _findGlissLine(voice, complex) {
+  for (let i = lineNotes.length - 1; i >= 0; i--) {
+    const ln = lineNotes[i];
+    if (ln.isGliss && ln.voice === voice && ln.complex === complex) return ln;
+  }
+  return null;
+}
+
+// True if any active MIDI note for (voice, complex) is currently sounding.
+// Called from endLine AFTER handleMidiEcho's queue.shift, so it reflects
+// the post-noteoff state — used to decide whether a gliss chain is over.
+function _glissStillSounding(voice, complex) {
+  for (const queue of activeMidiNotes.values()) {
+    for (const evt of queue) {
+      if (evt.voice === voice && evt.complex === complex) return true;
+    }
+  }
+  return false;
+}
+
+function startLine(voice, pitch, velocity, complex, key) {
+  const now = performance.now();
+
+  // === GLISS PATH ===
+  // ONE persistent lineNote per (voice, complex) for the lifetime of the
+  // gliss chain. Each new noteon either RETARGETS that line's slide
+  // (existing line found → it's an overlap = a true slide) or, if no live
+  // line exists, STARTS a fresh one with NO ramp time (no live line means
+  // either the chain's first noteon or a leap with a clean prior noteoff
+  // — both should snap to the new pitch instantly, since there's no
+  // audible portamento).
+  if (GLISS_COMPLEXES.has(complex)) {
+    const existing = _findGlissLine(voice, complex);
+    if (existing) {
+      // Slide — pitch handoff at the currently-displayed value (mirrors
+      // SWAM's portamento-engine retarget: it slides from wherever the
+      // audible pitch was at the moment the new noteon arrived).
+      const fromPitch = _displayedPitch(existing, now);
+      existing.fromPitch  = fromPitch;
+      existing.toPitch    = pitch;
+      existing.animStartMs = now;
+      existing.animDurMs   = predictGlissDuration(fromPitch, pitch, complex);
+    } else {
+      // Leap or chain-start — instant snap, no animation at all.
+      lineNotes.push({
+        isGliss: true,
+        voice, complex,
+        fromPitch: pitch, toPitch: pitch,
+        animStartMs: now, animDurMs: 0,
+        sustaining: true,
+        fadeMs: 0,
+        releaseStartMs: 0,
+      });
+    }
+    return;
+  }
+
+  // === NON-GLISS PATH ===
+  // One lineNote per MIDI noteon; pizz fade only on C1.
+  const v = Math.max(0, Math.min(127, +velocity || 0));
+  const fadeMs = (complex === 1)
+    ? PIZZ_FADE_MIN_MS + (PIZZ_FADE_MAX_MS - PIZZ_FADE_MIN_MS) * Math.min(1, v / 110)
+    : 0;
+  lineNotes.push({
+    isGliss: false,
+    voice, complex, key,
+    fromPitch: pitch, toPitch: pitch,
+    animStartMs: now, animDurMs: 0,
+    sustaining: true,
+    fadeMs,
+    releaseStartMs: 0,
+  });
+}
+
+function endLine(voice, pitch, complex, key) {
+  // === GLISS PATH ===
+  // Drop the persistent lineNote ONLY when the chain has truly ended
+  // (no more same-voice/same-complex notes sounding). A slide's overlap
+  // means one noteoff fires while another noteon is still active, but
+  // the line should keep tracking through the full chain.
+  if (GLISS_COMPLEXES.has(complex)) {
+    if (_glissStillSounding(voice, complex)) return;
+    for (let i = 0; i < lineNotes.length; i++) {
+      const ln = lineNotes[i];
+      if (ln.isGliss && ln.voice === voice && ln.complex === complex) {
+        lineNotes.splice(i, 1);
+        return;
+      }
+    }
+    return;
+  }
+
+  // === NON-GLISS PATH ===
+  // Per-noteon match by `key`. C1 fades; everything else snaps off.
+  for (let i = 0; i < lineNotes.length; i++) {
+    const ln = lineNotes[i];
+    if (!ln.isGliss && ln.key === key && ln.voice === voice && ln.sustaining) {
+      if (ln.fadeMs > 0) {
+        ln.sustaining = false;
+        ln.releaseStartMs = performance.now();
+      } else {
+        lineNotes.splice(i, 1);
+      }
+      return;
+    }
+  }
+}
+
+function clearAllLines() {
+  lineNotes.length = 0;
+}
+
+// Sieve cell position lookup for the white-line endpoints. Each call
+// goes through the sieve module's getSieveCellRect — which itself does
+// one getBoundingClientRect on a known cell. drawLineOverlay calls
+// this once per active gliss line per frame (typically 1-3 lines), so
+// the per-call layout cost is fine; no manual caching needed now that
+// the lookup is one cell rect, not 49.
+function sieveCellLeftEdgePos(pitch) {
+  const r = getSieveCellRect(pitch);
+  if (!r || r.height === 0) return null;
+  return { x: r.left, y: r.top + r.height / 2 };
+}
+
+const _projVec = new THREE.Vector3();
+function projectWorldToScreen(worldVec) {
+  _projVec.copy(worldVec).project(camera);   // NDC: each axis in [-1, 1]
+  return {
+    x: (_projVec.x * 0.5 + 0.5) * window.innerWidth,
+    y: (1 - (_projVec.y * 0.5 + 0.5)) * window.innerHeight,
+  };
+}
+
+const _kLineWorld = new THREE.Vector3();
+const _cLineWorld = new THREE.Vector3();
+const _cTmpWorld  = new THREE.Vector3();
+
+function drawLineOverlay() {
+  const w = lineOverlay.width;
+  const h = lineOverlay.height;
+  lineCtx.clearRect(0, 0, w, h);
+
+  if (lineNotes.length === 0) {
+    requestAnimationFrame(drawLineOverlay);
+    return;
+  }
+
+  // Project active K-vertex and the geometrically-nearest ghost C-vertex.
+  // Mirrors the kcLine logic in animateCube so the 3D K↔C line and the
+  // 2D K→sieve / C→sieve lines all converge at the same K and C points.
+  cubeGroup.updateMatrixWorld(true);
+  ghostGroup.updateMatrixWorld(true);
+  vertexMeshes[currentActiveK].getWorldPosition(_kLineWorld);
+  let bestDist2 = Infinity;
+  for (let c = 0; c < 8; c++) {
+    ghostVertMeshes[c].getWorldPosition(_cTmpWorld);
+    const d2 = _kLineWorld.distanceToSquared(_cTmpWorld);
+    if (d2 < bestDist2) {
+      bestDist2 = d2;
+      _cLineWorld.copy(_cTmpWorld);
+    }
+  }
+  const kScreen = projectWorldToScreen(_kLineWorld);
+  const cScreen = projectWorldToScreen(_cLineWorld);
+
+  const now = performance.now();
+  let toRemove = null;
+
+  lineCtx.lineWidth = 2.2 * lineDpr;
+  lineCtx.lineCap = 'round';
+  lineCtx.lineJoin = 'round';
+
+  for (let li = 0; li < lineNotes.length; li++) {
+    const ln = lineNotes[li];
+
+    // Pizz fade. Other complexes have fadeMs=0 so this branch is a no-op
+    // for them (they were already removed by endLine's splice).
+    let opacity = 1;
+    if (!ln.sustaining) {
+      const dt = now - ln.releaseStartMs;
+      if (dt >= ln.fadeMs) {
+        if (!toRemove) toRemove = [];
+        toRemove.push(li);
+        continue;
+      }
+      const fadeT = dt / ln.fadeMs;
+      opacity = 1 - fadeT * fadeT;            // ease-out quadratic decay
+    }
+
+    // Gliss interpolation with cubic-smoothstep easing — matches a
+    // cellist's physical slide curve (slow grip → mid acceleration →
+    // settle); duration from predictGlissDuration() so the leg's vertical
+    // position matches the audio's portamento at every frame.
+    let pitch = ln.toPitch;
+    if (ln.animDurMs > 0) {
+      const tRaw = (now - ln.animStartMs) / ln.animDurMs;
+      const tClamp = Math.min(1, Math.max(0, tRaw));
+      pitch = ln.fromPitch + (ln.toPitch - ln.fromPitch) * easeSlide(tClamp);
+    }
+
+    const cellPos = sieveCellLeftEdgePos(pitch);
+    if (!cellPos) continue;
+
+    const sx = cellPos.x * lineDpr;
+    const sy = cellPos.y * lineDpr;
+    const kx = kScreen.x * lineDpr, ky = kScreen.y * lineDpr;
+    const cx = cScreen.x * lineDpr, cy = cScreen.y * lineDpr;
+
+    lineCtx.strokeStyle = 'rgba(255, 255, 255, ' + opacity.toFixed(3) + ')';
+
+    // Triangle legs are always STRAIGHT — the curve the user wants lives in
+    // the rolling-score gliss chain (drawGlissChain), not here.
+    lineCtx.beginPath();
+    lineCtx.moveTo(kx, ky);
+    lineCtx.lineTo(sx, sy);
+    lineCtx.stroke();
+
+    lineCtx.beginPath();
+    lineCtx.moveTo(cx, cy);
+    lineCtx.lineTo(sx, sy);
+    lineCtx.stroke();
+  }
+
+  if (toRemove) {
+    for (let i = toRemove.length - 1; i >= 0; i--) {
+      lineNotes.splice(toRemove[i], 1);
+    }
+  }
+
+  requestAnimationFrame(drawLineOverlay);
+}
+resizeLineOverlay();
+requestAnimationFrame(drawLineOverlay);
+// ---- /Triangle leg lines ---------------------------------------------------
+
+function handleMidiEcho(data) {
+  if (!data || !data.kind) return;
+
+  if (data.kind === 'panic') {
+    activeMidiNotes.clear();
+    clearAllGlows();
+    clearAllLines();
+    return;
+  }
+
+  const key = `${data.voice}:${data.pitch}`;
+
+  if (data.kind === 'noteon') {
+    // Slide-vs-leap classifier (paired with the white-line's `_findGlissLine`).
+    // A true slide's overlapping noteons mean a previous same-(voice, complex)
+    // note is still alive when this noteon arrives; a leap or a voice-steal
+    // has already issued the noteoff so the queue is empty for this complex.
+    // Tag this noteon's `chainStart` so the rolling-chain grouping pass
+    // breaks here. Mirrors the white-line's "live entry" semantics exactly,
+    // eliminating the GLISS_GAP_MS heuristic's blind spot at sub-25 ms voice
+    // steals: the bridge's `stealInstance` emits noteoff(old) → noteon(new)
+    // synchronously (gap ≈ 0 ms), which the gap-only test misclassified as
+    // a slide and drew as a slant from old's last pitch to new's anchor —
+    // visible as "wrong direction" mid-phrase. GLISS_GAP_MS remains as a
+    // UDP-reorder fallback only.
+    const cmx = data.complex | 0;
+    let chainStart = false;
+    if (GLISS_COMPLEXES.has(cmx)) {
+      chainStart = true;
+      outer: for (const q of activeMidiNotes.values()) {
+        for (const e of q) {
+          if (e.voice === data.voice && e.complex === cmx) { chainStart = false; break outer; }
+        }
+      }
+      // Diagnostic — opt-in. Set `localStorage.xkDebugGliss = '1'` and
+      // reload to trace gliss noteon classification. Logs the live-entry
+      // check result + the active-queue keys at decision time so a
+      // wrongly-attributed slide (chainStart=false when audio leaped) is
+      // identifiable from the WS arrival pattern alone.
+      if (window.xkDebugGliss) {
+        const activeKeys = [...activeMidiNotes.keys()].join(',') || '(empty)';
+        console.log(
+          '[gliss noteon] voice=' + data.voice + ' pitch=' + data.pitch +
+          ' complex=C' + cmx + ' chainStart=' + chainStart +
+          ' activeKeys=[' + activeKeys + ']'
+        );
+      }
+    }
+    startGlow(data.pitch, data.velocity, cmx);
+    startLine(data.voice, data.pitch, data.velocity, cmx, key);
+    let queue = activeMidiNotes.get(key);
+    if (!queue) { queue = []; activeMidiNotes.set(key, queue); }
+    queue.push({
+      pitch:    data.pitch,
+      velocity: data.velocity,
+      voice:    data.voice,
+      complex:  cmx,
+      onsetMs:  performance.now(),
+      chainStart,
+    });
+    return;
+  }
+
+  if (data.kind === 'noteoff') {
+    const queue = activeMidiNotes.get(key);
+    if (!queue || queue.length === 0) return;  // stray noteoff (lost UDP noteon) — skip
+    const pending = queue.shift();             // FIFO — oldest noteon pairs first
+    if (queue.length === 0) activeMidiNotes.delete(key);
+    endGlow(pending.pitch);                    // start cell-glow release
+    endLine(pending.voice, pending.pitch, pending.complex, key);
+    finishedMidiNotes.push({
+      pitch:    pending.pitch,
+      velocity: pending.velocity,
+      voice:    pending.voice,
+      complex:  pending.complex,
+      onsetMs:  pending.onsetMs,
+      offsetMs: performance.now(),
+    });
+  }
+}
+
+// Watchdog: a stuck active note (UDP loss on the noteoff side, or relay
+// reconnect mid-phrase) would otherwise sustain forever on the canvas. After
+// PENDING_MAX_AGE_MS we force-finalise the queue's oldest entry so the
+// rectangle stops growing. Walks every per-key queue.
+setInterval(() => {
+  const now = performance.now();
+  for (const [key, queue] of activeMidiNotes) {
+    while (queue.length > 0 && now - queue[0].onsetMs > PENDING_MAX_AGE_MS) {
+      const pending = queue.shift();
+      endGlow(pending.pitch);                  // also release the cell glow
+      endLine(pending.voice, pending.pitch, pending.complex, key);
+      finishedMidiNotes.push({
+        pitch:    pending.pitch,
+        velocity: pending.velocity,
+        voice:    pending.voice,
+        complex:  pending.complex,
+        onsetMs:  pending.onsetMs,
+        offsetMs: now,
+      });
+    }
+    if (queue.length === 0) activeMidiNotes.delete(key);
+  }
+}, 5000);
+
+if (document.readyState === 'loading') {
+  document.addEventListener('DOMContentLoaded', initRollingScore);
+} else {
+  initRollingScore();
+}
+
+// Tilt and spin are derived from gyro quaternion client-side
+// (faster than waiting for relay to compute + broadcast at 60Hz)
+let prevGyroQuat = [0, 0, 0, 1];
+let prevGyroTime = 0;
+
+function computeLocalExpression(gyro) {
+  if (!gyro) return;
+  const [x, y, z, w] = gyro;
+  const now = performance.now();
+
+  // Tilt (pitch angle from quaternion)
+  const sinP = 2 * (w * x - y * z);
+  const pitch = Math.asin(Math.max(-1, Math.min(1, sinP)));
+  const tilt = (pitch + Math.PI / 2) / Math.PI;
+
+  document.getElementById('expr-tilt').textContent = tilt.toFixed(2);
+  document.getElementById('expr-tilt-bar').style.width = (tilt * 100) + '%';
+
+  // Spin (angular velocity)
+  const dt = (now - prevGyroTime) / 1000;
+  if (dt > 0 && dt < 1 && prevGyroTime > 0) {
+    const dot = Math.abs(prevGyroQuat[0]*x + prevGyroQuat[1]*y + prevGyroQuat[2]*z + prevGyroQuat[3]*w);
+    const angle = 2 * Math.acos(Math.min(1, dot));
+    const angularVel = angle / dt;
+    const spin = Math.min(1, angularVel / 6);
+    document.getElementById('expr-spin').textContent = spin.toFixed(2);
+    document.getElementById('expr-spin-bar').style.width = (spin * 100) + '%';
+  }
+
+  prevGyroQuat = [x, y, z, w];
+  prevGyroTime = now;
+}
+
+// ============================================================
+// WebSocket — receives state broadcasts from relay
+// ============================================================
+
+// ws status indicators were removed from the UI; stub out the refs so the
+// existing open/close handlers don't need to branch.
+const dot = { classList: { add() {}, remove() {} } };
+const wsStatusEl = { set textContent(_v) {} };
+let gyroThrottleFrame = null;
+let pendingGyroState = null;
+
+// Phase 2.3 — WebSocket transport extracted to ./js/transport.js. The
+// transport owns the connection + reconnect loop and emits typed events;
+// the wiring below subscribes each event to the dashboard's local
+// handlers. `wsSend` is the same name re-exported as a thin alias so
+// the rest of dashboard.html (numerous callsites: BLE move forwarding,
+// mode toggles, diagram selection, panic, gyro zero) doesn't have to
+// rename anything.
+const wsSend = transportSend;
+
+transportOn('open', () => {
+  dot.classList.add('connected');
+  wsStatusEl.textContent = 'connected';
+  wsSend({ type: 'get_diagrams' });
+});
+transportOn('close', () => {
+  dot.classList.remove('connected');
+  wsStatusEl.textContent = 'reconnecting...';
+});
+transportOn('state', (data, move) => {
+  updateState(data, move);
+  updateV2State(data, move);
+  // computeLocalExpression runs off gyro_tick only (see that handler).
+});
+transportOn('gyroState', (data) => {
+  pendingGyroState = data;
+  if (!gyroThrottleFrame) {
+    gyroThrottleFrame = requestAnimationFrame(() => {
+      if (pendingGyroState) {
+        updateState(pendingGyroState, null);
+        updateV2State(pendingGyroState, null);
+        pendingGyroState = null;
+      }
+      gyroThrottleFrame = null;
+    });
+  }
+});
+transportOn('gyroTick', (data, dev) => {
+  // 60 Hz lightweight pose update from relay's Kalman loop. Skip full
+  // state recompute — only refresh gyro-driven visuals.
+  const [x, y, z, w] = data;
+  currentGyro.set(-x, z, y, w);
+  hasGyro = true;
+  if (autoZeroPending) {
+    gyroZeroInv.copy(currentGyro).invert();
+    autoZeroPending = false;
+    // Mirror the zero to the relay so the engine's snap cells centre on
+    // this rest pose too — otherwise snap thresholds are anchored in the
+    // raw sensor frame and feel asymmetric after auto-zero.
+    wsSend({ type: 'zero_gyro' });
+  }
+  if (typeof dev === 'number') {
+    const devEl  = document.getElementById('expr-dev');
+    const devBar = document.getElementById('expr-dev-bar');
+    if (devEl)  devEl.textContent = dev.toFixed(2);
+    if (devBar) devBar.style.width = (dev * 100) + '%';
+  }
+  computeLocalExpression(data);
+});
+transportOn('diagrams',  populateDiagramSelect);
+transportOn('algorithm',     handleAlgorithmEvent);
+transportOn('algorithmBook', (data) => { algorithmBook = data; });
+transportOn('solve',     handleSolveEvent);
+transportOn('midiEcho',  handleMidiEcho);
+// Note: the engine's `voice` WS message still fires on every turn
+// (powers any listener that wants the archetypal gesture shape), but
+// the notation strip no longer consumes it — Phase E tier 2 reads the
+// MIDI echo instead so the staff reflects exactly what SWAM plays,
+// not what the engine dispatched.
+
+transportConnect();
+
+// ============================================================
+// Sequence Control Handlers
+// ============================================================
+
+const diagramSelect = document.getElementById('diagram-select');
+const pathSelect = document.getElementById('path-select');
+const cmodeSelect = document.getElementById('cmode-select');
+const resetBtn = document.getElementById('resetBtn');
+
+function populateDiagramSelect(diagrams) {
+  // Keep the "direct" option, add diagram options
+  while (diagramSelect.options.length > 1) diagramSelect.remove(1);
+  for (const d of diagrams) {
+    const opt = document.createElement('option');
+    opt.value = d.name;
+    opt.textContent = `${d.name} (${d.path.length} steps)`;
+    diagramSelect.appendChild(opt);
+  }
+}
+
+diagramSelect.addEventListener('change', () => {
+  const name = diagramSelect.value;
+  if (name) {
+    wsSend({ type: 'set_diagram', name });
+  } else {
+    wsSend({ type: 'clear_diagram' });
+  }
+});
+
+pathSelect.addEventListener('change', () => {
+  wsSend({ type: 'set_mode', path: pathSelect.value });
+});
+
+// Visible path toggle in the State panel. Click flips V1 ↔ V2 via the same
+// WS message the hidden pathSelect uses. State updates mirror the new value
+// back into #s-path and pathSelect in updateState() so the engine is the
+// source of truth — no cube algorithm auto-toggles path (sexy-move's V toggle
+// was removed 2026-04-30).
+document.getElementById('s-path').addEventListener('click', () => {
+  const cur = document.getElementById('s-path').textContent.trim();
+  const next = cur === 'V2' ? 'V1' : 'V2';
+  wsSend({ type: 'set_mode', path: next });
+});
+
+cmodeSelect.addEventListener('change', () => {
+  wsSend({ type: 'set_mode', cCube: cmodeSelect.value });
+});
+
+resetBtn.addEventListener('click', () => {
+  wsSend({ type: 'reset' });
+});
+document.getElementById('resetBtnVisible')?.addEventListener('click', async () => {
+  // Tell the cube itself "you are now solved" so its internal facelet
+  // report re-anchors to reality. Same action as GAN CubeStation's reset.
+  // Without this, the FACELETS stream can stay out of phase with the
+  // physical cube (e.g. if the cube was moved while disconnected).
+  if (activeCube) {
+    try {
+      await activeCube.sendCubeCommand({ type: 'REQUEST_RESET' });
+      lastSolvedReport = true;
+      setSolvedBadge(true, false);
+    } catch (e) {
+      console.warn('Cube REQUEST_RESET failed:', e);
+    }
+  }
+  wsSend({ type: 'reset' });
+});
+
+const gyroSmoothSlider = document.getElementById('gyroSmoothing');
+const gyroSmoothVal = document.getElementById('gyroSmoothVal');
+gyroSmoothSlider.addEventListener('input', () => {
+  const val = parseFloat(gyroSmoothSlider.value);
+  gyroSmoothVal.textContent = val.toFixed(2);
+  wsSend({ type: 'set_gyro_smoothing', value: val });
+});
+
+// Rolling-score scroll speed (CSS px / sec). Drives ROLL_PX_PER_SEC.
+// Persisted in localStorage. Lower = slower scroll = more history visible
+// (notes are wider per ms); higher = faster scroll = sharper temporal feel.
+const scoreSpeedSlider = document.getElementById('scoreSpeed');
+const scoreSpeedValEl  = document.getElementById('scoreSpeedVal');
+function applyScoreSpeed(val) {
+  ROLL_PX_PER_SEC = val;
+  scoreSpeedValEl.textContent = String(val | 0);
+}
+const savedScoreSpeed = parseFloat(localStorage.getItem('scoreSpeed'));
+if (isFinite(savedScoreSpeed) && savedScoreSpeed >= 60 && savedScoreSpeed <= 900) {
+  scoreSpeedSlider.value = String(savedScoreSpeed | 0);
+  applyScoreSpeed(savedScoreSpeed);
+}
+scoreSpeedSlider.addEventListener('input', () => {
+  const val = parseFloat(scoreSpeedSlider.value);
+  applyScoreSpeed(val);
+  localStorage.setItem('scoreSpeed', String(val));
+});
+
+// Ghost cube size — uniform scale around origin (cube's center), so the
+// ghost can read as "inside" the live cube (<1) or "surrounding" it (>1).
+// Persisted in localStorage so the user's chosen size survives reloads.
+const ghostSizeSlider = document.getElementById('ghostSize');
+const ghostSizeValEl = document.getElementById('ghostSizeVal');
+function applyGhostSize(val) {
+  ghostGroup.scale.setScalar(val);
+  ghostSizeValEl.textContent = val.toFixed(2);
+}
+const savedGhostSize = parseFloat(localStorage.getItem('ghostSize'));
+if (isFinite(savedGhostSize) && savedGhostSize >= 0.2 && savedGhostSize <= 2.5) {
+  ghostSizeSlider.value = savedGhostSize.toFixed(2);
+  applyGhostSize(savedGhostSize);
+} else {
+  applyGhostSize(1.0);
+}
+ghostSizeSlider.addEventListener('input', () => {
+  const val = parseFloat(ghostSizeSlider.value);
+  applyGhostSize(val);
+  localStorage.setItem('ghostSize', val.toFixed(2));
+});
+
+// ============================================================
+// Cube BLE Connection (Web Bluetooth)
+// ============================================================
+
+// #cube-status span was removed; stub so existing assignments don't crash.
+const cubeStatus = { set textContent(_v) {}, set className(_v) {} };
+const connectBtn = document.getElementById('connectBtn');
+const macInput = document.getElementById('macAddress');
+
+// Canonical solved facelets (Kociemba notation: U9 R9 F9 D9 L9 B9).
+const SOLVED_FACELETS = 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB';
+// Module-scope handle so the Reset button can reach the connected cube.
+let activeCube = null;
+let lastSolvedReport = true; // assume connect-time cube is solved
+
+if (localStorage.getItem('ganMacAddress')) {
+  macInput.value = localStorage.getItem('ganMacAddress');
+}
+
+connectBtn.addEventListener('click', async () => {
+  const macAddress = macInput.value.trim().toUpperCase();
+  const macRegex = /^([0-9A-F]{2}[:-]){5}([0-9A-F]{2})$/;
+  if (!macRegex.test(macAddress)) {
+    cubeStatus.textContent = 'invalid MAC';
+    cubeStatus.className = 'err';
+    return;
+  }
+
+  localStorage.setItem('ganMacAddress', macAddress);
+  cubeStatus.textContent = 'select cube in popup...';
+  cubeStatus.className = '';
+  connectBtn.disabled = true;
+
+  try {
+    const cube = await connectGanCube(async (device, isFallbackCall) => {
+      return macAddress;
+    });
+    activeCube = cube;
+
+    cubeStatus.textContent = 'connected';
+    cubeStatus.className = 'ok';
+    connectBtn.textContent = 'Connected';
+    connectBtn.classList.add('connected');
+    connectBtn.disabled = true;
+    applyCubeConnectView();
+
+    // The GAN library emits FACELETS events with `event.facelets` on every
+    // move — the authoritative physical cube state, no client-side tracker.
+    cube.events$.subscribe((event) => {
+      if (event.type === 'MOVE') {
+        wsSend({ type: 'move', value: event.move });
+      } else if (event.type === 'FACELETS') {
+        const solved = event.facelets === SOLVED_FACELETS;
+        if (solved && !lastSolvedReport) {
+          // Edge fires only through the relay → WS solve message → handleSolveEvent,
+          // so the pulse stays in sync with the OSC /xk/solve emit.
+          wsSend({ type: 'cube_solved' });
+        } else if (!solved && lastSolvedReport) {
+          // Unsolved edge — dim badge immediately, no relay round-trip needed.
+          setSolvedBadge(false, false);
+        }
+        lastSolvedReport = solved;
+      } else if (event.type === 'GYRO' || event.type === 'GYROSCOPE' || event.gyro) {
+        wsSend({ type: 'gyro', data: event.gyro || event });
+      } else if (event.type === 'DISCONNECT') {
+        activeCube = null;
+        cubeStatus.textContent = 'disconnected';
+        cubeStatus.className = 'err';
+        connectBtn.textContent = 'Connect';
+        connectBtn.classList.remove('connected');
+        connectBtn.disabled = false;
+        revertCubeConnectView();
+      }
+    });
+
+  } catch (err) {
+    console.error('Cube connect error:', err);
+    cubeStatus.textContent = 'failed: ' + err.message;
+    cubeStatus.className = 'err';
+    connectBtn.disabled = false;
+  }
+});
+</script>
+</body>
+</html>

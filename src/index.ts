@@ -1,6 +1,6 @@
 // XenaKube Engine — public API
-export { XenaKubeEngine, type StateListener, type SpellListener, type VoiceListener, type SolveListener } from './engine.js';
-export { stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, type OscMessage } from './osc-output.js';
+export { XenaKubeEngine, type StateListener, type CubeAlgorithmListener, type VoiceListener, type SolveListener } from './engine.js';
+export { stateToOsc, expressionToOsc, algorithmToOsc, voiceToOsc, solveToOsc, type OscMessage } from './osc-output.js';
 export { OSC, vertexAddr, complexAddr, ALL_XK_ADDRESSES, MIDI_ECHO_PORT } from './osc-schema.js';
 export {
   HARMONICS, TREMOLO, BOW_POLY,
@@ -27,7 +27,15 @@ export {
   type Sieve, type SieveFunction,
 } from './sieve.js';
 export { snapToNearest, getQuaternion, distanceToNearest, deviationFactor, quatNormalize } from './quaternion.js';
-export { SpellDetector, SPELL_BOOK, CANONICAL_SPELLS, expandSpellBook, type Spell, type SpellEffect, type SpellMatch } from './spells.js';
+export {
+  CubeAlgorithmDetector,
+  CUBE_ALGORITHM_BOOK,
+  CANONICAL_CUBE_ALGORITHMS,
+  expandCubeAlgorithmBook,
+  type CubeAlgorithm,
+  type CubeAlgorithmEffect,
+  type CubeAlgorithmMatch,
+} from './cube-algorithm.js';
 export { scrambleDistance, scrambleFactor, getAllDistances, MAX_DISTANCE } from './scramble.js';
 export { VoiceEngine, type VoiceMode, type VoiceEvent, type VoiceOutput } from './voice-engine.js';
 export { ExpressionProcessor, type ExpressionState } from './expression.js';

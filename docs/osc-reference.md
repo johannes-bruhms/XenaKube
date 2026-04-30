@@ -2,7 +2,7 @@
 
 Authoritative table of every `/xk/*`, `/gan/*`, and `/xk/midi/*` address.
 
-`/xk/*` → Max (57121). `/gan/*` → TD (8000). `/xk/midi/*` ← Max → relay (57122, reverse direction — Max bridge echoes every SWAM noteon/noteoff to the dashboard's rolling score). Multi-message state burst on every cube turn and at BLE gyro rate (~10 Hz). `/xk/gyro`, `/gan/gyro`, `/xk/expr/*` at 60 Hz from the relay's Kalman loop. `/xk/voice` fires only on real voice transitions (from `engine.onVoice`, not per gyro packet). `/xk/spell` on algorithm detection. Full `XenaKubeState` JSON broadcasts to all WS clients on every state change.
+`/xk/*` → Max (57121). `/gan/*` → TD (8000). `/xk/midi/*` ← Max → relay (57122, reverse direction — Max bridge echoes every SWAM noteon/noteoff to the dashboard's rolling score). Multi-message state burst on every cube turn and at BLE gyro rate (~10 Hz). `/xk/gyro`, `/gan/gyro`, `/xk/expr/*` at 60 Hz from the relay's Kalman loop. `/xk/voice` fires only on real voice transitions (from `engine.onVoice`, not per gyro packet). `/xk/algorithm` on cube-algorithm detection. Full `XenaKubeState` JSON broadcasts to all WS clients on every state change.
 
 `/xk/voice`'s `vertexIdx` is the cube vertex (1–8); `/xk/midi/{noteon,noteoff}`'s `voice` is the SWAM polyphony slot (always 1 in single-instance mode). Different concepts.
 
@@ -30,7 +30,7 @@ Authoritative table of every `/xk/*`, `/gan/*`, and `/xk/midi/*` address.
 | `/xk/rate` | float | turn rate (turns/sec) |
 | `/xk/regime` | string | 'contemplative' / 'conversational' / 'burst' |
 | `/xk/expr/{tilt,spin,dev,scramble}` | float (0-1) | 60 Hz continuous controls |
-| `/xk/spell` | string | spell name on detection |
+| `/xk/algorithm` | string | cube-algorithm name on detection (e.g. "sexy-move", "sune", "t-perm") |
 | `/xk/face` | string | face identity ('L'/'L\''/'R'/'R\''/'F'/'F\''/'B'/'B\''/'U'/'U\''/'D'/'D\''); fires BEFORE `/xk/voice` for the 12 face-moves; non-face moves (half-turns, diagram advance) skip it |
 | `/xk/voice` | int, int, float, string, float | vertexIdx, complexType, density, intensity, duration |
 | `/xk/panic` | — | relay WS-disconnect; bridges flush notes + CCs |

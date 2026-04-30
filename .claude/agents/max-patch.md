@@ -15,7 +15,7 @@ The SWAM bridge is intentionally minimal (see `CLAUDE.md` → "Max/MSP — SWAM 
                                                   |1→ [print xk_swam]
 ```
 
-All routing, phrase generation, keyswitches, CC mapping, and spell reactions live in `max/xk_swam.js`. The patch itself should stay thin — **prefer editing `xk_swam.js` over adding Max objects** when logic can live in JS.
+All routing, phrase generation, keyswitches, CC mapping, and cube-algorithm reactions live in `max/xk_swam.js`. The patch itself should stay thin — **prefer editing `xk_swam.js` over adding Max objects** when logic can live in JS.
 
 ## Workflow rules
 

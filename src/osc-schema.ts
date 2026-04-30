@@ -46,7 +46,7 @@ export const OSC = {
   EXPR_SCRAMBLE: '/xk/expr/scramble',   // f:0..1
 
   // ── events ───────────────────────────────────────────────────
-  SPELL:         '/xk/spell',           // s:spellName
+  ALGORITHM:     '/xk/algorithm',       // s:algorithmName (Rubik's cube algorithm match)
   FACE:          '/xk/face',            // s:"L"|"L'"|"R"|"R'"|"F"|"F'"|"B"|"B'"|"U"|"U'"|"D"|"D'"
   VOICE:         '/xk/voice',           // i:vertexIdx, i:complexType, f:density, s:intensity, f:duration
   PANIC:         '/xk/panic',           // (no args) — relay WS disconnect

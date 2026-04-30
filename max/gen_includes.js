@@ -30,7 +30,7 @@ var OSC = {
   EXPR_SPIN: "/xk/expr/spin",
   EXPR_DEV: "/xk/expr/dev",
   EXPR_SCRAMBLE: "/xk/expr/scramble",
-  SPELL: "/xk/spell",
+  ALGORITHM: "/xk/algorithm",
   FACE: "/xk/face",
   VOICE: "/xk/voice",
   PANIC: "/xk/panic",

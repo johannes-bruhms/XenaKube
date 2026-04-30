@@ -18,27 +18,27 @@
 let ws = null;
 
 // Event handler registry. One array per event name.
-//   open       — WS connection established (no args).
-//   close      — WS closed; transport will auto-reconnect (no args).
-//   state      — `{ type: 'state', data, move }` from the engine. (data, move).
-//   gyroState  — `{ type: 'gyro_state', data }` BLE-rate full state burst. (data).
-//   gyroTick   — `{ type: 'gyro_tick', data, dev }` 60 Hz Kalman pose. (data, dev).
-//   diagrams   — diagram-list response from `get_diagrams`. (data).
-//   spell      — `{ type: 'spell', data }` algorithm match. (data).
-//   spellBook  — `{ type: 'spell_book', data }` initial book download. (data).
-//   solve      — `{ type: 'solve' }` cube returned to identity. (no args).
-//   midiEcho   — `{ type: 'midi_echo', data }` from Max/SWAM. (data).
+//   open           — WS connection established (no args).
+//   close          — WS closed; transport will auto-reconnect (no args).
+//   state          — `{ type: 'state', data, move }` from the engine. (data, move).
+//   gyroState      — `{ type: 'gyro_state', data }` BLE-rate full state burst. (data).
+//   gyroTick       — `{ type: 'gyro_tick', data, dev }` 60 Hz Kalman pose. (data, dev).
+//   diagrams       — diagram-list response from `get_diagrams`. (data).
+//   algorithm      — `{ type: 'algorithm', data }` cube algorithm match. (data).
+//   algorithmBook  — `{ type: 'algorithm_book', data }` initial book download. (data).
+//   solve          — `{ type: 'solve' }` cube returned to identity. (no args).
+//   midiEcho       — `{ type: 'midi_echo', data }` from Max/SWAM. (data).
 const handlers = {
-  open:      [],
-  close:     [],
-  state:     [],
-  gyroState: [],
-  gyroTick:  [],
-  diagrams:  [],
-  spell:     [],
-  spellBook: [],
-  solve:     [],
-  midiEcho:  [],
+  open:          [],
+  close:         [],
+  state:         [],
+  gyroState:     [],
+  gyroTick:      [],
+  diagrams:      [],
+  algorithm:     [],
+  algorithmBook: [],
+  solve:         [],
+  midiEcho:      [],
 };
 
 function emit(name, ...args) {
@@ -81,14 +81,14 @@ export function connect() {
     try {
       const msg = JSON.parse(evt.data);
       switch (msg.type) {
-        case 'state':      emit('state', msg.data, msg.move); break;
-        case 'gyro_state': emit('gyroState', msg.data);       break;
-        case 'gyro_tick':  emit('gyroTick',  msg.data, msg.dev); break;
-        case 'diagrams':   emit('diagrams',  msg.data);       break;
-        case 'spell':      emit('spell',     msg.data);       break;
-        case 'spell_book': emit('spellBook', msg.data);       break;
-        case 'solve':      emit('solve');                     break;
-        case 'midi_echo':  emit('midiEcho',  msg.data);       break;
+        case 'state':           emit('state', msg.data, msg.move);    break;
+        case 'gyro_state':      emit('gyroState', msg.data);          break;
+        case 'gyro_tick':       emit('gyroTick',  msg.data, msg.dev); break;
+        case 'diagrams':        emit('diagrams',  msg.data);          break;
+        case 'algorithm':       emit('algorithm', msg.data);          break;
+        case 'algorithm_book':  emit('algorithmBook', msg.data);      break;
+        case 'solve':           emit('solve');                        break;
+        case 'midi_echo':       emit('midiEcho',  msg.data);          break;
       }
     } catch (e) {
       console.error('[transport] parse error:', e);

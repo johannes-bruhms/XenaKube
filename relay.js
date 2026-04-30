@@ -6,7 +6,7 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { XenaKubeEngine, stateToOsc, expressionToOsc, spellToOsc, voiceToOsc, solveToOsc, getBuiltinDiagrams, OSC, MIDI_ECHO_PORT } = require('./src/index.ts');
+const { XenaKubeEngine, stateToOsc, expressionToOsc, algorithmToOsc, voiceToOsc, solveToOsc, getBuiltinDiagrams, OSC, MIDI_ECHO_PORT } = require('./src/index.ts');
 
 /*
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
@@ -303,11 +303,11 @@ engine.onState((state) => {
     ...state,
     voiceMode: engine.voiceEngine.mode,
     performanceMode: engine.modeManager.getMode(),
-    spellBuffer: engine.spellDetector.getBuffer(),
-    spellPartials: engine.spellDetector.getPartialMatches().map(p => ({
-      name: p.spell.name,
+    algorithmBuffer: engine.algorithmDetector.getBuffer(),
+    algorithmPartials: engine.algorithmDetector.getPartialMatches().map(p => ({
+      name: p.algorithm.name,
       matched: p.matched,
-      total: p.spell.algorithm.length,
+      total: p.algorithm.moves.length,
     })),
   };
 
@@ -315,18 +315,18 @@ engine.onState((state) => {
   lastMove = null;
 });
 
-// Broadcast spell events
-engine.onSpell((match) => {
-  // OSC spell message to Max
-  const spellMsg = spellToOsc(match);
-  oscMax.send(spellMsg.address, ...spellMsg.args);
+// Broadcast cube algorithm events
+engine.onAlgorithm((match) => {
+  // OSC algorithm message to Max
+  const algMsg = algorithmToOsc(match);
+  oscMax.send(algMsg.address, ...algMsg.args);
 
   const payload = JSON.stringify({
-    type: 'spell',
+    type: 'algorithm',
     data: {
-      name: match.spell.name,
-      effect: match.spell.effect,
-      algorithm: match.spell.algorithm,
+      name: match.algorithm.name,
+      effect: match.algorithm.effect,
+      moves: match.algorithm.moves,
       timestamp: match.timestamp,
     },
   });
@@ -335,7 +335,7 @@ engine.onSpell((match) => {
       client.send(payload);
     }
   });
-  console.log(`[SPELL] ${match.spell.name} (${match.spell.algorithm.join(' ')})`);
+  console.log(`[ALGORITHM] ${match.algorithm.name} (${match.algorithm.moves.join(' ')})`);
 });
 
 // Broadcast cube-solved edge — fires once per unsolved→solved transition.
@@ -546,13 +546,13 @@ wss.on('connection', function connection(ws) {
       console.log("Shutdown cancelled — client reconnected.");
     }
 
-    // Send canonical spell book on connect (unique names, not all rotation variants)
+    // Send canonical cube-algorithm book on connect (unique names, not all rotation variants)
     ws.send(JSON.stringify({
-      type: 'spell_book',
-      data: engine.spellDetector.getCanonicalSpells().map(s => ({
-        name: s.name,
-        algorithm: s.algorithm,
-        effect: s.effect,
+      type: 'algorithm_book',
+      data: engine.algorithmDetector.getCanonicalAlgorithms().map(a => ({
+        name: a.name,
+        moves: a.moves,
+        effect: a.effect,
       })),
     }));
 

@@ -1,0 +1,121 @@
+{
+    "patcher": {
+        "fileversion": 1,
+        "appversion": {
+            "major": 9,
+            "minor": 1,
+            "revision": 4,
+            "architecture": "x64",
+            "modernui": 1
+        },
+        "classnamespace": "dsp.gen",
+        "rect": [ 34.0, 77.0, 2492.0, 1289.0 ],
+        "boxes": [
+            {
+                "box": {
+                    "id": "obj-8",
+                    "linecount": 31,
+                    "maxclass": "comment",
+                    "numinlets": 1,
+                    "numoutlets": 0,
+                    "patching_rect": [ 490.0, 38.0, 202.0, 434.0 ],
+                    "presentation_linecount": 32,
+                    "text": "Subtle Erosion-ish sand:\nmode 0\nfreq 7000\nwidth_hz 1500\nbase_samps 1\ndepth_samps 0.75\nwet 0.35\n\nStereo digital fuzz:\nmode 1\nfreq 9000\nwidth_hz 5000\nbase_samps 1\ndepth_samps 3\nwet 0.7\n\nMetallic sine erosion:\nmode 2\nfreq 3000\nbase_samps 1\ndepth_samps 2\nwet 0.6\n\nHarsh broken-digital texture:\nmode 1\nfreq 5000\nwidth_hz 9000\nbase_samps 1\ndepth_samps 10\nwet 1\nlevel 0.6"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-7",
+                    "linecount": 10,
+                    "maxclass": "comment",
+                    "numinlets": 1,
+                    "numoutlets": 0,
+                    "patching_rect": [ 339.0, 38.0, 149.0, 144.0 ],
+                    "text": "mode 0        // Noise\nmode 1        // Wide Noise\nmode 2        // Sine\n\nfreq 8000\nwidth_hz 3000\nbase_samps 1.5\ndepth_samps 4\nwet 1\nlevel 0.8"
+                }
+            },
+            {
+                "box": {
+                    "code": "Param mode(0);          // 0 = Noise, 1 = Wide Noise, 2 = Sine\r\nParam freq(6000);       // sine freq or noise band center, Hz\r\nParam width_hz(2000);   // noise bandwidth-ish, Hz\r\nParam base_samps(1.5);  // base delay in samples\r\nParam depth_samps(2);   // modulation depth in samples\r\nParam wet(1);           // 0 = dry, 1 = fully wet\r\nParam level(1);         // output trim\r\n\r\nDelay dL(48000, interp=\"linear\");\r\nDelay dR(48000, interp=\"linear\");\r\n\r\nHistory ph(0);\r\n\r\nHistory lowM(0);\r\nHistory bandM(0);\r\n\r\nHistory lowR(0);\r\nHistory bandR(0);\r\n\r\nsr = samplerate;\r\n\r\ncf = clamp(freq, 20, sr * 0.45);\r\nbw = clamp(width_hz, 20, sr * 0.45);\r\n\r\n// Simple state-variable bandpass coefficient.\r\n// Not a perfect Ableton clone, but good for Erosion-like noise coloration.\r\nfcoef = clamp(2 * sin(3.141592653589793 * cf / sr), 0.0001, 0.98);\r\ndamp = clamp(bw / max(cf, 1), 0.02, 1.8);\r\n\r\n// Mono filtered noise modulator.\r\nnM = noise();\r\n\r\nlowM = lowM + fcoef * bandM;\r\nhighM = nM - lowM - damp * bandM;\r\nbandM = bandM + fcoef * highM;\r\n\r\nmNoise = tanh(bandM * 3);\r\n\r\n// Separate right-channel filtered noise for Wide Noise mode.\r\nnR = noise();\r\n\r\nlowR = lowR + fcoef * bandR;\r\nhighR = nR - lowR - damp * bandR;\r\nbandR = bandR + fcoef * highR;\r\n\r\nmNoiseR = tanh(bandR * 3);\r\n\r\n// Sine modulator.\r\nph = wrap(ph + cf / sr, 0, 1);\r\nmSine = sin(ph * 6.283185307179586);\r\n\r\n// Mode selection.\r\nmL = mNoise;\r\nmR = mNoise;\r\n\r\nif (mode >= 1) {\r\n    mR = mNoiseR;\r\n}\r\n\r\nif (mode >= 2) {\r\n    mL = mSine;\r\n    mR = mSine;\r\n}\r\n\r\n// Convert bipolar modulator to positive delay time.\r\n// Range is roughly base_samps to base_samps + depth_samps.\r\ndtL = clamp(base_samps + depth_samps * (0.5 + 0.5 * mL), 0.25, 48000);\r\ndtR = clamp(base_samps + depth_samps * (0.5 + 0.5 * mR), 0.25, 48000);\r\n\r\n// Read before write.\r\nwetL = dL.read(dtL, interp=\"linear\");\r\nwetR = dR.read(dtR, interp=\"linear\");\r\n\r\ndL.write(in1);\r\ndR.write(in2);\r\n\r\nw = clamp(wet, 0, 1);\r\n\r\nout1 = level * ((1 - w) * in1 + w * wetL);\r\nout2 = level * ((1 - w) * in2 + w * wetR);",
+                    "fontface": 0,
+                    "fontname": "<Monospaced>",
+                    "fontsize": 12.0,
+                    "id": "obj-6",
+                    "maxclass": "codebox",
+                    "numinlets": 2,
+                    "numoutlets": 2,
+                    "outlettype": [ "", "" ],
+                    "patching_rect": [ 50.0, 38.0, 264.1176580786705, 277.64707040786743 ]
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-5",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 0,
+                    "patching_rect": [ 87.05882507562637, 317.41177636384964, 35.0, 22.0 ],
+                    "text": "out 2"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-1",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 50.0, 14.0, 28.0, 22.0 ],
+                    "text": "in 1"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-2",
+                    "maxclass": "newobj",
+                    "numinlets": 0,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "patching_rect": [ 80.0, 14.0, 28.0, 22.0 ],
+                    "text": "in 2"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-4",
+                    "maxclass": "newobj",
+                    "numinlets": 1,
+                    "numoutlets": 0,
+                    "patching_rect": [ 50.0, 317.41177636384964, 35.0, 22.0 ],
+                    "text": "out 1"
+                }
+            }
+        ],
+        "lines": [
+            {
+                "patchline": {
+                    "destination": [ "obj-6", 0 ],
+                    "source": [ "obj-1", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-6", 1 ],
+                    "source": [ "obj-2", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-4", 0 ],
+                    "source": [ "obj-6", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-5", 0 ],
+                    "source": [ "obj-6", 1 ]
+                }
+            }
+        ]
+    }
+}
