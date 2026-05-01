@@ -52,22 +52,63 @@ const CUBE_EDGES = [
 const TETRA_A = [0, 2, 5, 7];
 const TETRA_B = [1, 3, 4, 6];
 
-// Ghost-cube dot palette. Cool-spectrum hue sweep from cyan → violet → pink
-// so each C-identity has a distinct dot color while staying in the ghost's
-// "cool landmark" aesthetic. Ghost wireframe stays 0x00ccff (edges are
-// structure, dots are identity). Paired dim colours for the abbreviation
-// line on labels are ~60% luminance of the main hue.
+// Per-K vertex palette (live cube — warm spectrum).
+//
+// The pre-existing 2-color tetra split (TETRA_A green / TETRA_B orange)
+// painted four spheres the same hue, so K2/K4/K5/K7 were
+// indistinguishable at a glance and same for K1/K3/K6/K8. Now each K
+// owns a unique hue, but the tetra distinction is preserved as a sub-
+// pattern: TETRA_A {K1,K3,K6,K8} = green→yellow-green family,
+// TETRA_B {K2,K4,K5,K7} = red→orange→pink family. Tetra wireframes
+// (tetraALines / tetraBLines) keep their uniform 0x00ff88 / 0xff6644
+// so the structural identity of the two interlocking tetrahedra still
+// reads at a glance.
+//
+// Sized as 8 separate hues rather than a luminance ramp so the
+// distinction works on dim ghost-faded labels too (DIM = ~60%
+// luminance of the bright hue).
+const K_VERT_COLORS = [
+  0x00ee77,  // K1 (TETRA_A) deep mint
+  0xff3344,  // K2 (TETRA_B) red
+  0xaaff00,  // K3 (TETRA_A) lime
+  0xff8800,  // K4 (TETRA_B) orange
+  0xffd700,  // K5 (TETRA_B) gold
+  0x44aa66,  // K6 (TETRA_A) forest green
+  0xff44aa,  // K7 (TETRA_B) pink-magenta
+  0xccff77,  // K8 (TETRA_A) yellow-green
+];
+const K_VERT_COLORS_HEX = [
+  '#00ee77', '#ff3344', '#aaff00', '#ff8800',
+  '#ffd700', '#44aa66', '#ff44aa', '#ccff77',
+];
+const K_VERT_COLORS_DIM = [
+  '#00aa55', '#cc2233', '#88cc00', '#cc6600',
+  '#ccaa00', '#338855', '#cc3388', '#99cc55',
+];
+
+// Ghost-cube dot palette. All-cool-spectrum (cyan → blue → indigo →
+// violet → teal) so the K (warm) and C (cool) sets share zero hues —
+// at a glance the user reads "this vertex belongs to the live cube" or
+// "ghost cube" by warm vs cool alone, then identifies which K/C by hue.
+// Ghost wireframe stays 0x00ccff (edges are structure, dots are
+// identity). Dim colours are ~60% luminance for the abbreviation line.
 const GHOST_VERT_COLORS = [
-  0x00ccff, 0x00ffdd, 0x55bbff, 0x8899ff,
-  0xbb88ff, 0xdd77ff, 0xff66ee, 0xff5599,
+  0x00ddff,  // C1 cyan
+  0x0099ff,  // C2 sky blue
+  0x3366ff,  // C3 royal blue
+  0x7755ff,  // C4 indigo
+  0xaa44ff,  // C5 purple
+  0xcc55dd,  // C6 magenta-purple
+  0x5588cc,  // C7 slate blue
+  0x22bbcc,  // C8 teal
 ];
 const GHOST_VERT_COLORS_HEX = [
-  '#00ccff', '#00ffdd', '#55bbff', '#8899ff',
-  '#bb88ff', '#dd77ff', '#ff66ee', '#ff5599',
+  '#00ddff', '#0099ff', '#3366ff', '#7755ff',
+  '#aa44ff', '#cc55dd', '#5588cc', '#22bbcc',
 ];
 const GHOST_VERT_COLORS_DIM = [
-  '#0099cc', '#00ccaa', '#4488cc', '#6677cc',
-  '#8866cc', '#aa55cc', '#cc5599', '#cc4477',
+  '#0099bb', '#0066bb', '#2244cc', '#5533cc',
+  '#7733cc', '#9944aa', '#3366aa', '#178899',
 ];
 
 // Used only for the two-line ghost-label paint (`C{n}` + abbreviation).
@@ -131,10 +172,14 @@ scene.add(tetraBLines);
 const vertexMeshes = [];
 const vertexLabels = [];
 
-// Active vertex glow ring
+// Active vertex glow ring — white so the pulse reads as "this is the
+// active vertex right now" independent of whichever K-color the
+// underlying sphere has. Pre-K-palette this used 0x00ff88 (matched
+// tetra-A green); now that per-K colors differ from the active marker,
+// white is the safest cross-palette choice.
 const activeRingGeo = new THREE.RingGeometry(0.15, 0.22, 16);
 const activeRingMat = new THREE.MeshBasicMaterial({
-  color: 0x00ff88,
+  color: 0xffffff,
   transparent: true,
   opacity: 0.7,
   side: THREE.DoubleSide,
@@ -159,15 +204,14 @@ function makeLabel(text, color) {
 }
 
 for (let i = 0; i < 8; i++) {
-  const isTetraA = TETRA_A.includes(i);
   const geo = new THREE.SphereGeometry(0.06, 8, 8);
-  const mat = new THREE.MeshBasicMaterial({ color: isTetraA ? 0x00ff88 : 0xff6644 });
+  const mat = new THREE.MeshBasicMaterial({ color: K_VERT_COLORS[i] });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.position.copy(CUBE_VERTS[i]);
   scene.add(mesh);
   vertexMeshes.push(mesh);
 
-  const label = makeLabel(`K${i + 1}`, isTetraA ? '#00ff88' : '#ff6644');
+  const label = makeLabel(`K${i + 1}`, K_VERT_COLORS_HEX[i]);
   label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.55);
   scene.add(label.sprite);
   vertexLabels.push(label);
@@ -646,10 +690,9 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
   const activeK = perm ? perm[activeIdx] : activeIdx;
   for (let k = 0; k < 8; k++) {
     const slot = perm ? perm.indexOf(k) : k;
-    const isTetraA = TETRA_A.includes(k);
     const isActive = k === activeK;
-    const color = isActive ? '#ffffff' : (isTetraA ? '#00ff88' : '#ff6644');
-    const dimColor = isActive ? '#cccccc' : (isTetraA ? '#00cc66' : '#cc5533');
+    const color    = isActive ? '#ffffff' : K_VERT_COLORS_HEX[k];
+    const dimColor = isActive ? '#cccccc' : K_VERT_COLORS_DIM[k];
     const label = vertexLabels[k];
     const ctx = label.ctx;
     const W = 128, H = 80;

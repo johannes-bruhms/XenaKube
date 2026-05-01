@@ -258,8 +258,14 @@ function brushAirbrush(ctx, x0, x1, y, color, alpha, evt) {
   const x = Math.max(0, x0);
   const w = Math.max(2 * rollDpr, x1 - x);
   const radius = bu(1.15);
-  const stepCount = Math.max(2, Math.floor(w / (radius * 0.6)));
-  ctx.globalAlpha = alpha * 0.75;
+  // Step density bumped 10× (radius*0.6 → radius*0.06): the previous
+  // spacing showed individual radial-gradient pucks on short notes
+  // ("series of dots"); sub-pixel stepping merges them into a continuous
+  // airbrush. Per-puck alpha is reduced ~10× to compensate for the
+  // accumulated overpaint, so apparent brightness stays close to before
+  // (and the gradient falloff still does most of the visible work).
+  const stepCount = Math.max(2, Math.floor(w / (radius * 0.06)));
+  ctx.globalAlpha = alpha * 0.075;
   for (let i = 0; i < stepCount; i++) {
     const px = x + (stepCount === 1 ? w / 2 : (i / (stepCount - 1)) * w);
     const grad = ctx.createRadialGradient(px, y, 0, px, y, radius);
@@ -460,26 +466,43 @@ function _buildGlissSegments(nodes) {
       // prior segments. See CLAUDE.md Visual Invariants row 3.
       segs.push({ t0: startT, dur: n.bendDur, p0: pitchAtStart, p1: n.pitch });
     } else {
-      // D67 — slide segment duration = gap to next event (when known),
-      // not a static interval-based or capped duration. The chain's
-      // _buildGlissSegments runs with the FULL future of nodes available
-      // at rebuild time, so the next event's onsetMs is known and the
-      // segment fills exactly to that boundary — zero plateau.
-      // Pre-D67 (with D66's static GLISS_SLIDE_MAX_DUR_MS = 195 ms cap),
-      // sparse phrases (event spacing > 200 ms, common with wild gliss
-      // at long durations: 12 events in 4 s = ~335 ms spacing) had
-      // segments completing in 195 ms then sitting flat at p1 for the
-      // remaining ~140 ms until next event override → visible
-      // rectangular plateaus, the user's exact complaint.
-      // For the LAST node (no next event known yet — node is in
-      // activeMidiNotes, phrase still in flight): fall back to predict-
-      // capped duration so the segment doesn't slide forever; next
-      // event arrival will rebuild and replace this fallback.
+      // D67 — non-last segs fill exactly to the next event boundary
+      // (zero plateau by construction).
+      //
+      // D68 — LAST node (in-flight, no next event known yet) MIRRORS the
+      // line-side `lastGap` predictor in triangle.js's noteOn (`animDur =
+      // max(80, lastGap - 5)`). Pre-D68 the chain used cap-based
+      // interval prediction (`min(GLISS_SLIDE_MAX_DUR_MS, interval *
+      // perSemi)`) — for any actual gap > 200 ms the chain finished its
+      // ease early and sat at p1 (plateau) until the next event arrived
+      // and D67 retroactively rebuilt that segment into a curve. The
+      // user-visible "blocky → transforms" symptom on C5 wild is exactly
+      // this rebuild moment. With D68 both line and chain pull from the
+      // same `lastGap` value (gap from the previous node's onsetMs),
+      // their predicted durs agree to floating-point precision, the
+      // plateau never forms, and `assertGlissSync` stays silent.
+      //
+      // First-slide fallback (no prior gap): use the same interval-cap
+      // formula as `predictGlissDuration` in triangle.js, so the line
+      // and chain still match on the very first slide of a phrase.
       const nextNode = nodes[i + 1];
       let segDur;
       if (nextNode) {
         segDur = Math.max(80, nextNode.evt.onsetMs - startT - 5);
+      } else if (i >= 1) {
+        const lastGap = startT - nodes[i - 1].evt.onsetMs;
+        if (lastGap > 50 && lastGap < 2000) {
+          segDur = Math.max(80, lastGap - 5);
+        } else {
+          // Out-of-band gap (cleared event timing, e.g. mid-debug pause)
+          // — interval-cap fallback matching the line.
+          segDur = Math.max(80, Math.min(GLISS_SLIDE_MAX_DUR_MS,
+            Math.abs(n.pitch - pitchAtStart) * (GLISS_PORTAMENTO_MS_PER_SEMITONE[n.complex] || 80)));
+        }
       } else {
+        // Single-node chain (anchor only) is handled by the first-node
+        // branch above; this i=0 path is unreachable here, but kept for
+        // defensive completeness.
         segDur = Math.max(80, Math.min(GLISS_SLIDE_MAX_DUR_MS,
           Math.abs(n.pitch - pitchAtStart) * (GLISS_PORTAMENTO_MS_PER_SEMITONE[n.complex] || 80)));
       }
@@ -494,11 +517,20 @@ function _buildGlissSegments(nodes) {
   return segs;
 }
 
+// Per-complex line-width multiplier — shape doubles up with the COMPLEX_COLOR
+// hue split so the eye distinguishes the three gliss complexes by both colour
+// AND contour even when one is half-occluded behind another or when the
+// dashboard is small.
+//   C5 wild:  1.4× — heavy stroke, matches the "wild" character
+//   C6 ord:   1.0× — default
+//   C7 tasto: 0.7× with halo — wispy/airy
+const GLISS_LINE_WIDTH_MUL = { 5: 1.4, 6: 1.0, 7: 0.7 };
+
 function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
   const { complex, color, nodes } = chain;
   if (nodes.length === 0) return;
   const segs = _buildGlissSegments(nodes);
-  const lineW = bu(0.85);
+  const lineW = bu(0.85) * (GLISS_LINE_WIDTH_MUL[complex] || 1.0);
 
   const startX = nodes[0].x0;
   const endX   = nodes[nodes.length - 1].x1;
@@ -527,9 +559,9 @@ function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
   };
 
   if (complex === 7) {
-    const haloOffset = lineW * 1.2;
-    strokePath(-haloOffset, lineW * 0.5, 0.22);
-    strokePath(+haloOffset, lineW * 0.5, 0.22);
+    const haloOffset = lineW * 1.6;
+    strokePath(-haloOffset, lineW * 0.6, 0.28);
+    strokePath(+haloOffset, lineW * 0.6, 0.28);
   }
   strokePath(0, lineW, 0.95);
   ctx.globalAlpha = 1;
@@ -734,7 +766,14 @@ export function init({ onForceFinalise, getActiveGlissLineDisplay } = {}) {
   }
   rollCanvas = document.getElementById('rolling-score');
   if (!rollCanvas) return;
-  rollCtx = rollCanvas.getContext('2d');
+  // Wide-gamut: ask for a Display-P3-backed buffer so the COMPLEX_COLOR
+  // strings (auto-selected to P3 syntax in constants.js when the
+  // browser supports it) actually land at saturated P3 points instead
+  // of being gamut-mapped down to sRGB on the way to the buffer.
+  // Browsers that don't recognise the option silently ignore it and
+  // return a default (sRGB) context — no exception, no breakage, same
+  // call shape as before.
+  rollCtx = rollCanvas.getContext('2d', { colorSpace: 'display-p3' });
   resizeRollingScore();
   window.addEventListener('resize', resizeRollingScore);
   requestAnimationFrame(drawRollingScore);

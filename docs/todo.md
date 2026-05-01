@@ -115,7 +115,7 @@ Once the foundation is WebGL-native, layer in effects that weren't possible in C
 - [ ] 5.1 — Spark particle bursts on pizz noteon (emit from K-vertex projected position; lifetime + gravity + fade)
 - [ ] 5.2 — Pseudo-fluid background field (advection shader; bowed sustains splat slow color, pizz splats sharp impacts)
 - [ ] 5.3 — Ribbon trails behind the active K-vertex during cube rotation
-- [ ] 5.4 — HDR / wide-gamut display output (`canvas.getContext` with `colorSpace`); requires HDR-capable display + browser support; ship as opt-in
+- [~] 5.4 — HDR / wide-gamut display output. **Rolling-score brushes shipped 2026-04-30** as Display-P3 auto-promotion: `CSS.supports('color', 'color(display-p3 1 0 0)')` detection in `constants.js` swaps `COMPLEX_COLOR` between sRGB hex and `color(display-p3 ...)` syntax; `rolling-score.js init()` requests `getContext('2d', { colorSpace: 'display-p3' })`. Auto-detected (no flag), zero new exports, gracefully degrades to sRGB on non-supporting browsers / non-P3 monitors. **Still TBD**: Three.js cube vertex palette + label canvas textures (separate Color-management surface — `THREE.DisplayP3ColorSpace` + `Color.setRGB(..., DisplayP3ColorSpace)`); HTML overlay theme variables (browser handles natively but `--accent` etc. could be promoted to `color(display-p3 ...)` for the chrome). True HDR (rec2100-hlg/pq with `pixelFormat: 'float16'`) deferred until verified against an HDR display in-session.
 - [ ] 5.5 — Custom shader for sieve cell glow (replace DOM ::after pseudo-element with a uniform-driven shader pass)
 
 ## Reintegration follow-ups (when v2 merges back into the main XenaKube/)

@@ -240,6 +240,27 @@ document.getElementById('zeroBtn').addEventListener('click', () => {
   wsSend({ type: 'zero_gyro' });
 });
 
+// XENAKUBE title doubles as a UI-collapse toggle. CSS `body.ui-hidden` hides
+// every chrome panel (state, mode pills, conn row, gizmo cluster, sliders,
+// move buffer, algorithm toasts); active K/C cards + sieve + rolling-score +
+// cube remain. Persisted across reloads.
+const uiToggle = document.getElementById('ui-toggle');
+function setUiHidden(hidden) {
+  document.body.classList.toggle('ui-hidden', hidden);
+  uiToggle.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+  localStorage.setItem('uiHidden', hidden ? '1' : '0');
+}
+setUiHidden(localStorage.getItem('uiHidden') === '1');
+uiToggle.addEventListener('click', () => {
+  setUiHidden(!document.body.classList.contains('ui-hidden'));
+});
+uiToggle.addEventListener('keydown', (e) => {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault();
+    setUiHidden(!document.body.classList.contains('ui-hidden'));
+  }
+});
+
 document.getElementById('resetBtnVisible')?.addEventListener('click', async () => {
   // Tell the cube itself "you are now solved" so its internal facelet
   // report re-anchors to reality. Without this the FACELETS stream can

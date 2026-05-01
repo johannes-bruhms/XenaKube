@@ -130,14 +130,60 @@ export const GLISS_SLIDE_MAX_DUR_MS = 195;
 //
 // Index 0 (= unknown / pre-init / KS) gets a neutral grey so a few
 // stray notes from a stale state aren't misread as pizz.
-export const COMPLEX_COLOR = {
+//
+// Gliss palette (C5/C6/C7) splits by hue, not luminance — the prior
+// trio (#c084fc / #a855f7 / #d8b4fe) was three values of the same
+// purple, indistinguishable in the rolling score. C5 wild reads as
+// hot pink, C6 ord as deep purple (middle anchor), C7 tasto as cool
+// sky-lavender, so the eye reliably tracks "which gliss complex am
+// I looking at" without a legend. Pair with `drawGlissChain`'s
+// per-complex line treatment in rolling-score.js (C5 thicker, C7
+// thinner-with-halo) for double redundancy.
+//
+// Wide-gamut (Display-P3) auto-promotion. When the browser supports
+// the `color(display-p3 r g b)` CSS syntax (Chrome 111+, Safari 16.4+,
+// Firefox 113+) we hand the rolling-score brushes the same numerical
+// channel coordinates encoded in the Display-P3 color space instead of
+// sRGB. On a P3-capable monitor that lands at a more saturated point —
+// reds / cyans / magentas pop into the wider gamut. On a non-P3 monitor
+// OR a non-supporting browser the canvas + fillStyle pipeline gamut-
+// maps cleanly back to the sRGB equivalent (the same coords interpreted
+// in sRGB space), so consumers see the colours below with zero
+// behavioural change. Detection is `CSS.supports`-driven and silent —
+// no flag, no consumer change, no new export. The export name and key
+// shape (`{ 0..8 → string }`) are identical either way.
+const _SRGB_HEX = {
   0: '#888899',
   1: '#f3a83b',  // C1 pizz       — amber
   2: '#3b82f6',  // C2 arco       — cobalt
-  3: '#60a5fa',  // C3 arco       — paler cobalt (distinct from C2 in dense passages)
+  3: '#60a5fa',  // C3 arco       — paler cobalt
   4: '#22d3ee',  // C4 harmonic   — cyan
-  5: '#c084fc',  // C5 gliss      — magenta
-  6: '#a855f7',  // C6 gliss      — deeper magenta (sieve-walker)
-  7: '#d8b4fe',  // C7 gliss      — paler magenta
+  5: '#ff3399',  // C5 gliss wild — hot pink-magenta
+  6: '#a855f7',  // C6 gliss ord  — deep purple
+  7: '#88aaff',  // C7 gliss tasto — cool sky-lavender
   8: '#e11d48',  // C8 trem near-bridge — crimson
 };
+
+const _supportsP3Color = (() => {
+  try {
+    return typeof CSS !== 'undefined'
+      && typeof CSS.supports === 'function'
+      && CSS.supports('color', 'color(display-p3 1 0 0)');
+  } catch (_e) { return false; }
+})();
+
+function _hexToP3(hex) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.slice(0, 2), 16) / 255;
+  const g = parseInt(h.slice(2, 4), 16) / 255;
+  const b = parseInt(h.slice(4, 6), 16) / 255;
+  return 'color(display-p3 ' + r.toFixed(4) + ' ' + g.toFixed(4) + ' ' + b.toFixed(4) + ')';
+}
+
+const _P3_PALETTE = (() => {
+  const out = {};
+  for (const k in _SRGB_HEX) out[k] = _hexToP3(_SRGB_HEX[k]);
+  return out;
+})();
+
+export const COMPLEX_COLOR = _supportsP3Color ? _P3_PALETTE : _SRGB_HEX;
