@@ -1,6 +1,6 @@
 # Synthesis Bridge — Max/MSP + SWAM Cello
 
-Detailed reference for the synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) driven via MIDI from a Max/MSP bridge on port 57121. **The load-bearing summary lives in CLAUDE.md as the Bridge Invariants table** — that's the part Claude must apply on every change. This file is the deep reference: patch topology, file roles, mapping cheat sheet, MCP bridge integration. Read when you're touching `max/xk_swam.js`, the `.maxpat`, the SWAM preset, or any of the per-complex routing.
+Detailed reference for the synthesis layer: SWAM Cello 3 (Audio Modeling physical-modeling VST) driven via MIDI from a Max/MSP bridge on port 57121. **The load-bearing summary lives in CLAUDE.md as the Bridge Invariants table** — that's the part Claude must apply on every change. **Full enforcement detail per invariant** (Scope / Enforcement / Telemetry) lives in **`docs/bridge-invariants.md`** — read it before changing code that touches any invariant. This file is the patch / routing / MCP reference: patch topology, file roles, mapping cheat sheet, MCP bridge integration. Read when you're touching `max/xk_swam.js`, the `.maxpat`, the SWAM preset, or any of the per-complex routing.
 
 ## Single-instance model
 
@@ -24,7 +24,7 @@ Runtime patch: `max/xenakube_swam.maxpat` (open in Max 9+).
 
 DSP chain after `[vst~]`: `[abl.dsp.compander~ @shape 0.15] → [live.gain~] → [abl.device.drumbuss~] → [abl.dsp.compander~ @shape 0.2] → [abl.device.limiter~] → [dac~]`, with a `[live.scope~]` tap. The `[gate]` between `udpreceive` and the v8 lets the performer mute incoming OSC for offline inspection without closing the relay.
 
-The MIDI echo on outlet 2 emits pre-formatted OSC `/xk/midi/{noteon,noteoff,panic}` messages — no `[prepend]` or `[route]` needed; `udpsend` packages them natively. Echo payload is `(voice, pitch, velocity, complex)` where `complex` is `inst.activeComplex` at echo time; the dashboard piano-roll uses it for color and gliss-curve rules.
+The MIDI echo on outlet 2 emits pre-formatted OSC `/xk/midi/{noteon,noteoff,bendstep,expr,panic}` messages — no `[prepend]` or `[route]` needed; `udpsend` packages them natively. `noteon`/`noteoff` payload is `(voice, pitch, velocity, complex)` where `complex` is `inst.activeComplex` at echo time; the dashboard piano-roll uses it for color and gliss-curve rules. `expr` payload is `(voice, ccVal, complex)` — fired from `cc()` / `ccForce()` whenever `num === CC.EXPRESSION` so the dashboard can size brushes by the audible dynamic curve (D47 ramps CC 11 linearly across a phrase) rather than per-note velocity (a poor proxy for SWAM's ongoing loudness). Pure additive telemetry — no synthesis state depends on it.
 
 The SWAM instance's preset is set manually inside the SWAM GUI (saved as `xenakube_2`).
 
@@ -42,8 +42,7 @@ The SWAM instance's preset is set manually inside the SWAM GUI (saved as `xenaku
 
 - **Complex → technique** (COMPLEX table): C1 Pizz, C2/C3 Arco, C4 Harmonics (CC 78), C5–C7 Portamento, C8 near-bridge + Tremolo (CC 79). Each complex owns `register: {lo, hi}`, `tremoloRate` baseline (CC 80), per-stage `exprEnv.{attackRampMs, sustainRampMs, releaseRampMs}`, and a `bowPoly` mode (Double/Hold default; Mono Poly Release for C5–C7 gliss).
 - **C4 harmonic mode → path × tetra-orbit**: rotates per voice across OCT / OCT_5TH / CTRL via `harmonicsForC4()`. V1+even = OCT, V1+odd = OCT_5TH, V2+even = OCT_5TH, V2+odd = CTRL. OFF reserved for non-C4 complexes.
-- **Intensity → 5 scalars** (6-level INTENSITY_MAP): Expression peak, note velocity, bow-pressure scalar, phrase density, tremolo-rate scalar.
-- **Path V1/V2** → Expression peak scalar (V2 × 0.7) + tremolo-rate × 0.85 on V2 + widened V2 fold window.
+- **Intensity → 5 scalars** (8-level INTENSITY_MAP, ppp..fff): Expression peak, note velocity, bow-pressure scalar, phrase density, tremolo-rate scalar. ppp sits at SWAM's audibility floor (CC 11 ≈ 15 / Expression slider 0.12 of 1.0); fff hits the MIDI ceiling (CC 11 = 127). One unique dynamic per cube vertex; K_i permutation shuffles position-to-intensity mapping.
 - **Face → gesture shape** (Phase A1 Temporal Identity): `/xk/face <face>` populates `state.face*` from `FACE_MAP` (durationBias / registerBias / envelope / articulation / motion); `handleVoice` snapshots onto the allocated `inst` so face changes don't retroactively reshape an in-flight phrase. `phraseC1..C8` consult `faceShapedCount(inst, lo, hi, forGliss)`: `ENV_PROFILE.isSingle` (pluck/stab/drone) collapses non-gliss complexes to a single note; gliss complexes (C5/C6/C7) get `forGliss=true` with a hard minimum of 1 subsequent slide (see Bridge Invariants in CLAUDE.md). `ENV_PROFILE.countMult` (burst ×1.8) thickens density; `stepVelScale` shapes per-step velocity (swell cresc, fade dim, stab/burst accent-first). `commitSieveWalk(count, motion)` honours the face's `up`/`down` to force sieve-walker direction on C2/C6. `scheduleExprEnvelope` scales attack/peak/sustain by `ENV_PROFILE.{attackCoef, peakCoef, sustainCoef}`.
 - **Duration discipline**: `handleVoice` clamps `duration` to ≤30 s after the face-bias multiply (Xenakis V2 ceiling); every `phraseCX` calls `scheduleRelease(inst, dur)` with no phrase-level multiplier stack — a voice's sounding time is exactly `duration + fade`.
 - **Tilt** → Bow Position ±30 around the complex baseline (timbral sul tasto ↔ pont sweep).
@@ -61,7 +60,7 @@ The SWAM instance's preset is set manually inside the SWAM GUI (saved as `xenaku
 - **Cube-algorithm pings** route through `setupComplex(active)` for idempotent restore.
 - **Flag gates** for v3.11-absent knobs: `HAS_HARMONICS_CC` / `HAS_TREMOLO_CC` / `HAS_TREMOLO_RATE` / `HAS_BOW_POLY_CC` enable CC with KS fallback (Bow Polyphony has no KS fallback — page-modifier combo); `HAS_BOW_SPEED` / `HAS_ATTACK_RAMP` / `HAS_ATTACK_CONTROL` default `false` to gate at the `cc()` helper.
 
-Full parameter map, KS bands, preset prerequisites, and v3.10 / v3.11 migration notes: `docs/swam_cello_reference.md`. Per-decision rationale for every bridge mapping: `docs/revision_roadmap.md`.
+Full parameter map, KS bands, preset prerequisites, and v3.10 / v3.11 migration notes: `docs/swam/swam_cello_reference.md`. Per-decision rationale for every bridge mapping: `docs/revision_roadmap.md`.
 
 ## Max MCP Bridge
 
