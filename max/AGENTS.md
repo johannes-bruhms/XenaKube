@@ -35,7 +35,7 @@ Prefer editing `xk_swam.js` over growing patch logic. The patch is the host; `xk
 
 - `xk_swam.js`: main bridge logic and invariants.
 - `xenakube_swam.maxpat`: host patch.
-- `xenakube_2.swam`: SWAM preset expected by the patch.
+- `xenakube_main.swam`: SWAM preset expected by the patch (loaded by `xenakube_swam.maxpat` on `[loadbang]`).
 - `gen_includes.js`: generated shared data from `src/`.
 - `ks_logger.js`: optional debugging helper for keyswitch/MIDI inspection.
 

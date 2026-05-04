@@ -6,7 +6,7 @@ This guide applies to the documentation tree under `docs/`.
 
 - `../CLAUDE.md`: canonical current-state summary. Keep it present-tense and terse.
 - `../AGENTS.md` + subtree guides: agent operating instructions derived from `CLAUDE.md`, the detailed docs, and the code layout.
-- `todo.md`: phased dashboard roadmap.
+- `todo.md`: phased roadmap (dashboard, solve-anchor, phrase library, TS phrase migration).
 - `revision_roadmap.md`: bridge/SWAM diagnoses, D-codes, and synthesis-side progress.
 - `research_notes.md`: rationale, source notes, and design exploration.
 - `bridge-invariants.md`: full bridge invariant enforcement detail.

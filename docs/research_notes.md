@@ -589,7 +589,7 @@ Phase 1 invariant `assertGlissSync` continues to compare line-pitch vs chain-pit
 
 ### SWAM preset requirement
 
-Pitchbend range MUST be ≥ ±12 semitones in `xenakube_2.swam`. SWAM's Pitchbend Range setting is in the Advanced → MIDI page. Save the preset with the new range. Document in `docs/swam/swam_cello_reference.md` and the synthesis-bridge.md preset prerequisites list.
+Pitchbend range MUST be ≥ ±12 semitones in `xenakube_main.swam`. SWAM's Pitchbend Range setting is in the Advanced → MIDI page. Save the preset with the new range. Document in `docs/swam/swam_cello_reference.md` and the synthesis-bridge.md preset prerequisites list.
 
 `PITCHBEND_RANGE_SEMI = 12` constant in `xk_swam.js` matches the preset. Bumping to ±24 in preset means changing this constant too — they're a paired tunable.
 

@@ -49,7 +49,7 @@ npm run dev
 - `CLAUDE.md`: canonical current-state architecture, file roles, commands, and invariant summaries. Keep it present-tense and non-historical.
 - `AGENTS.md` + subtree `AGENTS.md`: repo-local operating instructions distilled from `CLAUDE.md`, the detailed docs, and the live code layout.
 - `CHANGELOG.md`: dated, user-visible/project-visible changes.
-- `docs/todo.md`: dashboard-phase roadmap.
+- `docs/todo.md`: phased roadmap (dashboard, solve-anchor, phrase library, TS phrase migration).
 - `docs/revision_roadmap.md`: bridge / SWAM diagnoses and synthesis-side phase work.
 - `docs/research_notes.md`: rationale, source notes, and design exploration.
 - `docs/bridge-invariants.md`: full bridge invariant enforcement detail.

@@ -12,8 +12,12 @@ Each physical cube turn:
 4. C_i advances (complex type permutation).
 5. If the move is one of the 12 face-moves → emit `/xk/face` (before voice dispatch).
 6. **Voice engine** emits active voices (1 in sequential, 8 in polyphonic); each voice carries its `face`.
-7. **Expression processor** supplies continuous gyro-derived controls.
-8. State broadcast to Max (OSC) + dashboard (WS).
+7. **Phrase planner** computes a TypeScript shadow plan for C1-C8: intended note-ons, note-offs, bend steps, release, face-owned duration, first-onset timing, and companion counts. This is the migration seam away from Max phrase logic; it is displayed in the dashboard and summarized to Max as `/xk/phrase/plan`.
+8. **Phrase echo auditor** attaches that plan id to the matching Max-rendered voice and compares the planned structure against `/xk/midi/*` echoes. This catches missing first note-ons, all-missing gliss bends, unexpected companions, and stolen phrases before the dashboard interpretation can hide the problem.
+9. **Expression processor** supplies continuous gyro-derived controls.
+10. State broadcast to Max (OSC) + dashboard (WS).
+
+Current migration boundary: Max still renders live audio with the legacy `phraseC1`...`phraseC8` functions. The relay-side `PhrasePlanner` plus `PhraseEchoAuditor` are the auditable shadow source of truth used to compare intent against `/xk/midi/*` echoes before flipping Max into a pure VST/MIDI adapter.
 
 ## Voice Modes
 
@@ -30,7 +34,7 @@ The vertices have a single `(D, G)` table spanning the full ppp..fff dynamic pal
 
 ## Cube Algorithms *(current = mode-toggles; pivoting to phrase-library — see `docs/todo.md`)*
 
-Rubik's cube algorithms detected from the move stream currently trigger **mode changes** (toggle polyphony, flip path, adjust palette). The algorithm book covers the 6 CFOP fundamentals plus Niklas (archetypal 3-cycle commutator). Algorithms are **orientation-independent** — each is expanded into all 24 whole-cube-rotation variants at load time, so the same finger pattern fires on any face pair. Algorithms **layer**: a shorter algorithm that's a prefix of a longer one fires first; the long one fires on completion. Turns always produce sound; algorithm matches are bonus triggers on top.
+Rubik's cube algorithms detected from the move stream currently fire **detection events** only — the effect handlers in `src/mode-manager.ts` are stubs (every `case` is empty), so no mode change happens yet. The algorithm book covers the 6 CFOP fundamentals plus Niklas (archetypal 3-cycle commutator). Algorithms are **orientation-independent** — each is expanded into all 24 whole-cube-rotation variants at load time, so the same finger pattern fires on any face pair. Algorithms **layer**: a shorter algorithm that's a prefix of a longer one fires first; the long one fires on completion. Turns always produce sound; algorithm matches are bonus triggers on top.
 
 | Name | Canonical Algorithm | Moves | Role | Effect |
 |------|---------------------|-------|------|--------|

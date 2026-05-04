@@ -44,7 +44,7 @@ A performer physically turns a Bluetooth-enabled Rubik's cube. Each turn is a mu
 
 Following Xenakis' method, two S4 group cubes operate simultaneously:
 
-- **K_i cube** -- maps 8 vertices to parameter triples (Density × Intensity × Duration). Intensity covers the full ppp..fff palette, one unique dynamic per vertex; each turn permutes which level lands at which voice position.
+- **K_i cube** -- maps 8 vertices to (Density × Intensity); Duration is neutral, since phrase time is owned by the 12 face-moves per Temporal Identity. Intensity covers the full ppp..fff palette, one unique dynamic per vertex; each turn permutes which level lands at which voice position.
 - **C_i cube** -- maps 8 vertices to sound complex types (C1-C8). Transformations reassign which synthesis method each voice uses.
 
 ### Cube Algorithms
@@ -53,15 +53,15 @@ The algorithm book is the 6 **CFOP** fundamentals (Cross, F2L, OLL, PLL) plus Ni
 
 | Algorithm | Moves | Role | Effect |
 |-----------|-------|------|--------|
-| sexy-move | R U R' U' | CFOP F2L trigger | Bow-pressure accent ping |
-| oll-cross | F R U R' U' F' | 2-look OLL edges | Variant → drone |
-| sune | R U R' U R U2 R' | 2-look OLL corners | Harmonic ping → OCT_5TH (perfect 12th) |
-| anti-sune | R U2 R' U' R U' R' | 2-look OLL inverse corners | Palette → V1 |
-| niklas | R U' L' U R' U' L | Commutator (corner 3-cycle) | CTRL harmonic ping |
-| u-perm | R U' R U R U R U' R' U' R2 | 2-look PLL edges | Variant → burst |
-| t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 2-look PLL corners+edges | Reset palette + variant |
+| sexy-move | R U R' U' | CFOP F2L trigger | (stub — detected, no mode change yet) |
+| oll-cross | F R U R' U' F' | 2-look OLL edges | (stub) |
+| sune | R U R' U R U2 R' | 2-look OLL corners | (stub) |
+| anti-sune | R U2 R' U' R U' R' | 2-look OLL inverse corners | (stub) |
+| niklas | R U' L' U R' U' L | Commutator (corner 3-cycle) | (stub) |
+| u-perm | R U' R U R U R U' R' U' R2 | 2-look PLL edges | (stub) |
+| t-perm | R U R' U' R' F R2 U' R' U' R U R' F' | 2-look PLL corners+edges | (stub) |
 
-Algorithms layer — shorter algorithms fire immediately even if they're the prefix of a longer one in progress. The algorithm book is being extended toward a phrase-library model (see `docs/todo.md` Phase B).
+Detection still fires (the dashboard logs every match) but the effect handlers in `src/mode-manager.ts` are currently empty switch arms — algorithms are scaffolding for the phrase-library work tracked in `docs/todo.md` Phase B (algorithms-as-phrase-vocabulary). Algorithms layer: shorter algorithms fire immediately even if they're the prefix of a longer one in progress. **Half-turn convention**: GAN hardware reports only quarter-turns, so `U2`/`R2` are stored as two CCW quarter-turns; performers must flick half-turns CCW (speedcube default) or the algorithm won't trigger.
 
 ### Phrase Generation (Max/SWAM)
 

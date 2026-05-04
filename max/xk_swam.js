@@ -123,7 +123,7 @@ var HAS_BOW_POLY_CC      = true;
 
 // D59 — pitchbend range (semitones), MUST EXACTLY MATCH the SWAM
 // preset's Master Tuning → Pitchbend Range setting (saved in
-// xenakube_2.swam). MIDI pitchbend is a 14-bit wheel position with
+// xenakube_main.swam). MIDI pitchbend is a 14-bit wheel position with
 // no semitone information; SWAM does the conversion using its preset
 // value. If this constant says 24 but SWAM's preset is 2 (default),
 // the bridge sends a value14 expecting 24-semi-scale interpretation
@@ -918,7 +918,7 @@ function setTremolo(inst, target) {
 // writes whenever the bridge's cached state already matched. But SWAM-
 // side state can drift out of sync with our cache on plugin reload,
 // preset re-read, or session start (resetInstance fires CC 81 before
-// `[read xenakube_2.swam]` finishes loading the preset, so the CC is
+// `[read xenakube_main.swam]` finishes loading the preset, so the CC is
 // either ignored or overwritten). Result: bridge thinks Bow Polyphony =
 // Double/Hold, SWAM is actually still in Mono Poly Release from the last
 // gliss session, and every subsequent C2/C3/C8 voice's diff guard
