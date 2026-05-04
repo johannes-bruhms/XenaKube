@@ -3,7 +3,7 @@
 // Each of the 12 face-moves (L L' R R' F F' B B' U U' D D') owns a
 // distinct gesture TYPE, fixed to the GAN cube's color-fixed face
 // identity. K_i / C_i / path / tetra then MODULATE the content inside
-// that shape rather than selecting the shape.
+// that shape rather than selecting the shape or its phrase duration.
 //
 // Performer's forward model: the *kind* of sound a turn will produce
 // is predictable from the face alone. The *detail* still evolves with
@@ -12,7 +12,6 @@
 // First-draft signatures below are intentionally simple so they read on
 // one hearing. Sculpt-and-polish comes after the framework is audible.
 
-import type { Path } from './types.js';
 
 /** The 12 face-moves that own a gesture identity. Half-turns (L2 etc.)
  *  aren't in the set — GAN hardware only reports quarter-turns, and the
@@ -20,7 +19,7 @@ import type { Path } from './types.js';
 export type FaceMove = 'L' | "L'" | 'R' | "R'" | 'F' | "F'" | 'B' | "B'" | 'U' | "U'" | 'D' | "D'";
 
 /** Gesture envelope archetype — the overall amplitude shape. */
-export type EnvelopeShape = 'pluck' | 'swell' | 'stab' | 'drone' | 'fade' | 'burst';
+export type EnvelopeShape = 'pluck' | 'swell' | 'stab' | 'hairpin-up' | 'hairpin-down' | 'fade' | 'burst';
 
 /** Articulation emphasis — where in time the gesture's energy lives. */
 export type Articulation = 'attack' | 'sustained' | 'release' | 'iterative';
@@ -33,8 +32,14 @@ export interface FaceSignature {
   face: FaceMove;
   /** Amplitude envelope archetype. */
   envelope: EnvelopeShape;
-  /** Multiplier on the voice's base `duration`. 1.0 = as-given. */
-  durationBias: number;
+  /**
+   * Absolute phrase duration in seconds.
+   *
+   * Temporal Identity rule: the face owns time. K_i still modulates density,
+   * intensity, and pitch placement, but it must not make the same face feel
+   * short on one turn and long on another unrelated turn.
+   */
+  durationSec: number;
   /** Where the gesture's energy sits in time. */
   articulation: Articulation;
   /** Stereo bias [-1..+1]. Reserved for future stereo routing; SWAM is mono. */
@@ -50,29 +55,29 @@ export interface FaceSignature {
  *
  * Organising intuition:
  *   • U / U'  — bright, treble; up gets a pluck, up' fades from high
- *   • D / D'  — dark, bass;    down stabs, down' drones
+ *   • D / D'  — dark, bass;    down stabs, down' is a `<>` hairpin (peak-in-middle)
  *   • L / L'  — left-panned legato; unprimed swells up, primed fades down
  *   • R / R'  — right-panned percussive; unprimed a stab, primed a burst
  *   • F / F'  — forward swells; unprimed ascending, primed descending
- *   • B / B'  — retreating; unprimed a short back-pluck, primed a slow drone
+ *   • B / B'  — retreating; unprimed a short back-pluck, primed a `><` hairpin (trough-in-middle)
  *
  * Every primed/unprimed pair keeps a family resemblance (same pan / register
  * axis) but differs in articulation and motion, so the 12 are pairwise
  * distinguishable by ear while the 6 face-pairs still feel related.
  */
 export const FACE_SIGNATURES: Record<FaceMove, FaceSignature> = {
-  'U':  { face: 'U',  envelope: 'pluck', durationBias: 0.7, articulation: 'attack',    panBias:  0.0, registerBias:  0.8, motion: 'up' },
-  "U'": { face: "U'", envelope: 'fade',  durationBias: 1.4, articulation: 'release',   panBias:  0.0, registerBias:  0.8, motion: 'down' },
-  'D':  { face: 'D',  envelope: 'stab',  durationBias: 0.6, articulation: 'attack',    panBias:  0.0, registerBias: -0.8, motion: 'down' },
-  "D'": { face: "D'", envelope: 'drone', durationBias: 1.8, articulation: 'sustained', panBias:  0.0, registerBias: -0.8, motion: 'static' },
-  'L':  { face: 'L',  envelope: 'swell', durationBias: 1.3, articulation: 'sustained', panBias: -0.7, registerBias:  0.0, motion: 'up' },
-  "L'": { face: "L'", envelope: 'fade',  durationBias: 1.3, articulation: 'release',   panBias: -0.7, registerBias:  0.0, motion: 'down' },
-  'R':  { face: 'R',  envelope: 'stab',  durationBias: 0.5, articulation: 'attack',    panBias:  0.7, registerBias:  0.0, motion: 'static' },
-  "R'": { face: "R'", envelope: 'burst', durationBias: 0.6, articulation: 'iterative', panBias:  0.7, registerBias:  0.0, motion: 'oscillate' },
-  'F':  { face: 'F',  envelope: 'swell', durationBias: 1.2, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'up' },
-  "F'": { face: "F'", envelope: 'swell', durationBias: 1.2, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'down' },
-  'B':  { face: 'B',  envelope: 'pluck', durationBias: 0.9, articulation: 'attack',    panBias:  0.0, registerBias: -0.3, motion: 'static' },
-  "B'": { face: "B'", envelope: 'drone', durationBias: 1.6, articulation: 'sustained', panBias:  0.0, registerBias: -0.3, motion: 'oscillate' },
+  'U':  { face: 'U',  envelope: 'pluck', durationSec: 0.70, articulation: 'attack',    panBias:  0.0, registerBias:  0.8, motion: 'up' },
+  "U'": { face: "U'", envelope: 'fade',  durationSec: 1.70, articulation: 'release',   panBias:  0.0, registerBias:  0.8, motion: 'down' },
+  'D':  { face: 'D',  envelope: 'stab',  durationSec: 0.60, articulation: 'attack',    panBias:  0.0, registerBias: -0.8, motion: 'down' },
+  "D'": { face: "D'", envelope: 'hairpin-up',   durationSec: 2.50, articulation: 'sustained', panBias:  0.0, registerBias: -0.8, motion: 'static' },
+  'L':  { face: 'L',  envelope: 'swell', durationSec: 1.85, articulation: 'sustained', panBias: -0.7, registerBias:  0.0, motion: 'up' },
+  "L'": { face: "L'", envelope: 'fade',  durationSec: 1.85, articulation: 'release',   panBias: -0.7, registerBias:  0.0, motion: 'down' },
+  'R':  { face: 'R',  envelope: 'stab',  durationSec: 0.50, articulation: 'attack',    panBias:  0.7, registerBias:  0.0, motion: 'static' },
+  "R'": { face: "R'", envelope: 'burst', durationSec: 0.95, articulation: 'iterative', panBias:  0.7, registerBias:  0.0, motion: 'oscillate' },
+  'F':  { face: 'F',  envelope: 'swell', durationSec: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'up' },
+  "F'": { face: "F'", envelope: 'swell', durationSec: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'down' },
+  'B':  { face: 'B',  envelope: 'pluck', durationSec: 0.90, articulation: 'attack',    panBias:  0.0, registerBias: -0.3, motion: 'static' },
+  "B'": { face: "B'", envelope: 'hairpin-down', durationSec: 2.25, articulation: 'sustained', panBias:  0.0, registerBias: -0.3, motion: 'oscillate' },
 };
 
 /** Strict parse: returns the FaceMove if `move` is one of the 12, else null.
@@ -116,18 +121,12 @@ export function pitchClassMod(vertexIdx: number): number {
 }
 
 /**
- * Face's registerBias [-1..+1] → semitone shift.
- * V2 halves the spread (±6) because V2 is the sustained palette — range
- * would compete with duration. V1 gets the full ±12.
+ * Face's registerBias [-1..+1] → semitone shift, full ±12 spread (the V1
+ * value, kept after V2 retirement).
  */
-export function registerMod(path: Path, sig: FaceSignature): number {
-  const spread = path === 'V2' ? 6 : 12;
+export function registerMod(sig: FaceSignature): number {
+  const spread = 12;
   return Math.round(sig.registerBias * spread);
-}
-
-/** Path V1 = 1.0 (full), V2 = 0.7 (softer palette). Matches SWAM bridge convention. */
-export function intensityScalar(path: Path): number {
-  return path === 'V2' ? 0.7 : 1.0;
 }
 
 /**

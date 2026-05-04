@@ -187,6 +187,21 @@ const activeRingMat = new THREE.MeshBasicMaterial({
 const activeRing = new THREE.Mesh(activeRingGeo, activeRingMat);
 activeRing.visible = false;
 
+// Ghost active vertex ring — mirrors activeRing but lives in ghostGroup so
+// it follows the snap target's rotation. Slightly smaller radius because
+// ghost vertex spheres are 0.05 (vs live's 0.06). Pulses out of phase
+// with the live ring so the eye picks out which is which when both are
+// near each other (locked snap, deviation ≈ 0).
+const ghostActiveRingGeo = new THREE.RingGeometry(0.12, 0.18, 16);
+const ghostActiveRingMat = new THREE.MeshBasicMaterial({
+  color: 0xffffff,
+  transparent: true,
+  opacity: 0.7,
+  side: THREE.DoubleSide,
+});
+const ghostActiveRing = new THREE.Mesh(ghostActiveRingGeo, ghostActiveRingMat);
+ghostActiveRing.visible = false;
+
 function makeLabel(text, color) {
   const c = document.createElement('canvas');
   c.width = 128; c.height = 80;
@@ -232,6 +247,7 @@ scene.add(ghostGroup);
 const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.35 });
 const ghostEdges = new THREE.LineSegments(edgeGeo.clone(), ghostEdgeMat);
 ghostGroup.add(ghostEdges);
+ghostGroup.add(ghostActiveRing);
 
 const ghostVertGeo = new THREE.SphereGeometry(0.05, 6, 6);
 const ghostVertMeshes = [];
@@ -506,6 +522,19 @@ let activeAnimStart = 0;
 let activeAnimReady = false;
 let currentActiveK = 0;
 
+// Mirror of the K active-vertex animation state for the ghost cube. The
+// active complex is `state.cAssignments[activeIdx] - 1` (0-indexed C
+// type); its mesh is `ghostVertMeshes[activeC]` whose position is
+// driven by `ghostVertPosAnimated[activeC]` when ghost permutation
+// changes. Scale target is 2.0 (vs 2.5 for K) because ghost spheres
+// are smaller and slightly translucent — 2.5 reads too aggressive.
+const cSphereScaleFrom = new Float32Array(8).fill(1.0);
+const ghostActiveRingFrom = new THREE.Vector3();
+const ghostActiveRingAnimated = new THREE.Vector3();
+let cActiveAnimStart = 0;
+let cActiveAnimReady = false;
+let currentActiveC = 0;
+
 const VERTEX_STEP_MS = 100;
 const LABEL_OFFSET_FACTOR = 1 + 0.55 / Math.sqrt(3);
 const vertexPosFrom     = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
@@ -623,9 +652,30 @@ function animateCube() {
     }
   }
 
+  // Ghost active vertex scale + ring (mirror of the K active-vertex
+  // animation block above). Runs after `ghostVertAnimReady` so the ring
+  // tracks the post-permutation animated position.
+  if (cActiveAnimReady) {
+    const elapsed = performance.now() - cActiveAnimStart;
+    const t = elapsed >= ACTIVE_STEP_MS ? 1 : elapsed / ACTIVE_STEP_MS;
+    for (let c = 0; c < 8; c++) {
+      const target = (c === currentActiveC) ? 2.0 : 1.0;
+      const s = cSphereScaleFrom[c] + (target - cSphereScaleFrom[c]) * t;
+      ghostVertMeshes[c].scale.setScalar(s);
+    }
+    ghostActiveRingAnimated.copy(ghostActiveRingFrom).lerp(ghostVertPosAnimated[currentActiveC], t);
+    ghostActiveRing.position.copy(ghostActiveRingAnimated);
+    ghostActiveRing.lookAt(camera.position);
+  }
+
   ringPulse += 0.04;
   if (activeRing.visible) {
     activeRingMat.opacity = 0.4 + 0.3 * Math.sin(ringPulse);
+  }
+  if (ghostActiveRing.visible) {
+    // Out-of-phase pulse so the live and ghost rings don't beat in sync
+    // when the snap is locked (deviation ≈ 0 → both rings co-located).
+    ghostActiveRingMat.opacity = 0.4 + 0.3 * Math.sin(ringPulse + Math.PI);
   }
 
   if (hasGyro && hasSnap) {
@@ -685,6 +735,49 @@ function paintActiveVertex(slot, activeK) {
   }
 }
 
+function paintActiveGhostVertex(activeC) {
+  if (!cActiveAnimReady) {
+    for (let c = 0; c < 8; c++) {
+      const s = (c === activeC) ? 2.0 : 1.0;
+      cSphereScaleFrom[c] = s;
+      ghostVertMeshes[c].scale.setScalar(s);
+    }
+    ghostActiveRingFrom.copy(ghostVertPosAnimated[activeC]);
+    ghostActiveRingAnimated.copy(ghostVertPosAnimated[activeC]);
+    cActiveAnimStart = performance.now() - ACTIVE_STEP_MS;
+    cActiveAnimReady = true;
+    ghostActiveRing.visible = true;
+    currentActiveC = activeC;
+  } else if (activeC !== currentActiveC) {
+    for (let c = 0; c < 8; c++) {
+      cSphereScaleFrom[c] = ghostVertMeshes[c].scale.x;
+    }
+    ghostActiveRingFrom.copy(ghostActiveRingAnimated);
+    cActiveAnimStart = performance.now();
+    currentActiveC = activeC;
+  }
+}
+
+function paintGhostVertexLabels(activeC) {
+  for (let c = 0; c < 8; c++) {
+    const isActive = c === activeC;
+    const color    = isActive ? '#ffffff' : GHOST_VERT_COLORS_HEX[c];
+    const dimColor = isActive ? '#cccccc' : GHOST_VERT_COLORS_DIM[c];
+    const label = ghostLabels[c];
+    const ctx = label.ctx;
+    ctx.clearRect(0, 0, 128, 80);
+    ctx.font = 'bold 16px monospace';
+    ctx.fillStyle = color;
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`C${c + 1}`, 64, 2);
+    ctx.font = '12px monospace';
+    ctx.fillStyle = dimColor;
+    ctx.fillText(COMPLEX_ABBR[c + 1] || '', 64, 22);
+    label.tex.needsUpdate = true;
+  }
+}
+
 function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
   // Labels are identity-bound: label k always reads "K{k+1}".
   const activeK = perm ? perm[activeIdx] : activeIdx;
@@ -704,7 +797,7 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
     ctx.textBaseline = 'top';
     ctx.fillText(`K${k + 1}`, W / 2, 2);
 
-    if (vertices) {
+    if (vertices && _vertexInfoVisible) {
       const v = vertices[slot];
       ctx.font = '14px monospace';
       ctx.fillStyle = dimColor;
@@ -865,6 +958,18 @@ export function update(state) {
   );
   paintActiveVertex(activeIdx, activeKIdx);
 
+  // Ghost active highlight — mirrors the K active treatment for the
+  // ghost cube. Active C type is the complex assigned to the active
+  // slot; the corresponding ghostVertMeshes[activeC] gets scaled up
+  // and a pulsing ring anchored to its current animated position.
+  if (state.cAssignments) {
+    const activeCType = (state.cAssignments[activeIdx] | 0) - 1;
+    if (activeCType >= 0 && activeCType < 8) {
+      paintActiveGhostVertex(activeCType);
+      paintGhostVertexLabels(activeCType);
+    }
+  }
+
   if (state.snapQuat) {
     const [sx, sy, sz, sw] = state.snapQuat;
     const snapEl = state.snapElement;
@@ -888,6 +993,21 @@ export function update(state) {
 /** Slider-driven uniform ghost-cube scale (centered at origin). */
 export function setGhostScale(s) {
   ghostGroup.scale.setScalar(s);
+}
+
+/** Shift both live + ghost cube groups along world Z. */
+export function setCubeDepthOffset(z) {
+  cubeGroup.position.z = z;
+  ghostGroup.position.z = z;
+}
+
+// Toggled by setVertexInfoVisible(); paintVertexLabels() reads it each frame
+// to suppress the intensity / density / duration lines while keeping K# visible.
+let _vertexInfoVisible = true;
+
+/** Show / hide the per-vertex info lines (intensity / density / duration). K# stays. */
+export function setVertexInfoVisible(visible) {
+  _vertexInfoVisible = visible;
 }
 
 /** Write the active K-vertex's world position into `out` (Vector3). */

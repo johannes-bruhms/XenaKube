@@ -48,7 +48,7 @@ const FACE_SIG = {
   'U':  { envelope: 'pluck', articulation: 'attack',    motion: 'up',        registerBias:  0.8 },
   "U'": { envelope: 'fade',  articulation: 'release',   motion: 'down',      registerBias:  0.8 },
   'D':  { envelope: 'stab',  articulation: 'attack',    motion: 'down',      registerBias: -0.8 },
-  "D'": { envelope: 'drone', articulation: 'sustained', motion: 'static',    registerBias: -0.8 },
+  "D'": { envelope: 'hairpin-up',   articulation: 'sustained', motion: 'static',    registerBias: -0.8 },
   'L':  { envelope: 'swell', articulation: 'sustained', motion: 'up',        registerBias:  0.0 },
   "L'": { envelope: 'fade',  articulation: 'release',   motion: 'down',      registerBias:  0.0 },
   'R':  { envelope: 'stab',  articulation: 'attack',    motion: 'static',    registerBias:  0.0 },
@@ -56,7 +56,7 @@ const FACE_SIG = {
   'F':  { envelope: 'swell', articulation: 'sustained', motion: 'up',        registerBias:  0.3 },
   "F'": { envelope: 'swell', articulation: 'sustained', motion: 'down',      registerBias:  0.3 },
   'B':  { envelope: 'pluck', articulation: 'attack',    motion: 'static',    registerBias: -0.3 },
-  "B'": { envelope: 'drone', articulation: 'sustained', motion: 'oscillate', registerBias: -0.3 },
+  "B'": { envelope: 'hairpin-down', articulation: 'sustained', motion: 'oscillate', registerBias: -0.3 },
 };
 
 // Move log — dashboard-side FIFO of the last RECENT_MOVES_MAX moves the
@@ -87,11 +87,8 @@ let prevGyroTime = 0;
 /**
  * Build the dynamic DOM (vertex cards, complex cards, seq pips, perm slots)
  * and wire optional callbacks. Idempotent — call once per page load.
- *   onPathToggle — called when the user clicks #s-path. Receives the
- *     toggled-to value (`'V1'` | `'V2'`); main.js wires this to
- *     transport.send({ type: 'set_mode', path }).
  */
-export function init({ onPathToggle } = {}) {
+export function init() {
   const vertexGrid = document.getElementById('vertex-grid');
   for (let i = 0; i < 8; i++) {
     const card = document.createElement('div');
@@ -137,13 +134,6 @@ export function init({ onPathToggle } = {}) {
     permSlots.push(slot);
   }
 
-  if (onPathToggle) {
-    document.getElementById('s-path').addEventListener('click', () => {
-      const cur = document.getElementById('s-path').textContent.trim();
-      const next = cur === 'V2' ? 'V1' : 'V2';
-      onPathToggle(next);
-    });
-  }
 }
 
 /** Cache the algorithm book locally if any caller wants to read it later. */
@@ -167,9 +157,6 @@ export function update(state, move) {
   const activeIdx = state.activeVertex ?? 0;
 
   document.getElementById('s-step').textContent  = state.step;
-  document.getElementById('s-path').textContent  = state.path;
-  const pathSel = document.getElementById('path-select');
-  if (pathSel && pathSel.value !== state.path) pathSel.value = state.path;
 
   document.getElementById('s-k-group').textContent = state.kGroup;
   document.getElementById('s-tetra').textContent = state.tetraIndex === 0 ? 'even' : 'odd';

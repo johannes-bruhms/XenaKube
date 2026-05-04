@@ -21,8 +21,8 @@ Nomos Alpha was the first composition to use group theory (specifically the rota
 | Concept | Source (pp.) | Implementation |
 |---------|-------------|----------------|
 | S4 (hexahedral group, 24 rotations) as organizer | 218–220 | `group.ts`: BFS-generated, Cayley table, 8-vertex permutations |
-| K_i vertices as D×G×U parameter triples | 218–220 | `vertices.ts`: V1 and V2 paths with exact Xenakis values |
-| Two paths V1 (loud/short) and V2 (quiet/long) | 218–220 | `vertices.ts`: V1_VERTICES, V2_VERTICES |
+| K_i vertices as D×G×U parameter triples | 218–220 | `vertices.ts`: single `VERTICES` table (D and U inherited from V1's per-vertex distribution; G expanded from V1's 4-level alphabet to the full ppp..fff 8-step palette so the cube always exposes every dynamic level) |
+| ~~Two paths V1 (loud/short) and V2 (quiet/long)~~ | 218–220 | XenaKube collapses to a single path — V1's character lives implicitly per vertex, V2 retired in favour of dynamic-palette completeness |
 | C_i sound complex types (C1–C8) | 222–224 | `complexes.ts`: 8 timbral categories |
 | α/β/γ cyclic mapping rotation | 222 | `complexes.ts`: ALPHA, BETA, GAMMA arrays, cycle every 3 subs |
 | Second independent cube for C_i | 222–224 | `complexes.ts`: ComplexCube class. Advance law shifted by fixed `C_SHIFT = U` in `engine.ts` so C diverges from K (Xenakis §IV: C_i and K_i traverse *separate* closed graphs, "C_i graph {D Q12}" vs "K_i graph {D Q3}") |
@@ -166,7 +166,7 @@ Speedcubers solve the equivalent problem by **chunking** — `R U R' U'` isn't f
 
 2. **Vocabulary, not modes.** Grow the algorithm book from seven mode-toggles into ≈20 short (≤6-move) *musical phrase* algorithms — "rising arco arpeggio," "pizz cluster," "harmonic fanfare," "descending sul pont line." These are the performer's sentences.
 
-3. **Forward-model audibility.** Each individual face-turn should produce a sound the performer can predict before committing to the turn. One way: fix each of the 12 face-moves (L / L' / R / R' / F / F' / B / B' / U / U' / D / D') to its own gesture-type, using the GAN cube's color-fixed face identity (not the hand frame). Then K_i / C_i permutation modulates the *content* inside that known shape, rather than choosing the shape.
+3. **Forward-model audibility.** Each individual face-turn should produce a sound the performer can predict before committing to the turn. One way: fix each of the 12 face-moves (L / L' / R / R' / F / F' / B / B' / U / U' / D / D') to its own gesture-type and phrase duration, using the GAN cube's color-fixed face identity (not the hand frame). Then K_i / C_i permutation modulates the *content* inside that known shape, rather than choosing or stretching the shape.
 
 4. **Dashboard diet.** The full-state HUD is a debug view. Performance mode should surface only what the performer needs to decide their next move: the active vertex's upcoming voice, which algorithms are one move from completing, distance-to-solved. More information at all times, paradoxically, means less comprehension.
 
@@ -178,7 +178,7 @@ Speedcubers solve the equivalent problem by **chunking** — `R U R' U'` isn't f
 
 ### The current split (circa Phase A1)
 
-Engine-side (`src/*`) computes *structural* decisions: which S4 element, which complex, which vertex, which face identity, what duration, what intensity. Max-side (`max/xk_swam.js`) computes *phrase-level* note-generation: which pitches inside the `foldToRange` window, how many rebows, stochastic timing, the per-complex phrase contour. Both layers make composition-relevant decisions; only the engine side is reachable from the dashboard.
+Engine-side (`src/*`) computes *structural* decisions: which S4 element, which complex, which vertex, which face identity, what density/intensity, and the face-owned duration table. Max-side (`max/xk_swam.js`) computes *phrase-level* note-generation: which pitches inside the `foldToRange` window, how many rebows, stochastic timing, the per-complex phrase contour. Both layers make composition-relevant decisions; only the engine side is reachable from the dashboard.
 
 This worked fine as long as the only consumer of the bridge's output was the cellist's ear. It stops working cleanly the moment we want a second consumer — real-time notation, a recording log, a training tool — because the dashboard can't know what Max is doing without re-implementing the Max RNG and sieve logic in JavaScript.
 
@@ -313,7 +313,7 @@ No complete bar-by-bar analysis exists. Closest resources:
 
 ## SWAM Cello Mapping Design
 
-Xenakis' C1–C8 complex types are cello techniques. SWAM Cello 3 (Audio Modeling) is a physical-modeling VST that exposes parameters as a mix of **Key Switches** (techniques — Play Mode, Harmonics, Tremolo, etc.) and **MIDI CC** (continuous — Expression, Bow Position, Vibrato). See `docs/swam_cello_reference.md` for the full KS/CC authority.
+Xenakis' C1–C8 complex types are cello techniques. SWAM Cello 3 (Audio Modeling) is a physical-modeling VST that exposes parameters as a mix of **Key Switches** (techniques — Play Mode, Harmonics, Tremolo, etc.) and **MIDI CC** (continuous — Expression, Bow Position, Vibrato). See `docs/swam/swam_cello_reference.md` for the full KS/CC authority.
 
 **The bridge mapping below documents the v2 design; the v3+ bridge (currently shipping in `max/xk_swam.js`) has been refactored against SWAM's actual control model — see `docs/revision_roadmap.md` (D1–D31) for the full trail.** Current live mapping: Play Mode = KS C velocity-select; Gesture Mode / Alt Fingering = KS D / D# velocity-select; Harmonics + Tremolo = CC 78 / CC 79 (v3.10 KS F#/G# are 2-band with default-only Off, so CC is the only way to reach every state — D31); Expression is per-complex envelope; Vibrato Rate = CC 19. The v2 mapping below is preserved for design-rationale continuity.
 
@@ -589,7 +589,7 @@ Phase 1 invariant `assertGlissSync` continues to compare line-pitch vs chain-pit
 
 ### SWAM preset requirement
 
-Pitchbend range MUST be ≥ ±12 semitones in `xenakube_2.swam`. SWAM's Pitchbend Range setting is in the Advanced → MIDI page. Save the preset with the new range. Document in `docs/swam_cello_reference.md` and the synthesis-bridge.md preset prerequisites list.
+Pitchbend range MUST be ≥ ±12 semitones in `xenakube_2.swam`. SWAM's Pitchbend Range setting is in the Advanced → MIDI page. Save the preset with the new range. Document in `docs/swam/swam_cello_reference.md` and the synthesis-bridge.md preset prerequisites list.
 
 `PITCHBEND_RANGE_SEMI = 12` constant in `xk_swam.js` matches the preset. Bumping to ±24 in preset means changing this constant too — they're a paired tunable.
 
@@ -634,7 +634,7 @@ New invariant: `bendStep` audible target should be reachable. If `Math.abs(targe
 **Phase A.4 — SWAM preset + docs (~15 min)**:
 1. SWAM GUI: Advanced → MIDI → Pitchbend Range = 12 (or higher).
 2. Save preset.
-3. Document the requirement in `docs/swam_cello_reference.md` and synthesis-bridge.md preset prerequisites.
+3. Document the requirement in `docs/swam/swam_cello_reference.md` and synthesis-bridge.md preset prerequisites.
 
 **Phase A.5 — invariant tightening (~30 min)**:
 1. Once D59 is stable, set every entry in `MAX_LEAPS_BY_COMPLEX` to 0 (D58 fallback no longer needed for any complex; cross-string is handled by bendStep instead of leapStep).

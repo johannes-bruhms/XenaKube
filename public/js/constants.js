@@ -55,8 +55,14 @@ export const ROLL_BRUSH_SCALE = 1.4;
 
 // Force-complete notes whose noteoff never arrives (UDP loss, relay
 // reconnect mid-phrase) after this long. The watchdog walks every
-// per-key activeMidiNotes queue.
-export const PENDING_MAX_AGE_MS = 45000;
+// per-key activeMidiNotes queue. Set just past the bridge's max phrase
+// duration ceiling (`Math.min(duration, 30)` in handleVoice + ~1 s
+// release fade): legitimate long notes wrap up by ~31 s, anything
+// older than 32 s is stuck. Pre-fix this was 45000 ms — stale entries
+// caused triangle's `_hasActiveGliss` to keep returning true (gliss
+// lines preserved indefinitely until a new noteon retargeted them, the
+// user-reported "white triangle keeps getting stuck" symptom).
+export const PENDING_MAX_AGE_MS = 32000;
 
 // C1 pizzicato is the ONLY complex with a release fade (mirrors the
 // physical pluck — string vibrates briefly after the finger lifts).
@@ -101,8 +107,8 @@ export const GLISS_COMPLEXES = new Set([5, 6, 7]);
 // this path — pitchbend would be needed for genuinely slow drift.
 // Phase 1.3 only catches line ↔ chain drift, not table ↔ audio drift,
 // so the bridge sync is manual.
-export const PORTAMENTO_MS_PER_SEMITONE       = { 5: 50, 6: 80, 7: 115 };
-export const GLISS_PORTAMENTO_MS_PER_SEMITONE = { 5: 50, 6: 80, 7: 115 };
+export const PORTAMENTO_MS_PER_SEMITONE       = { 5: 50, 6: 100, 7: 115 };
+export const GLISS_PORTAMENTO_MS_PER_SEMITONE = { 5: 50, 6: 100, 7: 115 };
 
 // D66 — slide segment duration cap. Both `_glissChainDur` (rolling-score
 // chain) and `predictGlissDuration` (triangle white line) clamp their

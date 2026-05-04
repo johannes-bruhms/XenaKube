@@ -39,32 +39,17 @@ export class ModeManager {
     this.algorithmHistory.push(match);
     const prev = { ...this.mode };
 
+    // All algorithm effects are stubs — detection still fires and the
+    // dashboard logs the match, but no mode change. Effect re-binding is
+    // tracked in `docs/todo.md` Phase B (algorithm-as-phrase-vocabulary).
     switch (match.algorithm.effect) {
       case 'sexy-move':
-        // Bow-pressure accent ping only (handled in max/xk_swam.js
-        // handleAlgorithm). No mode change. The V1↔V2 path toggle was removed
-        // 2026-04-30 — V is now only programmatically settable via
-        // engine.setMode({path}); no algorithm auto-triggers it.
-        break;
       case 'sune':
-        // Detection stub — freeze effect removed 2026-04-18. Effect TBD.
-        break;
       case 'anti-sune':
-        this.mode.palette = 'V1';
-        break;
       case 'oll-cross':
-        this.mode.variant = 'drone';
-        break;
       case 'u-perm':
-        this.mode.variant = 'burst';
-        break;
       case 't-perm':
-        this.mode.variant = 'default';
-        this.mode.palette = 'default';
-        break;
       case 'niklas':
-        // No mode change. CTRL harmonic-ping accent only (handled in
-        // max/xk_swam.js handleAlgorithm).
         break;
     }
 

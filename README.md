@@ -21,7 +21,7 @@ In practice, each turn is more than a note trigger. A turn can:
 
 The browser GUI is a full performance HUD: it shows the live cube, ghost/snap orientation, active vertices and complexes, cube-algorithm buffer, right-edge pitch sieve, and a rolling score fed by the actual MIDI echo coming back from the Max bridge.
 
-For a screenshot of the live HUD, see `docs/webgui/current-gui.png`.
+For a screenshot of the live HUD, see `docs/presentation/webgui/current-gui.png`.
 
 ## How It Works
 
@@ -44,7 +44,7 @@ A performer physically turns a Bluetooth-enabled Rubik's cube. Each turn is a mu
 
 Following Xenakis' method, two S4 group cubes operate simultaneously:
 
-- **K_i cube** -- maps 8 vertices to parameter triples (Density × Intensity × Duration). Each turn permutes which parameters apply to which voice.
+- **K_i cube** -- maps 8 vertices to parameter triples (Density × Intensity × Duration). Intensity covers the full ppp..fff palette, one unique dynamic per vertex; each turn permutes which level lands at which voice position.
 - **C_i cube** -- maps 8 vertices to sound complex types (C1-C8). Transformations reassign which synthesis method each voice uses.
 
 ### Cube Algorithms
@@ -65,7 +65,7 @@ Algorithms layer — shorter algorithms fire immediately even if they're the pre
 
 ### Phrase Generation (Max/SWAM)
 
-Each cube turn triggers a **musical phrase**, not a single MIDI note. Phrase shape depends on the active complex type (C1-C8): pizzicato clouds, legato runs, glissando slides, sustained swells, ponticello tremolos. Phrases humanize velocity/pitch/timing and auto-release based on the Xenakis `duration` parameter. See `CLAUDE.md` "Per-Turn Phrase Generation" for detail.
+Each cube turn triggers a **musical phrase**, not a single MIDI note. Phrase shape depends on the active complex type (C1-C8): pizzicato clouds, legato runs, glissando slides, sustained swells, ponticello tremolos. Phrases humanize velocity/pitch/timing and auto-release based on the Xenakis `duration` parameter. See `docs/synthesis-bridge.md` for the per-complex mapping detail.
 
 ### Voice Modes
 
@@ -97,7 +97,7 @@ npm install
 
 **1. Start Max/MSP**
 
-Open the SWAM Cello bridge patch in Max 9+ (see `max/` + `CLAUDE.md` → "Max/MSP — SWAM Cello Bridge").
+Open the SWAM Cello bridge patch in Max 9+ (see `max/` + `CLAUDE.md` → "Synthesis Bridge — Max/MSP + SWAM Cello").
 
 **2. Start the relay**
 

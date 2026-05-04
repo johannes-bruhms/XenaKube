@@ -39,6 +39,7 @@ const oscMax = new Client('127.0.0.1', 57121);  // Max/MSP — receives /xk/* fo
 
 // Track last move for dashboard broadcast
 let lastMove = null;
+let lastMoveReceivedAt = 0;
 
 // === Gyro Kalman Filter (upsample BLE ~10Hz → 60Hz with velocity prediction) ===
 //
@@ -138,6 +139,97 @@ const OMEGA_NOISE_FLOOR = 0.25;
 const VISUAL_DELAY_MS = 120;        // trailing latency for dashboard cube
 const VISUAL_BUFFER_MS = 1500;      // keep samples at least this long
 const visualSamples = [];           // [{ q, t }], oldest first
+
+// === Turn -> first MIDI noteon latency probe ===
+//
+// Measures relay/Max bridge latency only: engine.onVoice timestamp to the
+// first non-companion /xk/midi/noteon echo received back from Max. It does not
+// measure SWAM's acoustic attack, Auto Poly Detect look-ahead, or slow CC 11
+// attack ramps inside the plugin.
+const LATENCY_WARN_MS = 150;
+const LATENCY_FAIL_MS = 250;
+const LATENCY_MISSING_MS = 3000;
+const LATENCY_WINDOW = 64;
+const pendingVoiceLatency = [];
+const latencyByComplex = new Map();
+const latestExprByVoice = new Map();
+let latencySeq = 0;
+
+function percentile(sorted, p) {
+  if (sorted.length === 0) return 0;
+  const idx = Math.min(sorted.length - 1, Math.max(0, Math.ceil(sorted.length * p) - 1));
+  return sorted[idx];
+}
+
+function latencyStatsFor(complex) {
+  let stats = latencyByComplex.get(complex);
+  if (!stats) {
+    stats = { samples: [], total: 0 };
+    latencyByComplex.set(complex, stats);
+  }
+  return stats;
+}
+
+function summarizeLatency(complex, stats) {
+  const sorted = stats.samples.slice().sort((a, b) => a - b);
+  return `C${complex} n=${stats.total} p50=${percentile(sorted, 0.50)}ms p95=${percentile(sorted, 0.95)}ms max=${sorted[sorted.length - 1] || 0}ms`;
+}
+
+function startVoiceLatencyProbe(output) {
+  if (!output || !Array.isArray(output.active) || output.active.length === 0) return;
+  const complexes = output.active.map((ev) => ev.complex | 0);
+  pendingVoiceLatency.push({
+    id: ++latencySeq,
+    t0: Date.now(),
+    moveT0: lastMoveReceivedAt || Date.now(),
+    move: lastMove || '-',
+    face: output.face || '-',
+    mode: output.mode || 'unknown',
+    expectedComplex: complexes[0],
+    complexes,
+  });
+  while (pendingVoiceLatency.length > 32) {
+    const dropped = pendingVoiceLatency.shift();
+    console.error(`[LATENCY FAIL] dropped stale pending voice id=${dropped.id} C${dropped.expectedComplex} without noteon echo`);
+  }
+}
+
+function completeVoiceLatencyProbe(data) {
+  if (!data || data.kind !== 'noteon' || data.isCompanion === true) return;
+  expireVoiceLatencyProbes(Date.now());
+  const pending = pendingVoiceLatency.shift();
+  if (!pending) return;
+
+  const dt = Date.now() - pending.t0;
+  const moveDt = Date.now() - pending.moveT0;
+  const complex = data.complex || pending.expectedComplex || 0;
+  const expr = latestExprByVoice.get(data.voice);
+  const exprText = expr ? `expr=${expr.val} exprAge=${Date.now() - expr.t}ms` : 'expr=unknown';
+  const stats = latencyStatsFor(complex);
+  stats.samples.push(dt);
+  stats.total++;
+  if (stats.samples.length > LATENCY_WINDOW) stats.samples.shift();
+
+  const base = `[LATENCY] voice->noteon ${dt}ms move->noteon ${moveDt}ms move=${pending.move} C${complex} face=${pending.face} expected=C${pending.expectedComplex} mode=${pending.mode} ${exprText}`;
+  if (dt >= LATENCY_FAIL_MS) {
+    console.error(`[LATENCY FAIL] ${base} | ${summarizeLatency(complex, stats)}`);
+  } else if (dt >= LATENCY_WARN_MS) {
+    console.warn(`[LATENCY WARN] ${base} | ${summarizeLatency(complex, stats)}`);
+  } else if (expr && expr.val > 0 && expr.val < 32) {
+    console.warn(`[ONSET EXPR WARN] first noteon arrived quickly but CC11 is low: ${base} | ${summarizeLatency(complex, stats)}`);
+  } else if (stats.total % 8 === 0) {
+    console.log(`${base} | ${summarizeLatency(complex, stats)}`);
+  }
+}
+
+function expireVoiceLatencyProbes(now) {
+  while (pendingVoiceLatency.length > 0 && now - pendingVoiceLatency[0].t0 >= LATENCY_MISSING_MS) {
+    const stale = pendingVoiceLatency.shift();
+    console.error(`[LATENCY FAIL] no noteon echo within ${LATENCY_MISSING_MS}ms for voice id=${stale.id} move=${stale.move} C${stale.expectedComplex} face=${stale.face} mode=${stale.mode}`);
+  }
+}
+
+setInterval(() => expireVoiceLatencyProbes(Date.now()), 1000);
 
 function pushVisualSample(q, t) {
   visualSamples.push({ q, t });
@@ -359,6 +451,7 @@ engine.onSolve(() => {
 // Broadcast voice output — and emit /xk/voice over OSC *only here* so it
 // fires on real voice transitions, not on every gyro packet (see D16).
 engine.onVoice((output) => {
+  startVoiceLatencyProbe(output);
   const voiceMsgs = voiceToOsc(output);
   for (const msg of voiceMsgs) {
     oscMax.send(msg.address, ...msg.args);
@@ -401,11 +494,17 @@ midiEchoServer.on('message', (msg) => {
   // is implicit during a single reload window.
   const address = msg[0];
   let data = null;
-  if (address === OSC.MIDI_NOTEON)        data = { kind: 'noteon',   voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
+  if (address === OSC.MIDI_NOTEON)        data = { kind: 'noteon',   voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0, isCompanion: (msg[5]|0) === 1 };
   else if (address === OSC.MIDI_NOTEOFF)  data = { kind: 'noteoff',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
   else if (address === OSC.MIDI_PANIC)    data = { kind: 'panic' };
   else if (address === OSC.MIDI_BENDSTEP) data = { kind: 'bendstep', voice: msg[1]|0, fromPitch: msg[2]|0, toPitch: msg[3]|0, durMs: msg[4]|0, complex: msg[5]|0 };  // D59
+  else if (address === OSC.MIDI_EXPR)     data = { kind: 'expr',     voice: msg[1]|0, val: msg[2]|0, complex: msg[3]|0 };
   else return;
+
+  if (data.kind === 'expr') {
+    latestExprByVoice.set(data.voice, { val: data.val, complex: data.complex, t: Date.now() });
+  }
+  completeVoiceLatencyProbe(data);
 
   const payload = JSON.stringify({ type: 'midi_echo', data });
   wss?.clients?.forEach((client) => {
@@ -586,6 +685,7 @@ wss.on('connection', function connection(ws) {
 
                 // Tag move for dashboard broadcast, then feed engine
                 lastMove = moveStr;
+                lastMoveReceivedAt = Date.now();
                 engine.onTurn(moveStr);
             }
             else if (data.type === 'gyro') {
@@ -630,7 +730,6 @@ wss.on('connection', function connection(ws) {
             }
             else if (data.type === 'set_mode') {
                 const mode = {};
-                if (data.path) mode.path = data.path;
                 if (data.cCube) mode.cCube = data.cCube;
                 if (data.kCube) mode.kCube = data.kCube;
                 engine.setMode(mode);

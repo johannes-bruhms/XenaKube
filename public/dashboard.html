@@ -61,10 +61,6 @@
       <span class="state-val accent" id="s-k-group">0</span>
     </div>
     <div class="state-row">
-      <span class="state-label">path</span>
-      <span class="state-val clickable" id="s-path" title="click to toggle V1 / V2">V1</span>
-    </div>
-    <div class="state-row">
       <span class="state-label">step</span>
       <span class="state-val" id="s-step">0</span>
     </div>
@@ -164,16 +160,25 @@
     <span class="slider-val" id="ghostSizeVal">1.00</span>
   </div>
   <div class="br-slider-row">
+    <label>z-pos</label>
+    <input type="range" id="cubeDepth" min="-3" max="3" step="0.05" value="0.00">
+    <span class="slider-val" id="cubeDepthVal">0.00</span>
+  </div>
+  <div class="br-slider-row">
     <label>score</label>
     <input type="range" id="scoreSpeed" min="60" max="900" step="30" value="360">
     <span class="slider-val" id="scoreSpeedVal">360</span>
+  </div>
+  <div class="br-slider-row">
+    <label>bg</label>
+    <input type="color" id="bgColor" value="#000000">
+    <span class="slider-val" id="bgColorVal">#000000</span>
   </div>
 </div>
 
 <!-- Hidden elements kept for JS compatibility -->
 <div class="ovl-legacy">
   <select id="diagram-select"><option value="">direct (free)</option></select>
-  <select id="path-select"><option value="V1">V1</option><option value="V2">V2</option></select>
   <select id="cmode-select"><option value="algorithmic">algorithmic</option><option value="gyro">gyro snap</option></select>
   <button id="resetBtn">Reset</button>
   <div id="seq-vertex-bar"></div>

@@ -46,24 +46,23 @@ describe('swam-mapping — tables', () => {
     expect(intensityEntry('f')).toEqual(INTENSITY_MAP.f);
   });
 
-  it('ENV_PROFILE covers all 6 envelope shapes', () => {
-    const expected = ['pluck', 'swell', 'stab', 'drone', 'fade', 'burst'] as const;
+  it('ENV_PROFILE covers all 7 envelope shapes (drone replaced by hairpin-up + hairpin-down)', () => {
+    const expected = ['pluck', 'swell', 'stab', 'hairpin-up', 'hairpin-down', 'fade', 'burst'] as const;
     for (const k of expected) expect(ENV_PROFILE[k]).toBeDefined();
   });
 
-  it('ENV_PROFILE isSingle → pluck/stab/drone; burst is the only countMult != 1', () => {
+  it('ENV_PROFILE isSingle → pluck/stab/hairpin-up/hairpin-down; burst is the only countMult != 1', () => {
     const singles = Object.entries(ENV_PROFILE).filter(([, p]) => p.isSingle).map(([k]) => k).sort();
-    expect(singles).toEqual(['drone', 'pluck', 'stab']);
+    expect(singles).toEqual(['hairpin-down', 'hairpin-up', 'pluck', 'stab']);
 
     const multipliers = Object.entries(ENV_PROFILE).filter(([, p]) => p.countMult !== 1.0).map(([k]) => k);
     expect(multipliers).toEqual(['burst']);
     expect(ENV_PROFILE.burst.countMult).toBeGreaterThan(1);
   });
 
-  it('drone is the only isDrone and has release ≥ 1.5', () => {
+  it('isDrone is no longer set on any profile (drone removed in favour of hairpins)', () => {
     const drones = Object.entries(ENV_PROFILE).filter(([, p]) => p.isDrone).map(([k]) => k);
-    expect(drones).toEqual(['drone']);
-    expect(ENV_PROFILE.drone.releaseMult).toBeGreaterThanOrEqual(1.5);
+    expect(drones).toEqual([]);
   });
 
   it('ART_OFF_VEL covers 4 articulations in 0..127', () => {
@@ -99,19 +98,14 @@ describe('swam-mapping — helpers', () => {
   });
 
   describe('harmonicsForC4', () => {
-    it('V1 even → OCT, V1 odd → OCT_5TH', () => {
-      expect(harmonicsForC4('V1', 0)).toBe(HARMONICS.OCT);
-      expect(harmonicsForC4('V1', 1)).toBe(HARMONICS.OCT_5TH);
+    it('even tetra → OCT, odd tetra → OCT_5TH', () => {
+      expect(harmonicsForC4(0)).toBe(HARMONICS.OCT);
+      expect(harmonicsForC4(1)).toBe(HARMONICS.OCT_5TH);
     });
-    it('V2 even → OCT_5TH, V2 odd → CTRL', () => {
-      expect(harmonicsForC4('V2', 0)).toBe(HARMONICS.OCT_5TH);
-      expect(harmonicsForC4('V2', 1)).toBe(HARMONICS.CTRL);
-    });
-    it('never returns OFF (reserved for non-C4)', () => {
-      for (const p of ['V1', 'V2'] as const) {
-        for (const t of [0, 1] as const) {
-          expect(harmonicsForC4(p, t)).not.toBe(HARMONICS.OFF);
-        }
+    it('never returns OFF (reserved for non-C4) or CTRL (algorithm-only)', () => {
+      for (const t of [0, 1] as const) {
+        expect(harmonicsForC4(t)).not.toBe(HARMONICS.OFF);
+        expect(harmonicsForC4(t)).not.toBe(HARMONICS.CTRL);
       }
     });
   });
@@ -215,17 +209,17 @@ describe('swam-mapping — helpers', () => {
   });
 
   describe('faceTranspose', () => {
-    it('V1 uses ±12 spread, V2 uses ±6', () => {
-      expect(faceTranspose(1.0, 'static', 'V1', 0)).toBe(12);
-      expect(faceTranspose(1.0, 'static', 'V2', 0)).toBe(6);
+    it('uses ±12 spread', () => {
+      expect(faceTranspose(1.0, 'static', 0)).toBe(12);
+      expect(faceTranspose(-1.0, 'static', 0)).toBe(-12);
     });
     it('motion up adds +2, down adds -2', () => {
-      expect(faceTranspose(0.0, 'up',   'V1', 0)).toBe(2);
-      expect(faceTranspose(0.0, 'down', 'V1', 0)).toBe(-2);
+      expect(faceTranspose(0.0, 'up',   0)).toBe(2);
+      expect(faceTranspose(0.0, 'down', 0)).toBe(-2);
     });
     it('oscillate flips per turnCount parity', () => {
-      const even = faceTranspose(0.0, 'oscillate', 'V1', 0);
-      const odd  = faceTranspose(0.0, 'oscillate', 'V1', 1);
+      const even = faceTranspose(0.0, 'oscillate', 0);
+      const odd  = faceTranspose(0.0, 'oscillate', 1);
       expect(even + odd).toBe(0);
       expect(Math.abs(even)).toBe(2);
     });
@@ -236,9 +230,9 @@ describe('swam-mapping — helpers', () => {
       const map = buildFaceMap();
       expect(Object.keys(map)).toHaveLength(12);
       for (const entry of Object.values(map)) {
-        expect(typeof entry.durationBias).toBe('number');
+        expect(typeof entry.durationSec).toBe('number');
         expect(typeof entry.registerBias).toBe('number');
-        expect(['pluck', 'swell', 'stab', 'drone', 'fade', 'burst']).toContain(entry.envelope);
+        expect(['pluck', 'swell', 'stab', 'hairpin-up', 'hairpin-down', 'fade', 'burst']).toContain(entry.envelope);
         expect(['attack', 'sustained', 'release', 'iterative']).toContain(entry.articulation);
         expect(['static', 'up', 'down', 'oscillate']).toContain(entry.motion);
       }

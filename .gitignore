@@ -16,3 +16,7 @@ max/package-lock.json
 TD/
 backups/
 docs/*.png
+docs/temp-screenshots/
+
+# Local Ableton project — not part of the committed repo
+ableton/

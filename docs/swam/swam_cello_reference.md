@@ -27,7 +27,7 @@ Consolidated from `SWAM-Solo-Strings-v3.8.0-UserManual.pdf`. Scoped to what Xena
 
 ## 2. Key Switches (SWAM Cello 3 v3.10)
 
-> **v3.10 migration note (2026-04-14).** The KS plane was overhauled in v3.10. Earlier versions of this doc described the v3.8 map (Sordino at F#, Sul Tasto at G, Sul Pont at G#, Harmonics at A, Tremolo at A#, Section Size at B). **All of those moved or were removed.** This section is rewritten against the official v3.10 KS reference (`docs/v3.10-keyswitches.pdf`) and the v3.10 manual pp. 14–47 (`docs/v3.10-p14-47.pdf`). `max/xk_swam.js` was migrated to match (D27 — see `revision_roadmap.md`).
+> **v3.10 migration note (2026-04-14).** The KS plane was overhauled in v3.10. Earlier versions of this doc described the v3.8 map (Sordino at F#, Sul Tasto at G, Sul Pont at G#, Harmonics at A, Tremolo at A#, Section Size at B). **All of those moved or were removed.** This section is rewritten against the official v3.10 KS reference (`docs/swam/v3.10-keyswitches.pdf`) and the v3.10 manual pp. 14–47 (`docs/swam/v3.10-p14-47.pdf`). `max/xk_swam.js` was migrated to match (D27 — see `revision_roadmap.md`).
 
 Key Switches live on a **dedicated KS MIDI channel** (configured on the Advanced → MIDI page as `KS MIDI Channel`). The KS region is placed in MIDI space by the **KS Octave** setting — values: `Off / C-2 / C-1 / C0 / C1 / C2`. When `Off`, KS is disabled entirely.
 
@@ -91,7 +91,7 @@ Stateful diffing is still required so we don't re-fire when an option is already
 | A#     | 34 | Sordino | 2-opt (at next Note On) | Low=Off / High=On |
 | **B**  | 35 | Page Modifier | hold | hold + another KS for Bow/Pizz Polyphony, Double Hold String |
 
-> **D31 — Harmonics F# and Tremolo G# are NOT 3-/4-opt velocity-selects.** Earlier revisions of this doc (and `xk_swam.js`) claimed 4-opt Harmonics and 3-opt Tremolo with selectable Off. The official v3.10 PDF (`docs/v3.10-keyswitches.pdf` pp. 100–102) shows only **Low / High** velocity bands for both — Off is the instrument's initial state, not a velocity band. Once fired, **Off is unreachable via KS**. Every 3-opt KS in the same PDF explicitly names a **Mid Velocity**; F# and G# do not. The symptom this caused: sending our "OFF" velocity for non-C4/non-C8 complexes actually selected 2nd / Slow, leaving Harmonics and Tremolo stuck on.
+> **D31 — Harmonics F# and Tremolo G# are NOT 3-/4-opt velocity-selects.** Earlier revisions of this doc (and `xk_swam.js`) claimed 4-opt Harmonics and 3-opt Tremolo with selectable Off. The official v3.10 PDF (`docs/swam/v3.10-keyswitches.pdf` pp. 100–102) shows only **Low / High** velocity bands for both — Off is the instrument's initial state, not a velocity band. Once fired, **Off is unreachable via KS**. Every 3-opt KS in the same PDF explicitly names a **Mid Velocity**; F# and G# do not. The symptom this caused: sending our "OFF" velocity for non-C4/non-C8 complexes actually selected 2nd / Slow, leaving Harmonics and Tremolo stuck on.
 >
 > **`xk_swam.js` now drives Harmonics and Tremolo via CC** (CC 78 and CC 79 — SWAM's "all KS params also respond to CC via the Controller Mapping section", PDF p. 102). MIDI-Learn required once: right-click the Harmonics selector in SWAM → MIDI Learn → send CC 78 from the bridge (or any MIDI source) → same for Tremolo selector with CC 79. Save the preset. Fall-back to KS firing is retained behind `HAS_HARMONICS_CC` / `HAS_TREMOLO_CC = false` if you want to test without the MIDI-Learn step; fall-back will fire ON correctly but cannot turn Off.
 
@@ -196,7 +196,7 @@ These have no default binding. Pick any unused CC, MIDI-Learn each in SWAM, then
 | **Harmonics selector** | 78 | Main page (right-click selector) | D31 — 4-state, replaces KS F# path |
 | **Tremolo selector** | 79 | Main page (right-click selector) | D31 — 3-state, replaces KS G# path |
 | **Tremolo Min Speed** | 80 | Play Modes → Right Hand | D39 — per-phrase stochastic envelope (1/3 slow→fast / 1/3 fast→slow / 1/3 steady), driven by `rampCC`; requires Tremolo Mode = Hz |
-| **Bow Polyphony** | 81 | Play Modes → Left Hand | D35 — per-complex polyphony; default Double/Hold, gliss complexes MONO_POLY_RELEASE |
+| **Bow Polyphony** | 81 | Play Modes → Left Hand | D35/D72 — per-complex polyphony; current bridge writes Double/Hold for C1-C8. C5/C6/C7 slide via pitchbend (`slideViaBend`), so they no longer require Mono Poly Release. |
 
 After MIDI-Learning, **save as a SWAM preset** so the mapping persists across sessions.
 
@@ -412,7 +412,7 @@ KS B   (MIDI 35) Page Modifier       hold for B+x combos (advanced)
 
 ### Pre-flight checklist (in SWAM, save as preset)
 - KS page: KS Octave = **C0**, KS Channel noted, Pizz Polyphony = **Poly**, all KS enabled
-- **Play Modes → Left Hand: Bow Polyphony selector → MIDI Learn → CC 81** (D35). The bridge drives polyphony per-complex: Double/Hold as the default (rich two-string textures on overlapping turns), Mono Poly Release for C5/C6/C7 (single-line portamento — SWAM's gliss engine needs one monophonic line to slide along; any non-Mono mode splits overlaps into chord voices and kills the slide). Supersedes D34's "set Mono and save" instruction.
+- **Play Modes → Left Hand: Bow Polyphony selector → MIDI Learn → CC 81** (D35/D72). The bridge currently drives Double/Hold for every complex. C5/C6/C7 use `slideViaBend` pitchbend slides instead of SWAM Mono Poly Release portamento, so Double/Hold is required for gliss companions to sound correctly. Auto is not part of the bridge contract; if the preset lands on Auto, reduce Auto Poly Detect Time or re-learn/reassert CC 81 before latency testing.
 - Expressivity page: Vibrato Fade-In = 250 ms; right-click Vibrato Rate → MIDI Learn → CC 19
 - Bow page: right-click each of Bow Position / Bow Pressure / Bow Pressure Accent / Bow Speed / Attack Ramp / Attack Control → MIDI Learn → CCs 16 / 17 / 18 / 20 / 73 / 75
 - **Harmonics + Tremolo selectors (D31)**: right-click each on the main page → MIDI Learn → CC 78 (Harmonics) / CC 79 (Tremolo). Required because KS F#/G# are 2-band with no Off band — the bridge routes these through CC to reach every state cleanly.

@@ -18,19 +18,16 @@ export interface CubeMove {
 /** Move as string notation (e.g. "R", "U'", "F2") */
 export type MoveString = string;
 
-/** Density/Intensity/Duration parameter triple for a vertex */
+/** Density/Intensity parameter bundle for a vertex, plus neutral duration fallback */
 export interface VertexParams {
   density: number;
-  intensity: string;   // dynamic marking: p, mp, mf, f, ff, fff
-  duration: number;     // seconds
+  intensity: string;   // dynamic marking: ppp, pp, p, mp, mf, f, ff, fff
+  duration: number;     // seconds; face gestures own duration for normal turns
 }
 
 /** The 8 vertices K1-K8 as parameter bundles */
 export type VertexSet = [VertexParams, VertexParams, VertexParams, VertexParams,
                          VertexParams, VertexParams, VertexParams, VertexParams];
-
-/** Which path is active */
-export type Path = 'V1' | 'V2';
 
 /** Macroscopic sound complex type (Xenakis C1-C8) */
 export enum ComplexType {
@@ -53,8 +50,6 @@ export interface EngineMode {
   kCube: 'direct' | 'diagram';
   /** How C_i cube is driven */
   cCube: 'gyro' | 'algorithmic';
-  /** Which path */
-  path: Path;
 }
 
 /** Quaternion as [x, y, z, w] */
@@ -74,8 +69,6 @@ export interface XenaKubeState {
   cAssignments: ComplexType[];
   /** Current cyclic phase */
   cyclicPhase: CyclicPhase;
-  /** Current path */
-  path: Path;
   /** Tetrahedral orbit index (0-3) */
   tetraIndex: number;
   /** Sieve state */

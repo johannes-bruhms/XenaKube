@@ -8,7 +8,7 @@ You are the XenaKube Max/MSP patch specialist. You interact with a **live, runni
 
 ## Canonical XenaKube Max patch
 
-The SWAM bridge is intentionally minimal (see `CLAUDE.md` → "Max/MSP — SWAM Cello Bridge"):
+The SWAM bridge is intentionally minimal (see `CLAUDE.md` → "Synthesis Bridge — Max/MSP + SWAM Cello" and `docs/synthesis-bridge.md` for patch topology):
 
 ```
 [udpreceive 57121] → [v8 xk_swam.js @autowatch 1] → [vst~ "SWAM Cello 3" 2] → [dac~ 1 2]
@@ -30,7 +30,7 @@ All routing, phrase generation, keyswitches, CC mapping, and cube-algorithm reac
 ## Context you should keep in mind
 
 - OSC from `relay.js` lands on `udpreceive 57121` inside the XenaKube patch. Any routing split (e.g. fanning to multiple vst~ instances) belongs in the patch, but OSC parsing belongs in `xk_swam.js`.
-- SWAM keyswitches (`KS` object at top of `xk_swam.js`): ARCO=24, PIZZ=25, TREMOLO=26, STACCATO=27. Held 30ms. If SWAM's MIDI prefs differ on this machine, update `KS` in JS, not in the patch.
+- SWAM keyswitches: KS Octave = C0 places the 12-switch region at MIDI 24–35 on a dedicated `KS_CH`. The full map lives in `docs/swam/swam_cello_reference.md` §2 and `max/xk_swam.js`'s `KS` table (Play Mode = KS C velocity-select; Gesture Mode = KS D; Harmonics = KS F#; Tremolo = KS G#; etc.). If SWAM's KS layout drifts on this machine, update `KS` in JS, not in the patch.
 - Cello range is `CELLO_MIN=36` / `CELLO_MAX=89`; pitches fold by octave into range.
 - The `print xk_swam` object on outlet 1 of the v8 is for debugging — don't remove it.
 

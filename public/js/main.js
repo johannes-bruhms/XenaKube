@@ -67,11 +67,16 @@ triangle.init({
   // when true, triangle's endLine keeps the line alive so it can keep
   // tracking the next slide.
   hasActiveGliss: (voice, complex) => rollingScore.hasActiveNote(voice, complex),
+  // Orphan-line detection — triangle splices a non-gliss line if its
+  // (voice, pitch) has no matching active entry in rolling-score for
+  // > 500 ms. Catches stuck-line accumulation when the bridge noteoff
+  // arrives but the splice misses triangle (cross-module dispatch race,
+  // key mismatch, FIFO depth overflow, etc.) — the user-reported "white
+  // triangle keeps getting stuck" symptom.
+  hasActiveKey: (voice, pitch) => rollingScore.hasActiveKey(voice, pitch),
 });
 
-stateUi.init({
-  onPathToggle: (next) => wsSend({ type: 'set_mode', path: next }),
-});
+stateUi.init();
 
 // ---- Transport event wiring -----------------------------------------------
 
@@ -140,6 +145,16 @@ function handleMidiEcho(data) {
     return;
   }
 
+  // Pure-telemetry CC 11 (Expression) echo from the bridge — feeds the
+  // rolling-score's brush-size-by-audible-dynamic mapping. No sieve /
+  // triangle visualisation depends on it; a missed message just means the
+  // next noteon snapshots a slightly stale value (default 64 if no expr
+  // has been seen yet for this voice).
+  if (data.kind === 'expr') {
+    rollingScore.exprChanged(data);
+    return;
+  }
+
   const cmx = data.complex | 0;
   const key = `${data.voice}:${data.pitch}`;
 
@@ -153,14 +168,21 @@ function handleMidiEcho(data) {
     // a slide retarget. With chainStart wired through, leaps splice
     // the line and create a fresh instant-snap entry, matching the
     // rolling-chain's break behaviour.
+    const isCompanion = data.isCompanion === true;
     const chainStart = rollingScore.noteOn({
       voice:    data.voice,
       pitch:    data.pitch,
       velocity: data.velocity,
       complex:  cmx,
+      isCompanion,
     });
+    // D72.6 — companions on gliss complexes are pure render-time overlays
+    // (a translated re-stroke of the main chain). They have no chain entry,
+    // no sieve highlight, no triangle line — skip the visual side-effects
+    // that would otherwise need a companion-noteoff to clean up.
+    if (isCompanion && (cmx === 5 || cmx === 6 || cmx === 7)) return;
     sieveNoteOn(data.pitch, data.velocity, cmx);
-    triangle.noteOn(data.voice, data.pitch, data.velocity, cmx, key, chainStart);
+    triangle.noteOn(data.voice, data.pitch, data.velocity, cmx, key, chainStart, isCompanion);
     return;
   }
 
@@ -201,7 +223,6 @@ function handleMidiEcho(data) {
 // ---- Sequence / mode controls (legacy hidden DOM kept for write-throughs) -
 
 const diagramSelect = document.getElementById('diagram-select');
-const pathSelect    = document.getElementById('path-select');
 const cmodeSelect   = document.getElementById('cmode-select');
 const resetBtn      = document.getElementById('resetBtn');
 
@@ -219,10 +240,6 @@ diagramSelect.addEventListener('change', () => {
   const name = diagramSelect.value;
   if (name) wsSend({ type: 'set_diagram', name });
   else      wsSend({ type: 'clear_diagram' });
-});
-
-pathSelect.addEventListener('change', () => {
-  wsSend({ type: 'set_mode', path: pathSelect.value });
 });
 
 cmodeSelect.addEventListener('change', () => {
@@ -248,6 +265,7 @@ const uiToggle = document.getElementById('ui-toggle');
 function setUiHidden(hidden) {
   document.body.classList.toggle('ui-hidden', hidden);
   uiToggle.setAttribute('aria-pressed', hidden ? 'true' : 'false');
+  cubeScene.setVertexInfoVisible(!hidden);
   localStorage.setItem('uiHidden', hidden ? '1' : '0');
 }
 setUiHidden(localStorage.getItem('uiHidden') === '1');
@@ -321,6 +339,47 @@ ghostSizeSlider.addEventListener('input', () => {
   const val = parseFloat(ghostSizeSlider.value);
   applyGhostSize(val);
   localStorage.setItem('ghostSize', val.toFixed(2));
+});
+
+const cubeDepthSlider = document.getElementById('cubeDepth');
+const cubeDepthValEl  = document.getElementById('cubeDepthVal');
+function applyCubeDepth(val) {
+  cubeScene.setCubeDepthOffset(val);
+  cubeDepthValEl.textContent = val.toFixed(2);
+}
+const savedCubeDepth = parseFloat(localStorage.getItem('cubeDepth'));
+if (isFinite(savedCubeDepth) && savedCubeDepth >= -3 && savedCubeDepth <= 3) {
+  cubeDepthSlider.value = savedCubeDepth.toFixed(2);
+  applyCubeDepth(savedCubeDepth);
+}
+cubeDepthSlider.addEventListener('input', () => {
+  const val = parseFloat(cubeDepthSlider.value);
+  applyCubeDepth(val);
+  localStorage.setItem('cubeDepth', val.toFixed(2));
+});
+
+// Background color swatch — overrides CSS `--bg` at runtime so every rule
+// referencing var(--bg) (body fill, panel backers, etc.) updates live.
+// Persisted in localStorage so the picked colour survives reloads. The
+// swatch lives inside .ovl-br which is hidden by `body.ui-hidden`, so
+// clicking the title to collapse the chrome hides the picker too.
+const bgColorEl    = document.getElementById('bgColor');
+const bgColorValEl = document.getElementById('bgColorVal');
+function applyBgColor(hex) {
+  document.documentElement.style.setProperty('--bg', hex);
+  bgColorValEl.textContent = hex;
+}
+const savedBgColor = localStorage.getItem('bgColor');
+if (savedBgColor && /^#[0-9a-fA-F]{6}$/.test(savedBgColor)) {
+  bgColorEl.value = savedBgColor;
+  applyBgColor(savedBgColor);
+} else {
+  applyBgColor(bgColorEl.value);
+}
+bgColorEl.addEventListener('input', () => {
+  const hex = bgColorEl.value;
+  applyBgColor(hex);
+  localStorage.setItem('bgColor', hex);
 });
 
 // ---- Cube BLE connection (Web Bluetooth) ----------------------------------

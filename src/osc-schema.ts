@@ -21,7 +21,6 @@ export const OSC = {
   COMPLEX:       '/xk/complex/',        // suffix 1..8 — args: i:complexType (1..8)
 
   // ── path / cycle / orbit / sieve ─────────────────────────────
-  PATH:          '/xk/path',            // s:'V1'|'V2'
   CYCLE:         '/xk/cycle',           // s:'alpha'|'beta'|'gamma'
   TETRA:         '/xk/tetra',           // i:0|1 (even/odd tetrahedral orbit)
   SIEVE:         '/xk/sieve',           // i... (variable-length semitone offsets)
@@ -65,6 +64,7 @@ export const OSC = {
   MIDI_NOTEOFF:   '/xk/midi/noteoff',    // i:voice, i:pitch, i:velocity, i:complex
   MIDI_PANIC:     '/xk/midi/panic',      // (no args) — clear pending notes on bang/panic
   MIDI_BENDSTEP:  '/xk/midi/bendstep',   // i:voice, i:fromPitch, i:toPitch, i:durMs, i:complex — D59 cross-string slide via pitchbend wheel; held source note bends from fromPitch to toPitch over durMs, then noteOff(source)+noteOn(target) fires (echoed via MIDI_NOTEOFF/MIDI_NOTEON as usual). Dashboard interpolates the curve in its segment model and bridges the gap between source-end and target-start visually.
+  MIDI_EXPR:      '/xk/midi/expr',       // i:voice, i:val (0..127), i:complex — emitted from cc()/ccForce() on every CC 11 (Expression) write so the dashboard can size brushes by audible dynamics rather than per-note velocity (which is a poor proxy: SWAM Cello drives ongoing loudness via CC 11 ramps per the D47 phrase-arc invariant). Pure additive telemetry; no synthesis state depends on it.
 
   // ── raw pass-through to TouchDesigner (port 8000) ────────────
   GAN_TURN:      '/gan/turn',           // s:moveString ("R","U'","F2",...)

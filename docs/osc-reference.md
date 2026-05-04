@@ -12,7 +12,7 @@ Authoritative table of every `/xk/*`, `/gan/*`, and `/xk/midi/*` address.
 |---------|------|---------|
 | `/xk/group/k` | int (0-23) | K_i S4 element |
 | `/xk/group/c` | int (0-23) | C_i S4 element |
-| `/xk/vertex/[1-8]` | float, string, float | density, intensity, duration |
+| `/xk/vertex/[1-8]` | float, string, float | density, intensity, neutral duration fallback |
 | `/xk/complex/[1-8]` | int (1-8) | ComplexType enum |
 | `/xk/path` | string | "V1" or "V2" |
 | `/xk/cycle` | string | "alpha"/"beta"/"gamma" |
@@ -31,12 +31,13 @@ Authoritative table of every `/xk/*`, `/gan/*`, and `/xk/midi/*` address.
 | `/xk/regime` | string | 'contemplative' / 'conversational' / 'burst' |
 | `/xk/expr/{tilt,spin,dev,scramble}` | float (0-1) | 60 Hz continuous controls |
 | `/xk/algorithm` | string | cube-algorithm name on detection (e.g. "sexy-move", "sune", "t-perm") |
-| `/xk/face` | string | face identity ('L'/'L\''/'R'/'R\''/'F'/'F\''/'B'/'B\''/'U'/'U\''/'D'/'D\''); fires BEFORE `/xk/voice` for the 12 face-moves; non-face moves (half-turns, diagram advance) skip it |
-| `/xk/voice` | int, int, float, string, float | vertexIdx, complexType, density, intensity, duration |
+| `/xk/face` | string | face identity ('L'/'L\''/'R'/'R\''/'F'/'F\''/'B'/'B\''/'U'/'U\''/'D'/'D\'') or `-` reset sentinel; fires BEFORE `/xk/voice` so Max resolves face-owned duration without stale-face bleed |
+| `/xk/voice` | int, int, float, string, float | vertexIdx, complexType, density, intensity, neutral duration fallback; face moves use `FACE_MAP.durationSec` in Max |
 | `/xk/panic` | — | relay WS-disconnect; bridges flush notes + CCs |
 | `/xk/midi/noteon` | int, int, int, int | Max → relay (57122). voice (SWAM slot, always 1), pitch (0-127), velocity (1-127), complex (0=unknown / 1..8 = Cn). Mirrors every `noteOn` in `xk_swam.js`; keyswitches excluded. The 4th arg feeds the dashboard piano-roll's complex colour + gliss-curve rules. |
 | `/xk/midi/noteoff` | int, int, int, int | Max → relay (57122). Mirrors every `noteOff`. `complex` is `inst.activeComplex` at noteoff time. |
 | `/xk/midi/panic` | — | Max → relay (57122). Emitted from `bang()` so the dashboard clears its in-flight notes map on reset. |
 | `/xk/midi/bendstep` | int, int, int, int, int | Max → relay (57122). D59 cross-string slide via pitchbend wheel. Args: voice, fromPitch, toPitch, durMs, complex. Fired at the START of a `bendStep` so the dashboard can model the segment in advance; the held source note bends from `fromPitch` to `toPitch` over `durMs`, then noteOff(source) + noteOn(target) echo via the existing MIDI_NOTEOFF / MIDI_NOTEON addresses. The dashboard's bendstep handler suppresses the chain-break that the new noteOn would otherwise trigger. |
+| `/xk/midi/expr` | int, int, int | Max → relay (57122). Pure additive telemetry. Args: voice, val (0..127), complex. Fired from `cc()` / `ccForce()` in `xk_swam.js` whenever `num === CC.EXPRESSION` so the dashboard can size brushes by audible dynamics (the bridge's D47 phrase arc ramps CC 11 linearly across a phrase). Velocity is a poor proxy because SWAM Cello drives ongoing loudness via CC 11, not per-note velocity. The dashboard caches latest per-voice value, snapshots `exprAtOn` at every noteon and `exprAtOff` at every noteoff, and linearly interpolates within the note for within-x brush thickness variation. |
 | `/gan/turn` | string | raw move (e.g. "R", "U'", "F2") — port 8000 |
 | `/gan/gyro` | float×4 | raw quaternion — port 8000 |

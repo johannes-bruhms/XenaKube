@@ -1,6 +1,6 @@
 # XenaKube → SWAM: Revision Roadmap
 
-Converged plan for rebuilding `max/xk_swam.js` against SWAM Cello 3's actual control model. Derived from `docs/swam_cello_reference.md` (the authoritative parameter/CC/KS reference, extracted from the v3.8.0 user manual).
+Converged plan for rebuilding `max/xk_swam.js` against SWAM Cello 3's actual control model. Derived from `docs/swam/swam_cello_reference.md` (the authoritative parameter/CC/KS reference, extracted from the v3.8.0 user manual).
 
 This document is the single source of truth for the SWAM-bridge refactor. Update it as phases complete or new findings change the plan.
 
@@ -407,7 +407,7 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 3. New KS slots: **KS D = Gesture Mode** (Expression / Bipolar / Bowing). If accidentally flipped to Bipolar/Bowing, CC 11 is silently reinterpreted as bow direction/displacement — Expression envelope and portamento feel both break with no error.
 
 **Fix**:
-- New v3.10 `KS` map (see `docs/swam_cello_reference.md` §2 + §9, `CLAUDE.md` Keyswitches section).
+- New v3.10 `KS` map (see `docs/swam/swam_cello_reference.md` §2 + §9, `CLAUDE.md` Keyswitches section).
 - `velForOption(idx, n)` helper picks centred velocities inside KS Velocity Remap bands.
 - `setEnum(field, ks, target, optionCount)` replaces `setToggle` for vel-select KS; diffs by option index so no inversion risk.
 - `HARMONICS = {OFF, OCT, OCT_5TH, CTRL}` and `TREMOLO = {OFF, SLOW, FAST}` enums on COMPLEX table.
@@ -437,6 +437,43 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 **Why Double/Hold vs Double**: Double/Hold latches the first note's string while the next is struck on a different string — matches how a cellist holds a chord with the bow crossing strings. Double without Hold ends each voice at note-off and cuts the texture short. For overlapping XenaKube turns, Double/Hold produces the smoother lingering-chord feel. Flip the per-complex `bowPoly` field to `BOW_POLY.DOUBLE` if hanging string voices across phrase boundaries become a problem.
 
 **Verification**: land on any non-gliss complex → overlapping turns audibly sustain as a two-string texture rather than each note cutting the previous. Land on C5 / C6 / C7 → gliss phrases still slide (D34 prerequisite preserved via `MONO_POLY_RELEASE` which keeps the single monophonic line the portamento engine needs). The Bow Polyphony selector in the SWAM GUI should visibly jump between option 3 (Double/Hold) and option 1 (Mono Poly Release) as complexes change.
+
+### D74 — Face-owned duration for learnable Temporal Identity *(RESOLVED 2026-05-04)*
+
+**Defect**: face gestures were intended to be recognizable through changing K/C state, but K_i still carried 2/3/4/5 second durations and Max multiplied those by the face duration bias. The same face could therefore read short or long because of an unrelated vertex permutation, masking the face identity and making the cube feel stochastic rather than learnable.
+
+**Fix**: move phrase time onto `FACE_SIGNATURES[face].durationSec` as an absolute per-face value. K_i vertex duration is now neutral (`1`) and remains in the OSC payload only as a fallback for non-face/future triggers. `max/xk_swam.js` resolves normal face moves from generated `FACE_MAP.durationSec`, logs `dur=Ns(face)` on every voice, and emits `FACE DURATION FAIL` if a face lacks an absolute duration. `voiceToOsc` now sends `/xk/face -` for null-face triggers so stale face duration cannot leak into a following voice.
+
+**Invariant audit**: D42/D45 gliss guarantees still hold; short face durations may clip dense C5 schedules through `glissSchedule`, but C5/C6/C7 still emit at least one gliss event. D47 arcs now run over face-owned duration, which is the desired performer-facing shape. Latency telemetry is unchanged because onset timing is independent of phrase duration.
+
+### D72 — C6 same-string slides via pitchbend (port from CC 5 portamento to bendStep dispatch) *(RESOLVED 2026-05-02)*
+
+User report: "for c6 ord gliss, all the instances where the second note is long, the gliss itself should take longer, proportionally. currently, every gliss from ord gliss sounds pretty much the same, unless it is one of the more elaborate longer phrases. ... should be using PITCHBEND rather than using PORTAMENTO between two notes." Reference: `docs/temp-screenshots/temp2.png` showing multi-second smooth contours instead of brief 100-200 ms slides.
+
+**Root cause** — C6 same-string slides routed through `glissNote` (portamento). MIDI CC 5 (Portamento Time) is a standard 7-bit value capped at 127, and SWAM Cello interprets that as approximately ms/semitone. With C6's typical 1-3 semi sieve walks, the audible slide duration was 100-300 ms regardless of phrase duration — uniformly quick across the entire C6 voice. No way to scale per-slide duration with the gap between events from the bridge side without either (a) violating CC 5's 127 ms/semi cap or (b) using a non-portamento slide mechanism.
+
+**Fix** — Add `slideViaBend: true` flag to `COMPLEX[6]`. Reorder `glissStep` dispatch to a three-way structure:
+1. `|interval| > PITCHBEND_RANGE_SEMI` → `leapStep` (over-range, must hard-jump)
+2. `cmx.slideViaBend === true` OR `!sameString(src, dst)` → `bendStep` (pitchbend wheel ramp; covers both C6 same-string AND any complex's cross-string)
+3. otherwise → `glissNote` (legacy portamento path; C5 + C7 same-string)
+
+Add `desiredDurMs` parameter to `bendStep`. When provided, overrides the per-complex `_bendDur` formula (which is capped at `MIN_GLISS_SPACING_MS - 5 = 195 ms` for D60 race-safety on cross-string fallbacks). Override clamps to `[80, MAX_BEND_DUR_MS = 2500]` ms.
+
+`phraseC6` now computes per-slide bend duration from gap-to-next-event:
+```js
+var phraseEndMs = durMs - 100;
+var nextEventMs = (i + 1 < slideTimes.length) ? slideTimes[i + 1] : phraseEndMs;
+var gapMs = nextEventMs - slideTimes[i];
+var bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
+```
+
+For a 5-second C6 phrase with 3 slides at ~1500 ms intervals, each slide is now a ~1450 ms smooth pitchbend curve. The last slide gets the entire remaining phrase tail (minus 100 ms scheduleRelease margin) — multi-second contours when the phrase has wide spread.
+
+**Pre-existing drift fixed alongside** — `_bendDur(complex === 6)` was hardcoded to 80 ms/semi while `PORTAMENTO_MS_PER_SEMITONE[6]` in `public/js/constants.js` was bumped to 100 a few rounds back. Synced `_bendDur` to 100 to keep the bridge / dashboard tables aligned. Only matters for cross-string fallback (rare on C6) since C6 same-string now uses the explicit `desiredDurMs` override.
+
+**Invariant audit** — D42 (gliss event count): bends still increment `glissBendCount`, counted toward `slides + bends + leaps ≥ 1`. D45 (min gliss spacing): bend duration capped at `gapMs - 50` ms; with `glissSchedule`'s 200 ms minimum spacing, bends ≤ 150 ms minimum, never overlap next event. D55 (port time at slide): no longer applies to C6 (glissNote not called). D58 (leap-alternation): bend slides count as slides for the counter, unchanged. D59 (cross-string pitchbend): same `bendStep` path, just newly entered from same-string dispatch when `slideViaBend = true`. D60 / D63 / D64: unchanged. CLAUDE.md row "Cross-string slide via pitchbend" updated to (D59 + D70) with the three-way dispatch documented.
+
+**Tunable surface** — `MAX_BEND_DUR_MS = 2500`. Raise if you want slower-than-2.5s slides; lower if SWAM's pitchbend coherence breaks down on extreme bend durations.
 
 ### D65–D68 — Gliss visual continuity polish (line ↔ chain model symmetry) *(RESOLVED 2026-04-30)*
 
@@ -478,7 +515,7 @@ Single-day iteration log (2026-04-30) shipping the cross-string pitchbend slide 
   - D64.3: `rampPitchbend` tick 15 ms → 5 ms for finer wheel updates (smoother audible slide).
   - D64.4: `bend race-fix` log when `completeBend` fires inline (scheduling jitter > 5 ms margin). Quiet during normal play; tunable signal.
 
-User reported "this is the best it's ever been" after D64 landed. CLAUDE.md Bridge Invariants table gains the "Cross-string slide via pitchbend" and "Pitchbend range bridge↔preset alignment" rows; the D48 leap-alternation row is updated to note D58/D59/D63 interactions. `docs/synthesis-bridge.md` Mapping Cheatsheet updated. `docs/swam_cello_reference.md` gains a Pitchbend Range section under Key Switches → Requirements (paired tunable note).
+User reported "this is the best it's ever been" after D64 landed. CLAUDE.md Bridge Invariants table gains the "Cross-string slide via pitchbend" and "Pitchbend range bridge↔preset alignment" rows; the D48 leap-alternation row is updated to note D58/D59/D63 interactions. `docs/synthesis-bridge.md` Mapping Cheatsheet updated. `docs/swam/swam_cello_reference.md` gains a Pitchbend Range section under Key Switches → Requirements (paired tunable note).
 
 ### D52 — Wild gliss slides have no per-event attack; decouple "slide intent" (velocity) from "attack character" via Bow Pressure Accent (CC 18) *(RESOLVED 2026-04-27)*
 
@@ -547,14 +584,14 @@ User reported "this is the best it's ever been" after D64 landed. CLAUDE.md Brid
 
 **v1 attempt (REVERTED same day)**: `WILD_GLISS_VEL = 55` based on the wrong hypothesis that SWAM portamento engages on overlap alone (with velocity only controlling bow attack intensity). User report after listening: "the vst is just playing straight notes with consecutive leaps, with absolutely no portamento of any kind." Reverted in full.
 
-**Root cause of v1 failure (discovered via user-shared SWAM screenshots)**: `docs/swam-menu-screenshots/swam-advanced-midi-menu.png` shows SWAM Cello's Advanced→MIDI menu with **"Portamento Control: Velocity (P.MaxTime)"** selected. Slide noteOn velocity directly scales the portamento time toward zero. The original `GLISS_VEL = 18` sat near the bottom of that scale (max portamento time); vel 55 shrunk portamento time enough that slides became audibly indistinguishable from discrete note changes. The screenshots were the missing piece — the SWAM reference docs (`docs/swam_cello_reference.md`) didn't surface this dependency clearly.
+**Root cause of v1 failure (discovered via user-shared SWAM screenshots)**: `docs/swam-menu-screenshots/swam-advanced-midi-menu.png` shows SWAM Cello's Advanced→MIDI menu with **"Portamento Control: Velocity (P.MaxTime)"** selected. Slide noteOn velocity directly scales the portamento time toward zero. The original `GLISS_VEL = 18` sat near the bottom of that scale (max portamento time); vel 55 shrunk portamento time enough that slides became audibly indistinguishable from discrete note changes. The screenshots were the missing piece — the SWAM reference docs (`docs/swam/swam_cello_reference.md`) didn't surface this dependency clearly.
 
 **v2 fix (current implementation)**: cautious bump to `WILD_GLISS_VEL = 22`. Just 4 units above default; should keep portamento time near max while adding marginal slide-target audibility. If 22 still preserves portamento and is too tame, can creep to 24, 26, etc. — listening test confirms.
 
 **The deeper fix (now landed as D52, see entry above)**: Bow Pressure Accent (CC 18, MIDI-Learned in `xenakube_2.swam` to SWAM Expressivity → Bow Pressure Accent). Brief CC 18 spikes on each slide noteOn add audible per-event attack emphasis with **zero impact on velocity → portamento engagement**, decoupling "slide intent" (velocity → SWAM portamento) from "attack character" (bow pressure spike). D50 v2's `WILD_GLISS_VEL = 22` is retained as the conservative slide velocity; D52 carries the attack character on top. If wild gliss still feels under-articulated, raise `WILD_GLISS_BPA = 80` rather than `WILD_GLISS_VEL` — the latter would re-trigger the v1 portamento collapse.
 
 **Lessons (kept for future-me)**:
-- SWAM domain knowledge requires verification *against the actual SWAM UI* before tuning parameters whose values look "extreme" (like vel 18). The reference doc (`docs/swam_cello_reference.md`) covers the canonical CC mappings but doesn't always document plugin-internal coupling like Velocity → P.MaxTime.
+- SWAM domain knowledge requires verification *against the actual SWAM UI* before tuning parameters whose values look "extreme" (like vel 18). The reference doc (`docs/swam/swam_cello_reference.md`) covers the canonical CC mappings but doesn't always document plugin-internal coupling like Velocity → P.MaxTime.
 - When a tuning fix breaks something else (here: vel bump broke portamento), the root cause discovery often comes from inspecting the plugin UI, not the bridge code. User-shared screenshots saved this debugging session.
 - Decouple where possible: per-event attack character should be its own parameter (Bow Pressure Accent CC 18), not shared with the slide-intent signal (velocity). SWAM's design supports this — the bridge wired it as **D52** the same day this entry's "deferred" note was written.
 
@@ -892,7 +929,7 @@ Inside `swam_voice.maxpat`: `polymidiin` → `midiparse` (midievent outlet) → 
 
 **Reverted (2026-04-23 — `max/xenakube_cello.maxpat`, v5)**: the pool is collapsed to one slot in live use. Two concrete failures drove the revert:
 
-1. **SWAM Ambiente overlap.** SWAM Cello 3 v3.10+'s Ambiente panel auto-registers every loaded VST instance as a reverb source in a shared virtual studio. With 8 `poly~` voices all loading `default`, the plugin warned "Instruments Overlapping: adjust placement" on every cold load and summed identical sources into phase cancellations that were audible even with `MAX_ACTIVE = 2` (6 idle instances still contributing to the reverb bus). Ambiente parameters aren't exposed via MIDI-Learn (VST automation only), so per-instance spatialisation can't be patched from the bridge — the three user-side fixes (disable Ambiente in the default preset, per-voice panning, per-voice presets) each add manual per-instance setup that negates the pool's plug-and-play advantage. See `docs/swam_cello_reference.md` §7.
+1. **SWAM Ambiente overlap.** SWAM Cello 3 v3.10+'s Ambiente panel auto-registers every loaded VST instance as a reverb source in a shared virtual studio. With 8 `poly~` voices all loading `default`, the plugin warned "Instruments Overlapping: adjust placement" on every cold load and summed identical sources into phase cancellations that were audible even with `MAX_ACTIVE = 2` (6 idle instances still contributing to the reverb bus). Ambiente parameters aren't exposed via MIDI-Learn (VST automation only), so per-instance spatialisation can't be patched from the bridge — the three user-side fixes (disable Ambiente in the default preset, per-voice panning, per-voice presets) each add manual per-instance setup that negates the pool's plug-and-play advantage. See `docs/swam/swam_cello_reference.md` §7.
 2. **CPU × 8 for texture the composer didn't want.** DSP floor was ~40% per the original verification; single instance sits ~5%. The pool's value was "overlapping turns render as overlapping gestures" — in practice the composer preferred the monophonic Xenakis feel where each turn cleanly steals the previous, so the 8× CPU bought nothing musical.
 
 **v5 topology**: `[udpreceive 57121] → [gate] → [v8 xk_swam.js] → outlet 0 → [vst~ "SWAM Cello 3"] → DSP chain → [dac~]`. `POOL_SIZE = MAX_ACTIVE = 1`; `emitMidi` no longer emits `target N` (the poly~ routing directive) — just the bare `midievent status b1 b2`. The `instances` array is still built, `allocateInstance` still runs, `stealInstance` still fires CC 120 + CC 123 + CC 11=0 on every new voice — all the per-voice state (ccCache, activeNotes, phraseTasks, face snapshots, status lifecycle) keeps its home as `inst.*`, so the phrase / release / CC-ramp / gyro-modulator code paths are untouched. The revert is one `POOL_SIZE` constant + one `outlet("target", …)` deletion + the patch-side topology swap; no logic loss.
@@ -1044,7 +1081,7 @@ Net effect: the path axis was dead state from the performer's view, and V2's sof
 
 **Root cause**: **Bow Polyphony was `Poly` / `Auto` in the SWAM preset.** With non-Mono polyphony, SWAM interprets a second note that overlaps the first as a **chord voice**, not as a continuation of the same monophonic line — so there is no single line for the portamento engine to slide along. Every other layer of the stack (Portamento Mode ≠ Off, Portamento Control mode, CC 65/5 writes, overlap timing, note velocity) becomes irrelevant once the overlap is split into two independent voices. This is why D20's CC-mode flip, D33's CC 11 slew, and any amount of portamento-time tuning never surfaced any slide: the gliss path was gated off upstream at the polyphony decision.
 
-Complicating matters, SWAM's musical-interpretation rule (`docs/v3.10-musicalinterpretation.pdf` p. 105) requires the overlapping second note to carry a **low Note-On velocity** for Velocity-mode portamento-control — a high-vel overlap is instead interpreted as slurred legato (smooth timbre, no pitch sweep). In Mono + CC-mode the CC P.MaxTime value drives the slide; in Mono + Velocity mode the low-vel overlap is the trigger. Either way, **Mono is the prerequisite**, and our phrase generators were shipping full intensity-scaled velocity (50–120) on every overlap — so even with polyphony corrected we would have needed a low-velocity overlap for Velocity-mode setups.
+Complicating matters, SWAM's musical-interpretation rule (`docs/swam/v3.10-musicalinterpretation.pdf` p. 105) requires the overlapping second note to carry a **low Note-On velocity** for Velocity-mode portamento-control — a high-vel overlap is instead interpreted as slurred legato (smooth timbre, no pitch sweep). In Mono + CC-mode the CC P.MaxTime value drives the slide; in Mono + Velocity mode the low-vel overlap is the trigger. Either way, **Mono is the prerequisite**, and our phrase generators were shipping full intensity-scaled velocity (50–120) on every overlap — so even with polyphony corrected we would have needed a low-velocity overlap for Velocity-mode setups.
 
 **Fix**: two parts — one preset-side, one code-side.
 
@@ -1101,7 +1138,7 @@ Per-complex ramp shapes (attack / sustain / release ms):
 
 **Defect**: D24 → D30 all left the same underlying misunderstanding untouched — that KS F# (Harmonics) is a 4-option velocity-select and KS G# (Tremolo) is a 3-option velocity-select with Off as a selectable low-velocity band. User reports that across all three prior "fixes" (D27 KS migration, D28 sync guard, D29 interleave + defensive, D30 revert) "harmonics and tremolo still don't work at all, same symptoms remain."
 
-**Actual SWAM behavior** (from the official v3.10 Key Switches PDF, `docs/v3.10-keyswitches.pdf` pp. 100–102):
+**Actual SWAM behavior** (from the official v3.10 Key Switches PDF, `docs/swam/v3.10-keyswitches.pdf` pp. 100–102):
 
 ```
 F# = Harmonics
@@ -1296,7 +1333,7 @@ Highest-leverage first. Stop-test-listen between phases.
 - [ ] Verify live cube still renders from raw gyro (not calibrated) so the physical orientation still reads true; only snap/deviation math sees the calibrated quat
 
 ### Phase 13 — SWAM Cello 3 v3.8 → v3.10 KS migration (D24, D27) *(landed 2026-04-14)*
-*Reality check after `docs/v3.10-keyswitches.pdf` confirmed our KS map was three slots out of date.*
+*Reality check after `docs/swam/v3.10-keyswitches.pdf` confirmed our KS map was three slots out of date.*
 - [x] New v3.10 `KS` map in `max/xk_swam.js` (Harmonics → KS F#, Tremolo → KS G#, Gesture Mode → KS D, removed Sordino/SulTasto/SulPont/SectionSize KS)
 - [x] `velForOption(idx, n)` + `setEnum(field, ks, target, optionCount)` for vel-select KS
 - [x] `HARMONICS = {OFF, OCT, OCT_5TH, CTRL}` and `TREMOLO = {OFF, SLOW, FAST}` enums; COMPLEX C4/C8 declare enum index, not boolean
@@ -1304,7 +1341,7 @@ Highest-leverage first. Stop-test-listen between phases.
 - [x] state object: removed `sordino/sulTasto/sulPont/sectionSize`, added `gestureMode/altFing/keepBowDir`
 - [x] Removed dead `setSectionSize`/`setToggle` paths for retired KS
 - [x] Verified sune freeze still uses `CC.SUSTAIN_PEDAL` (untouched by migration)
-- [x] Docs synced: `docs/swam_cello_reference.md` §2 + §9, `CLAUDE.md` Keyswitches section, this file (D24 RESOLVED, D27 added, Phase 6 rescoped)
+- [x] Docs synced: `docs/swam/swam_cello_reference.md` §2 + §9, `CLAUDE.md` Keyswitches section, this file (D24 RESOLVED, D27 added, Phase 6 rescoped)
 - [ ] **Listening test (user-side)**: confirm C4 harmonics + C8 tremolo audibly fire; confirm portamento not affected by Gesture Mode pin
 
 ### Phase 12 — Pitch-bend glissando path (D26, optional)
@@ -1350,7 +1387,7 @@ Highest-leverage first. Stop-test-listen between phases.
 
 ## References
 
-- `docs/swam_cello_reference.md` — complete SWAM parameter/CC/KS reference (the authoritative source for the numbers above)
+- `docs/swam/swam_cello_reference.md` — complete SWAM parameter/CC/KS reference (the authoritative source for the numbers above)
 - `max/xk_swam.js` — target file for refactor
-- `CLAUDE.md` — see "Max/MSP — SWAM Cello Bridge" section
+- `CLAUDE.md` — see "Synthesis Bridge — Max/MSP + SWAM Cello" section
 - `docs/todo.md` — Phases 2/3/4 of the broader XenaKube roadmap

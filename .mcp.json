@@ -4,7 +4,7 @@
       "command": "uv",
       "args": [
         "--directory",
-        "G:/xenakube/MaxMSP-MCP-Server",
+        "G:/MaxMSP-MCP",
         "run",
         "server.py"
       ]

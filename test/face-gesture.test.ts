@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   FACE_SIGNATURES, parseFace, getFaceSignature,
-  pitchClassMod, registerMod, intensityScalar, parityInflection,
+  pitchClassMod, registerMod, parityInflection,
   type FaceMove,
 } from '../src/face-gesture.js';
 import { XenaKubeEngine } from '../src/engine.js';
@@ -23,7 +23,7 @@ describe('face-gesture framework (Phase A1)', () => {
       for (const face of ALL_FACES) {
         const sig = FACE_SIGNATURES[face];
         expect(typeof sig.envelope).toBe('string');
-        expect(typeof sig.durationBias).toBe('number');
+        expect(typeof sig.durationSec).toBe('number');
         expect(typeof sig.articulation).toBe('string');
         expect(typeof sig.panBias).toBe('number');
         expect(typeof sig.registerBias).toBe('number');
@@ -31,11 +31,20 @@ describe('face-gesture framework (Phase A1)', () => {
       }
     });
 
-    it('durationBias stays in a performable range', () => {
+    it('durationSec stays in a performable phrase range', () => {
       for (const face of ALL_FACES) {
-        const d = FACE_SIGNATURES[face].durationBias;
+        const d = FACE_SIGNATURES[face].durationSec;
         expect(d).toBeGreaterThanOrEqual(0.3);
-        expect(d).toBeLessThanOrEqual(2.5);
+        expect(d).toBeLessThanOrEqual(3.0);
+      }
+    });
+
+    it('attack faces are durationally distinct from sustained hairpin/fade faces', () => {
+      for (const face of ['R', 'D', 'U', 'B'] as FaceMove[]) {
+        expect(FACE_SIGNATURES[face].durationSec).toBeLessThan(1.0);
+      }
+      for (const face of ["U'", "D'", 'L', "L'", "B'"] as FaceMove[]) {
+        expect(FACE_SIGNATURES[face].durationSec).toBeGreaterThanOrEqual(1.7);
       }
     });
 
@@ -97,24 +106,16 @@ describe('face-gesture framework (Phase A1)', () => {
       expect(results.size).toBe(8);
     });
 
-    it('registerMod on V2 is half the V1 spread', () => {
+    it('registerMod uses ±12 spread', () => {
       const sig = FACE_SIGNATURES.U;  // registerBias = 0.8
-      const v1 = registerMod('V1', sig);
-      const v2 = registerMod('V2', sig);
-      // V1: round(0.8 * 12) = 10; V2: round(0.8 * 6) = 5
-      expect(v1).toBe(10);
-      expect(v2).toBe(5);
+      // round(0.8 * 12) = 10
+      expect(registerMod(sig)).toBe(10);
     });
 
     it('registerMod gives 0 for faces with neutral register', () => {
       // L / L' / R / R' all have registerBias 0
-      expect(registerMod('V1', FACE_SIGNATURES.L)).toBe(0);
-      expect(registerMod('V2', FACE_SIGNATURES.R)).toBe(0);
-    });
-
-    it('intensityScalar softens V2', () => {
-      expect(intensityScalar('V1')).toBe(1.0);
-      expect(intensityScalar('V2')).toBe(0.7);
+      expect(registerMod(FACE_SIGNATURES.L)).toBe(0);
+      expect(registerMod(FACE_SIGNATURES.R)).toBe(0);
     });
 
     it('parityInflection flips on odd tetra orbit', () => {
@@ -171,16 +172,16 @@ describe('face-gesture framework (Phase A1)', () => {
       expect(captured![1].address).toBe('/xk/voice');
     });
 
-    it('voiceToOsc skips /xk/face when face is null', () => {
+    it('voiceToOsc emits a /xk/face reset sentinel when face is null', () => {
       const engine = new XenaKubeEngine();
       let captured: ReturnType<typeof voiceToOsc> | null = null;
       engine.onVoice(v => { captured = voiceToOsc(v); });
       engine.onTurn('R2');  // half-turn → null face
 
       expect(captured).not.toBeNull();
-      // No /xk/face, just /xk/voice
-      expect(captured!.every(m => m.address !== '/xk/face')).toBe(true);
-      expect(captured!.some(m => m.address === '/xk/voice')).toBe(true);
+      expect(captured![0].address).toBe('/xk/face');
+      expect(captured![0].args[0]).toBe('-');
+      expect(captured![1].address).toBe('/xk/voice');
     });
   });
 });

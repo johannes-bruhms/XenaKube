@@ -70,15 +70,17 @@ const lineNotes = [];
 // via _findGlissLine returning the existing-but-stale line, retarget
 // to new pitch — same effective behaviour as a chain-start).
 const bendUntilMs = new Map();
-const BEND_GRACE_TAIL_MS = 100;
-
-// D67 — track most-recent event time per (voice, complex) so the line's
-// retarget animDur can match the chain's gap-based segment dur (uniform
-// glissSchedule spacing means the previous gap predicts the next one).
-// The line uses this to set animDur = max(80, lastGap - 5), eliminating
-// plateaus on the line side that would otherwise mismatch the chain's
-// gap-filled segments. Cleared on chainStart (fresh phrase) and panic.
-const lastEventByVk = new Map();
+// D72.2 — tail margin past the bend's nominal end time. Covers task-
+// scheduler jitter where `completeBend`'s `noteOff(source)` arrives a
+// few ms past `bendStart + durMs` — within `BEND_GRACE_TAIL_MS` the
+// source-noteOff is suppressed and the line stays alive until the
+// matching `noteOn(target)` consumes the grace cleanly. Was 100 ms;
+// raised to 250 ms because D72's same-string bends can have
+// `bendDur` ≈ 1200 ms and the percentage of jitter > 100 ms grew
+// noticeably (Max Task scheduler isn't strict-FIFO at identical
+// firing times). 250 ms also covers cancelPhrase's force-completeBend
+// path (see `xk_swam.js`) without spurious splices.
+const BEND_GRACE_TAIL_MS = 250;
 
 // Cross-module getters wired via init().
 let _getCamera          = null;
@@ -86,6 +88,16 @@ let _getActiveKWorldPos = null;
 let _getCWorldPos       = null;
 let _getSieveCellRect   = null;
 let _hasActiveGliss     = () => false;
+let _hasActiveKey       = () => true;  // default true → never orphan-splice
+
+// Orphan-line detection threshold. If a non-gliss line has been
+// sustaining for > this duration AND `hasActiveKey(voice, pitch)`
+// returns false (rolling-score has no matching active entry), the
+// bridge already noteoff'd that pitch but the splice missed triangle
+// (cross-module dispatch race, key mismatch, etc.). Splice with warn.
+// 500 ms covers any reasonable cross-module dispatch + WS + render
+// frame jitter without misfiring on legitimate in-flight notes.
+const ORPHAN_LINE_AGE_MS = 500;
 
 // ---- Resize ---------------------------------------------------------------
 
@@ -195,12 +207,52 @@ function drawLineOverlay() {
   const now = performance.now();
   let toRemove = null;
 
-  lineCtx.lineWidth = 2.2 * lineDpr;
+  lineCtx.lineWidth = 1.8 * lineDpr;
   lineCtx.lineCap = 'round';
   lineCtx.lineJoin = 'round';
 
   for (let li = 0; li < lineNotes.length; li++) {
     const ln = lineNotes[li];
+
+    // Orphan-line detection — lines that have been sustaining for
+    // > ORPHAN_LINE_AGE_MS without a matching active entry in rolling-
+    // score's authoritative `activeMidiNotes` are stuck (the bridge
+    // already noteoff'd but the splice missed triangle, OR rolling-
+    // score's noteOff handler didn't propagate to triangle for any
+    // reason). Splice with warning. Symmetric for gliss + non-gliss:
+    //   • gliss: orphan iff no `_hasActiveGliss(voice, complex)` entry
+    //     AND no bend-grace tail active. Mirrors the noteOff handler's
+    //     preserve check, run per-frame as a safety net for the case
+    //     where the noteOff handler never fires (eg the LAST gliss
+    //     noteOff was missed and `_hasActiveGliss` is now correctly
+    //     false but the line never got the splice signal).
+    //   • non-gliss: orphan iff no `_hasActiveKey(voice, pitch)` queue
+    //     entry. Same idea — splice path missed but state is empty.
+    if (ln.sustaining) {
+      const age = now - ln.animStartMs;
+      if (age > ORPHAN_LINE_AGE_MS) {
+        let isOrphan = false;
+        if (ln.isGliss) {
+          const vk = ln.voice + ':' + ln.complex;
+          const until = bendUntilMs.get(vk) || 0;
+          if (until <= now && !_hasActiveGliss(ln.voice, ln.complex)) {
+            isOrphan = true;
+          }
+        } else if (!_hasActiveKey(ln.voice, ln.fromPitch)) {
+          isOrphan = true;
+        }
+        if (isOrphan) {
+          console.warn('[triangle] orphan ' +
+            (ln.isGliss ? 'gliss' : 'non-gliss') +
+            ' line spliced (voice=' + ln.voice + ' complex=' + ln.complex +
+            ' fromPitch=' + ln.fromPitch + ' toPitch=' + ln.toPitch +
+            ' age=' + (age | 0) + 'ms) — rolling-score has no matching active entry');
+          if (!toRemove) toRemove = [];
+          toRemove.push(li);
+          continue;
+        }
+      }
+    }
 
     let opacity = 1;
     if (!ln.sustaining) {
@@ -270,12 +322,24 @@ function drawLineOverlay() {
  */
 export function init({
   getCamera, getActiveKWorldPos, getCWorldPos,
-  getSieveCellRect, hasActiveGliss,
+  getSieveCellRect, hasActiveGliss, hasActiveKey,
 } = {}) {
   if (getCamera)          _getCamera          = getCamera;
   if (getActiveKWorldPos) _getActiveKWorldPos = getActiveKWorldPos;
   if (getCWorldPos)       _getCWorldPos       = getCWorldPos;
   if (getSieveCellRect)   _getSieveCellRect   = getSieveCellRect;
+  if (hasActiveKey) {
+    _hasActiveKey = hasActiveKey;
+  } else {
+    // Without this, orphan-line detection silently no-ops — non-gliss
+    // lines that miss their splice (e.g., the user's "white triangle
+    // keeps getting stuck" symptom) will accumulate indefinitely. The
+    // safe default `() => true` makes every line look "still active",
+    // disabling the orphan splice — at least the visual matches the
+    // pre-orphan-detection behaviour. Loud at startup so the wiring
+    // gap is visible.
+    console.warn('[triangle] init() called without hasActiveKey — orphan-line detection disabled, stuck lines will accumulate without recovery');
+  }
   if (hasActiveGliss) {
     _hasActiveGliss = hasActiveGliss;
   } else {
@@ -316,24 +380,15 @@ export function init({
  * For non-gliss complexes: `chainStart` is unused (each noteon gets
  * its own line entry tagged by `key`).
  */
-export function noteOn(voice, pitch, velocity, complex, key, chainStart) {
+export function noteOn(voice, pitch, velocity, complex, key, chainStart, isCompanion) {
   const now = performance.now();
   const vk = voice + ':' + complex;
-  // D67 — track inter-event gap. Chain side (rolling-score) computes
-  // segment dur from `next.onsetMs - this.onsetMs`; line side uses
-  // `now - lastEventByVk[vk]` as the predictor for the next gap so the
-  // line's animDur matches the chain's segment dur. Uniform
-  // glissSchedule spacing means prev_gap ≈ next_gap, so the predictor
-  // is accurate after the first slide of a phrase. First-slide gap
-  // (anchor → drift = FIRST_GLISS_MS = 150 ms) differs from subsequent
-  // (~335 ms for typical wild gliss), producing a brief 1-2 semi line
-  // ↔ chain disagreement on the first slide; assertGlissSync's 5 px
-  // threshold (D67) absorbs it.
-  const prevEventTime = lastEventByVk.get(vk) || 0;
-  const lastGap = prevEventTime > 0 ? (now - prevEventTime) : 0;
-  lastEventByVk.set(vk, now);
 
-  if (GLISS_COMPLEXES.has(complex)) {
+  // Current gliss companions are short-circuited in main.js and rendered by
+  // rolling-score as translated chain overlays, so this branch is defensive.
+  // If an independent companion line ever reaches triangle again, keep it out
+  // of the main gliss path so it cannot splice or retarget the primary line.
+  if (GLISS_COMPLEXES.has(complex) && !isCompanion) {
     if (chainStart) {
       // Leap / steal / fresh phrase — splice any preserved line for
       // this (voice, complex) regardless of bend-grace.
@@ -344,9 +399,6 @@ export function noteOn(voice, pitch, velocity, complex, key, chainStart) {
         }
       }
       bendUntilMs.delete(vk);
-      // D67 — chainStart resets the gap predictor. Reseed with the
-      // chainStart's own onsetMs as the new baseline.
-      lastEventByVk.set(vk, now);
       lineNotes.push({
         isGliss: true,
         voice, complex,
@@ -358,22 +410,17 @@ export function noteOn(voice, pitch, velocity, complex, key, chainStart) {
       });
       return;
     }
-    // D67 — animDur predictor: use last gap if known and reasonable;
-    // fall back to interval-based predict for the first slide of a
-    // phrase (where lastGap = anchor→drift = FIRST_GLISS_MS, not
-    // representative of subsequent gaps).
-    const animDurEstimate = (lastGap > 50 && lastGap < 2000)
-      ? Math.max(80, lastGap - 5)
-      : null;
+    // animDur uses interval × per-semi (capped at GLISS_SLIDE_MAX_DUR_MS)
+    // — same model as the rolling-score chain's segment dur. Determined
+    // at noteon-time and never recomputed; what's drawn during in-flight
+    // stays drawn after noteoff or interrupt. No retroactive correction.
     const existing = _findGlissLine(voice, complex);
     if (existing) {
       const fromPitch = _displayedPitch(existing, now);
       existing.fromPitch  = fromPitch;
       existing.toPitch    = pitch;
       existing.animStartMs = now;
-      existing.animDurMs   = animDurEstimate != null
-        ? animDurEstimate
-        : predictGlissDuration(fromPitch, pitch, complex);
+      existing.animDurMs   = predictGlissDuration(fromPitch, pitch, complex);
     } else {
       lineNotes.push({
         isGliss: true,
@@ -417,21 +464,11 @@ export function noteOn(voice, pitch, velocity, complex, key, chainStart) {
  * recreated.
  */
 export function noteOff(voice, pitch, complex, key) {
-  if (GLISS_COMPLEXES.has(complex)) {
-    if (_hasActiveGliss(voice, complex)) return;
-    const vk = voice + ':' + complex;
-    const until = bendUntilMs.get(vk) || 0;
-    if (until > performance.now()) return;  // D59 bend grace — keep line alive.
-    for (let i = 0; i < lineNotes.length; i++) {
-      const ln = lineNotes[i];
-      if (ln.isGliss && ln.voice === voice && ln.complex === complex) {
-        lineNotes.splice(i, 1);
-        return;
-      }
-    }
-    return;
-  }
-
+  // D72.5 — non-gliss-line splice runs FIRST regardless of `complex`.
+  // Gliss companions normally no longer reach triangle, but the legacy
+  // independent-line fallback used non-gliss entries with gliss complex ids.
+  // Non-gliss key matching first keeps that fallback clean and handles genuine
+  // non-gliss noteoffs.
   for (let i = 0; i < lineNotes.length; i++) {
     const ln = lineNotes[i];
     if (!ln.isGliss && ln.key === key && ln.voice === voice && ln.sustaining) {
@@ -444,13 +481,28 @@ export function noteOff(voice, pitch, complex, key) {
       return;
     }
   }
+
+  // No non-gliss line matched — fall through to the gliss path. This is
+  // the main-line splice for actual gliss-chain participants.
+  if (GLISS_COMPLEXES.has(complex)) {
+    if (_hasActiveGliss(voice, complex)) return;
+    const vk = voice + ':' + complex;
+    const until = bendUntilMs.get(vk) || 0;
+    if (until > performance.now()) return;  // D59 bend grace — keep line alive.
+    for (let i = 0; i < lineNotes.length; i++) {
+      const ln = lineNotes[i];
+      if (ln.isGliss && ln.voice === voice && ln.complex === complex) {
+        lineNotes.splice(i, 1);
+        return;
+      }
+    }
+  }
 }
 
 /** Drop every line. Called on engine panic / WS panic. */
 export function panic() {
   lineNotes.length = 0;
   bendUntilMs.clear();
-  lastEventByVk.clear();
 }
 
 /**
@@ -473,9 +525,6 @@ export function bendStep(data) {
   const now = performance.now();
   const vk = voice + ':' + complex;
   bendUntilMs.set(vk, now + (durMs | 0) + BEND_GRACE_TAIL_MS);
-  // D67 — bend events also count as inter-event time anchors so the
-  // next slide's animDur predictor reflects bend-to-slide gaps too.
-  lastEventByVk.set(vk, now);
 
   const existing = _findGlissLine(voice, complex);
   if (existing) {

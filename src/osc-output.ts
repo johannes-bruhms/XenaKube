@@ -32,7 +32,6 @@ export function stateToOsc(state: XenaKubeState): OscMessage[] {
     msgs.push({ address: complexAddr(i + 1), args: [state.cAssignments[i]] });
   }
 
-  msgs.push({ address: OSC.PATH,  args: [state.path] });
   msgs.push({ address: OSC.CYCLE, args: [state.cyclicPhase] });
   msgs.push({ address: OSC.TETRA, args: [state.tetraIndex] });
   msgs.push({ address: OSC.SIEVE, args: state.sieve });
@@ -98,15 +97,13 @@ export function solveToOsc(): OscMessage {
  * Called from relay's engine.onVoice listener — fires only on real turns,
  * not per gyro packet.
  *
- * When `output.face` is null (diagram-driven advance, future silent paths),
- * the `/xk/face` line is skipped and the bridge falls back to complex-only
- * dispatch — same behaviour as before Phase A1.
+ * When `output.face` is null (diagram-driven advance, half-turns, future
+ * silent paths), `/xk/face -` resets the bridge's pending face so stale
+ * face duration cannot leak into the next voice.
  */
 export function voiceToOsc(output: import('./voice-engine.js').VoiceOutput): OscMessage[] {
   const msgs: OscMessage[] = [];
-  if (output.face !== null) {
-    msgs.push({ address: OSC.FACE, args: [output.face] });
-  }
+  msgs.push({ address: OSC.FACE, args: [output.face ?? '-'] });
   for (const ev of output.active) {
     msgs.push({
       address: OSC.VOICE,

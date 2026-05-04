@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { XenaKubeEngine } from '../src/engine.js';
+import { getBaseVertices } from '../src/vertices.js';
 
 describe('XenaKubeEngine', () => {
   it('starts at identity with correct initial state', () => {
@@ -9,7 +10,6 @@ describe('XenaKubeEngine', () => {
     expect(state.kGroup).toBe(0);
     expect(state.cGroup).toBe(0);
     expect(state.step).toBe(0);
-    expect(state.path).toBe('V1');
     expect(state.cyclicPhase).toBe('alpha');
     expect(state.kVertices).toHaveLength(8);
   });
@@ -44,6 +44,18 @@ describe('XenaKubeEngine', () => {
       }
     }
     expect(changed).toBe(true);
+  });
+
+  it('keeps K_i duration neutral so face gestures own phrase time', () => {
+    const baseDurations = getBaseVertices().map(v => v.duration);
+    expect(new Set(baseDurations)).toEqual(new Set([1]));
+
+    const engine = new XenaKubeEngine();
+    engine.onTurn('R');
+    engine.onTurn('U');
+    engine.onTurn('F');
+    const movedDurations = engine.getState().kVertices.map(v => v.duration);
+    expect(new Set(movedDurations)).toEqual(new Set([1]));
   });
 
   it('advances C_i cube in algorithmic mode', () => {
@@ -120,14 +132,6 @@ describe('XenaKubeEngine', () => {
     expect(state.kGroup).toBe(0);
     expect(state.step).toBe(0);
     expect(state.cyclicPhase).toBe('alpha');
-  });
-
-  it('supports V2 path', () => {
-    const engine = new XenaKubeEngine({ path: 'V2' });
-    const state = engine.getState();
-    expect(state.path).toBe('V2');
-    // V2 has different values — K1 density is 3.0 vs V1's 1.0
-    expect(state.kVertices[0].density).toBe(3.0);
   });
 
   it('processes gyro in gyro mode', () => {

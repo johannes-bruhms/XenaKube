@@ -43,12 +43,12 @@ export { ModeManager, type PerformanceMode, type ModeChangeListener } from './mo
 export { TurnRateTracker, type Regime } from './turn-rate.js';
 export {
   FACE_SIGNATURES, parseFace, getFaceSignature,
-  pitchClassMod, registerMod, intensityScalar, parityInflection,
+  pitchClassMod, registerMod, parityInflection,
   type FaceMove, type FaceSignature, type EnvelopeShape, type Articulation, type Motion,
 } from './face-gesture.js';
 export {
   ComplexType,
   type GroupElement, type Permutation8, type CubeMove, type CubeFace, type MoveString,
-  type VertexParams, type VertexSet, type Path, type CyclicPhase,
+  type VertexParams, type VertexSet, type CyclicPhase,
   type EngineMode, type Quaternion, type XenaKubeState,
 } from './types.js';

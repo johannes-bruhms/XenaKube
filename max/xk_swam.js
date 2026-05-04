@@ -31,7 +31,7 @@
 // duration clamp + portamento wiggle + face sculpt.
 //
 // Prerequisite: the downstream [vst~ SWAM Cello 3] preset configured
-// per docs/swam_cello_reference.md. No poly~ / polymidiin required.
+// per docs/swam/swam_cello_reference.md. No poly~ / polymidiin required.
 // ================================================================
 
 autowatch = 1;
@@ -63,7 +63,7 @@ var MOVES_OUTLET = 3;           // 2026-04-24 — detected face-moves + cube-alg
 setinletassist(0,            "OSC /xk/* from relay (port 57121) + bang/on/off/debug");
 setoutletassist(MIDI_OUTLET,  "midievent → [vst~ SWAM Cello 3]");
 setoutletassist(DEBUG_OUTLET, "debug → [print xk_swam]");
-setoutletassist(ECHO_OUTLET,  "/xk/midi/{noteon,noteoff,panic} → [udpsend 127.0.0.1 57122] → relay → dashboard rolling score");
+setoutletassist(ECHO_OUTLET,  "/xk/midi/{noteon,noteoff,bendstep,expr,panic} → [udpsend 127.0.0.1 57122] → relay → dashboard rolling score");
 setoutletassist(MOVES_OUTLET, "detected: 'face <L|L'|R|R'|...>' on every quarter-turn, 'algorithm <name>' on every algorithm match — wire to [route face algorithm]");
 
 // Pulls in all data tables (OSC addresses, SWAM enums, CC band centers,
@@ -89,7 +89,7 @@ var SIEVE_BASE = 36;  // MIDI 36 = C2
 
 // ================================================================
 // CC MAP — numbers must match what's MIDI-Learned in the SWAM preset.
-// See docs/swam_cello_reference.md §9.
+// See docs/swam/swam_cello_reference.md §9.
 // ================================================================
 var CC = {
 	EXPRESSION:       11,
@@ -240,22 +240,48 @@ var COMPLEX = {
 	     exprEnv:{ attack:0.9, peak:1.1, sustain:0.7, release:0.3,
 	               attackRampMs:35, sustainRampMs:100, releaseRampMs:120 },
 	     vibrato:{ depth:25, rate:70 }, bowPos:55,
-	     bowPressure:70, portamento:{ on:true, time:50 },
+	     // D72.4 — same shape as C6 (D72): all slides via pitchbend wheel
+	     // (slideViaBend=true), bowPoly=DOUBLE_HOLD so simultaneous voicing
+	     // is allowed (was MONO_POLY_RELEASE — needed for SWAM portamento
+	     // engine; pitchbend doesn't depend on it). portamento.{on,time}
+	     // kept as graceful-degradation fallback. Pre-D72.4 fallback config
+	     // for regression: `bowPoly: BOW_POLY.MONO_POLY_RELEASE` and remove
+	     // `slideViaBend` — and uncomment the legacy `phraseC5` below.
+	     bowPressure:70, portamento:{ on:true, time:50 }, slideViaBend:true,
 	     attackRamp:30, attackCtrl:90, tremoloRate:50,
-	     bowPoly:BOW_POLY.MONO_POLY_RELEASE,
+	     bowPoly:BOW_POLY.DOUBLE_HOLD,
 	     register:{ lo:36, hi:89 } },
 	6: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
 	     exprEnv:{ attack:0.7, peak:1.0, sustain:0.85, release:0.4,
 	               attackRampMs:55, sustainRampMs:140, releaseRampMs:160 },
 	     vibrato:{ depth:40, rate:50 }, bowPos:64,
-	     bowPressure:70, portamento:{ on:true, time:80 },
+	     // portamento.time = 100: graceful-degradation fallback if a same-
+	     // string slide ever bypasses the slideViaBend dispatch (e.g., a
+	     // bendStep failure path). slideViaBend = true routes ALL same-
+	     // string AND cross-string slides through `bendStep` (D72), letting
+	     // `phraseC6` scale per-slide duration with the gap-to-next-event
+	     // for the multi-second smooth contours the performer wants.
+	     bowPressure:70, portamento:{ on:true, time:100 }, slideViaBend:true,
 	     attackRamp:50, attackCtrl:50, tremoloRate:50,
-	     bowPoly:BOW_POLY.MONO_POLY_RELEASE,
+	     // bowPoly: Pre-D72.3 was `MONO_POLY_RELEASE` (required for SWAM
+	     // portamento on overlapping noteons). Now that `slideViaBend = true`
+	     // routes ALL slides through pitchbend wheel (D72), portamento isn't
+	     // engaged and Mono Poly Release becomes harmful — it reinterprets
+	     // `maybeDoubleStop`'s companion noteOn as a SLIDE TARGET, silently
+	     // collapsing the intended double-stop into a "main slides to
+	     // companion pitch" event (the user-reported "C6 NEVER plays double
+	     // stops" symptom). DOUBLE_HOLD lets companions sound as a true
+	     // simultaneous voice; pitchbend wheel still works (per-channel,
+	     // independent of bow-polyphony mode), so slides still slide.
+	     bowPoly:BOW_POLY.DOUBLE_HOLD,
 	     register:{ lo:43, hi:67 } },
 	7: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.OFF,
 	     exprEnv:{ attack:0.4, peak:1.05, sustain:0.9, release:0.7,
 	               attackRampMs:100, sustainRampMs:200, releaseRampMs:260 },
-	     vibrato:{ depth:55, rate:40 }, bowPos:115,
+	     // bowPosAlt: handleVoice coin-flips between bowPos (sul tasto) and
+	     // bowPosAlt (sul pont) per phrase trigger. Same melodic / gliss /
+	     // dynamic structure either way — only timbre changes.
+	     vibrato:{ depth:55, rate:40 }, bowPos:115, bowPosAlt:5,
 	     // CC 5 (Portamento Time) caps at 127 (standard MIDI CC range).
 	     // D53 v1 tried `time:250` thinking it was raw ms/semi, but
 	     // ccForce clamps to 0..127 → audio actually played at CC 5 = 127
@@ -264,9 +290,14 @@ var COMPLEX = {
 	     // 115 (original C7 value) until pitchbend lands as the path to
 	     // genuinely-slow drift. Gestural distinction from C6 comes from
 	     // FIRST_GLISS_MS_C7 + ±1-2 alternating-sign deltas in phraseC7.
-	     bowPressure:55, portamento:{ on:true, time:115 },
+	     // D72.4 — slideViaBend=true (same as C5/C6) ports tasto drifts
+	     // from glissNote portamento to bendStep pitchbend. bowPoly=
+	     // DOUBLE_HOLD so future companions could sound; pitchbend wheel
+	     // is independent of bow-polyphony mode. Pre-D72.4: bowPoly was
+	     // MONO_POLY_RELEASE and slideViaBend was unset.
+	     bowPressure:55, portamento:{ on:true, time:115 }, slideViaBend:true,
 	     attackRamp:90, attackCtrl:25, tremoloRate:40,
-	     bowPoly:BOW_POLY.MONO_POLY_RELEASE,
+	     bowPoly:BOW_POLY.DOUBLE_HOLD,
 	     register:{ lo:36, hi:52 } },
 	8: { playMode:"bow", harmonics:HARMONICS.OFF, tremolo:TREMOLO.FAST,
 	     exprEnv:{ attack:0.9, peak:1.15, sustain:1.0, release:0.3,
@@ -284,19 +315,17 @@ var COMPLEX = {
 // ================================================================
 // STATE — global (shared across instances)
 // ================================================================
-// Sieve walker, regime/path/tetra, live gyro, face mapping. Each field
-// here is either (a) a property of the piece rather than a single voice
-// (sieve position, regime), (b) a physical input broadcast to every
-// sounding voice (tilt/spin/dev/scramble), or (c) an incoming-turn
-// snapshot captured onto the instance at handleVoice allocation time
-// (face*, path/transpose, intensity) and then read from the instance.
+// Sieve walker, regime/tetra, live gyro, face mapping. Each field here is
+// either (a) a property of the piece rather than a single voice (sieve
+// position, regime), (b) a physical input broadcast to every sounding voice
+// (tilt/spin/dev/scramble), or (c) an incoming-turn snapshot captured onto
+// the instance at handleVoice allocation time (face*, intensity) and then
+// read from the instance.
 // ================================================================
 var state = {
 	sieve: [36, 37, 39, 41, 43, 44, 48],
 	sieveIdx: 0,
 	sieveDir: 1,
-	path: "V1",
-	transpose: 0,
 	tetra: 0,
 	regime: "contemplative",
 	frozen: false,
@@ -304,24 +333,20 @@ var state = {
 
 	intensity: "mf",            // last incoming intensity label (for log only)
 	density: 2.0,               // last incoming density
-	duration: 1.0,              // last incoming duration (pre-face scale)
+	duration: 1.0,              // last resolved phrase duration
 
 	turnCount: 0,
 	lastTurnTime: 0,
 	lastVoiceTime: 0,           // for panic watchdog (any instance)
 
 	// Continuous expression inputs.
-	// Each EMA absorbs gyro static-pose noise so a held cube doesn't flicker
-	// the rounded CC value between two adjacent integers at 30 Hz (perceived
-	// as a sub-vibrato bow buzz). tiltEMA was missing pre-2026-04-30 — the
-	// only handleExpr* without smoothing — and produced exactly that bow-
-	// position wobble on sustained voices. Initialised at rest pose (0.5).
+	// tiltEMA absorbs gyro static-pose noise so a held cube doesn't flicker
+	// the rounded CC 16 (Bow Position) value between adjacent integers at
+	// 30 Hz (sub-vibrato bow buzz). Initialised at rest pose (0.5).
 	tilt: 0.5,
 	tiltEMA: 0.5,
 	spin: 0,
-	spinEMA: 0,
 	dev: 0,
-	devEMA: 0,
 	spinLowSince: 0,
 	frame60: 0,
 
@@ -339,7 +364,7 @@ var state = {
 	// handleVoice allocation so later face messages don't retroactively
 	// reshape an in-flight phrase.
 	face: null,
-	faceDurationBias: 1.0,
+	faceDurationSec: null,
 	faceTranspose: 0,
 	faceEnvelope: null,
 	faceArticulation: null,
@@ -418,12 +443,10 @@ function makeInstance(id) {
 		intensity: "mf",
 		density: 2.0,
 		duration: 1.0,
-		path: "V1",
-		transpose: 0,
 		tetra: 0,
-		faceDurationBias: 1.0,
+		faceDurationSec: null,
 		faceTranspose: 0,
-		faceEnvelope: null,      // 'pluck'|'swell'|'stab'|'drone'|'fade'|'burst'|null — drives phrase count + expr shape
+		faceEnvelope: null,      // 'pluck'|'swell'|'stab'|'hairpin-up'|'hairpin-down'|'fade'|'burst'|null — drives phrase count + expr shape
 		faceMotion: null,        // 'static'|'up'|'down'|'oscillate'|null — drives sieve-walker direction
 		faceEnvProfile: null,
 		faceOffVelOverride: null,
@@ -432,7 +455,6 @@ function makeInstance(id) {
 		// Expression targets
 		baseExpr: 0,
 		peakExpr: 0,
-		bowPressureBase: 64,
 
 		// Gliss invariant telemetry (D42 + D46 + D59). Every C5/C6/C7 voice
 		// MUST emit ≥1 glissStep; scheduleRelease's offT checks the sum of
@@ -490,6 +512,12 @@ function makeInstance(id) {
 		bowPosWrites: 0,
 		bowPosReversals: 0,
 		bowPosLastDir: 0,      // -1 down, +1 up, 0 none
+
+		// Per-instance bow-position baseline (CC 16). setupComplex seeds it
+		// from cmx.bowPos; handleVoice may re-roll for C7 (tasto/pont
+		// coin-flip per phrase). handleExprTilt + scrambleBowBias dispatch
+		// add their offsets to this value, not cmx.bowPos.
+		bowPosBase: null,
 
 		// KS sync guard
 		ksForceCount: 0,
@@ -594,15 +622,19 @@ function emitMidi(inst, status, byte1, byte2) {
 // by technique and connect adjacent same-voice C5/C6/C7 notes as glissando
 // curves. Addresses come from gen_includes.js (OSC.MIDI_NOTEON / MIDI_NOTEOFF
 // / MIDI_PANIC).
-function emitEchoNote(address, inst, pitch, vel) {
-	outlet(ECHO_OUTLET, address, inst.voice, pitch, vel, inst.activeComplex || 0);
+function emitEchoNote(address, inst, pitch, vel, extraFlag) {
+	// 5th arg conveys per-noteon metadata (currently only `isCompanion`
+	// for double-stop companion identification — see `maybeDoubleStop`).
+	// noteoff calls don't pass `extraFlag`; `undefined | 0` = 0 so the
+	// OSC payload is consistent (5 args total) for the relay's parser.
+	outlet(ECHO_OUTLET, address, inst.voice, pitch, vel, inst.activeComplex || 0, extraFlag | 0);
 }
 
-function noteOn(inst, pitch, vel) {
+function noteOn(inst, pitch, vel, isCompanion) {
 	pitch = clamp(pitch, 0, 127);
 	vel = clamp(vel, 1, 127);
 	emitMidi(inst, statusNoteOn(MIDI_CH), pitch, vel);
-	emitEchoNote(OSC.MIDI_NOTEON, inst, pitch, vel);
+	emitEchoNote(OSC.MIDI_NOTEON, inst, pitch, vel, isCompanion ? 1 : 0);
 }
 
 // Phase 8: velocity default = state.noteOffVel (turn-rate driven).
@@ -617,21 +649,51 @@ function noteOff(inst, pitch, vel) {
 	emitEchoNote(OSC.MIDI_NOTEOFF, inst, pitch, vel);
 }
 
+// User-tuned floor for CC 11 (Expression) on PLAY-time writes. Generated
+// phrase materials (phrase arcs, attack/peak/sustain envelopes, chain
+// snaps, in-flight rampCC ticks) clamp at this minimum so soft dynamics
+// stay audibly above SWAM's perceptible threshold — pp passages with
+// peakExpr × ARC_FLOOR landing below ~10 read as silent, which the
+// performer experiences as "the cube stopped responding."
+//
+// Silencing writes (release fade landing exactly at 0, voice steal flush
+// via stealInstance, bang/panic reset) are exempt: the val > 0 guard in
+// the floor check lets explicit zero writes through. The release fade's
+// rampCC ticks plateau briefly at FLOOR right before the final tick lands
+// at 0 (start=peak, target=0 → ticks walk down through FLOOR), then the
+// MIDI noteoff fires and silences the voice — no audible artifact.
+var CC_EXPRESSION_FLOOR = 12;
+
 // Continuous CC — per-instance cache-suppressed. Use for 60 Hz streams.
 function cc(inst, num, val) {
 	if (!hasCC(num)) return;
 	val = clamp(Math.round(val), 0, 127);
+	if (num === CC.EXPRESSION && val > 0 && val < CC_EXPRESSION_FLOOR) val = CC_EXPRESSION_FLOOR;
 	if (inst.ccCache[num] === val) return;
 	inst.ccCache[num] = val;
 	emitMidi(inst, statusCC(MIDI_CH), num, val);
+	if (num === CC.EXPRESSION) emitEchoExpr(inst, val);
 }
 
 // Forced CC — always writes, updates cache.
 function ccForce(inst, num, val) {
 	if (!hasCC(num)) return;
 	val = clamp(Math.round(val), 0, 127);
+	if (num === CC.EXPRESSION && val > 0 && val < CC_EXPRESSION_FLOOR) val = CC_EXPRESSION_FLOOR;
 	inst.ccCache[num] = val;
 	emitMidi(inst, statusCC(MIDI_CH), num, val);
+	if (num === CC.EXPRESSION) emitEchoExpr(inst, val);
+}
+
+// Pure additive telemetry — echo every CC 11 (Expression) write so the
+// dashboard can size brushes by audible dynamics rather than per-note
+// velocity. Velocity is a poor proxy because SWAM Cello drives ongoing
+// loudness via CC 11 ramps (D47 phrase arc) — a single sustained note
+// has one velocity but a full cresc/dim envelope across its lifetime.
+// No synthesis state depends on this; if the dashboard isn't listening,
+// the messages are simply dropped at the relay.
+function emitEchoExpr(inst, val) {
+	outlet(ECHO_OUTLET, OSC.MIDI_EXPR, inst.voice, val, inst.activeComplex || 0);
 }
 
 // ================================================================
@@ -718,6 +780,16 @@ function completeBend(inst, scheduled) {
 	if (scheduled !== true) {
 		log("inst " + inst.id + " bend race-fix — completeBend fired inline before scheduled task");
 	}
+	// D72 race-fix — cancel any in-flight pitchbend ramp before the wheel
+	// reset. Without this, the LAST ramp tick scheduled at the bend's
+	// `durMs` boundary can fire AFTER this `emitPitchbend(PITCHBEND_CENTER)`
+	// (Max's Task scheduler doesn't guarantee FIFO at identical times),
+	// re-bending the wheel to target and leaving it there until the next
+	// bend's reset. Pre-D72 with bend durations ≤ 195 ms the race was
+	// statistically rare and the residual lag was under 200 ms; D72's
+	// multi-second bends amplified both the chance and the audible
+	// duration of pitchbend-persists-despite-noteoff.
+	cancelPitchbendRamp(inst);
 	var bp = inst.bendPending;
 	emitPitchbend(inst, PITCHBEND_CENTER);   // (1) bend = 0
 	noteOff(inst, bp.hpSource);               // (2) source release
@@ -798,34 +870,47 @@ function setPlayMode(inst, target) {
 	inst.playMode = target;
 }
 
+// D69 — diff guard removed (2026-05-02). Prophylactic mirror of the
+// D44 / D69 setBowPolyphony / setTremolo fixes; same startup race exists
+// on CC 78 and would silently freeze C4 in non-harmonic mode whenever
+// SWAM's preset load lands after resetInstance.
 function setHarmonics(inst, target) {
-	if (inst.harmonics === target) return;
 	if (HAS_HARMONICS_CC) {
 		ccForce(inst, CC.HARMONICS, HARMONICS_CC_VAL[target]);
 	} else {
 		keyswitch(inst, KS.HARMONICS, velForKS(KS.HARMONICS, target, 4));
 	}
 	inst.harmonics = target;
+	log("inst " + inst.id + " harmonics=" + target + " cc78=" + HARMONICS_CC_VAL[target]);
 }
 
-// D37 — per-voice C4 harmonic-mode rotation. Reads snapshot path/tetra
-// off the instance so an older C4 voice keeps its own axis assignment
-// even if the global cube state has moved since.
+// Per-voice C4 harmonic-mode rotation by tetra parity (V1/V2 path was
+// retired; CTRL is reserved for algorithm-driven pings).
+//   even tetra → OCT
+//   odd  tetra → OCT_5TH
 function harmonicsForC4(inst) {
-	if (inst.path === "V1") {
-		return inst.tetra === 1 ? HARMONICS.OCT_5TH : HARMONICS.OCT;
-	}
-	return inst.tetra === 1 ? HARMONICS.CTRL : HARMONICS.OCT_5TH;
+	return inst.tetra === 1 ? HARMONICS.OCT_5TH : HARMONICS.OCT;
 }
 
+// D69 — diff guard removed (2026-05-02). Same race as D44 setBowPolyphony:
+// `resetInstance` fires CC 79 = 0 before SWAM's preset finishes loading,
+// so the bridge cache reads `TREMOLO.OFF` while SWAM lands on tremolo-on
+// (preset default or `vst~` first-instantiation state). Every subsequent
+// C1–C7 voice's `setTremolo(OFF)` then hit the diff guard (`OFF === OFF`)
+// and never re-asserted — startup played every non-tremolo phrase through
+// SWAM's stuck tremolo until the first C8 phrase finally diff-broke the
+// cache (OFF→FAST→OFF) and re-synced the path. User report: "every time
+// i start up the patch it starts with everything doing tremolos until i
+// actually hit a tremolo phrase". Always re-asserting costs one CC write;
+// cheap insurance.
 function setTremolo(inst, target) {
-	if (inst.tremolo === target) return;
 	if (HAS_TREMOLO_CC) {
 		ccForce(inst, CC.TREMOLO, TREMOLO_CC_VAL[target]);
 	} else {
 		keyswitch(inst, KS.TREMOLO, velForKS(KS.TREMOLO, target, 3));
 	}
 	inst.tremolo = target;
+	log("inst " + inst.id + " tremolo=" + target + " cc79=" + TREMOLO_CC_VAL[target]);
 }
 
 // D44 — diff guard removed (2026-04-23). Pre-D44 this function early-
@@ -892,21 +977,36 @@ function cancelPhrase(inst, preserveLegatoTail) {
 
 	cancelCCRamp(inst, CC.EXPRESSION);
 
-	// D59 — cancel any in-flight pitchbend ramp and reset the wheel to
-	// center. A stolen mid-bend voice would otherwise leak the bend
-	// offset into the next voice's first noteOn — that note would play
-	// at written_pitch + offset audibly, drifting an entire phrase off
-	// pitch. Cancel BEFORE allNotesOff so the held source's last
-	// audible pitch is its written pitch (not target+offset) before
-	// release; a one-frame audible "drop back to source pitch" is
-	// preferable to a wrong-pitch new voice.
-	cancelPitchbendRamp(inst);
-	if (inst.pitchbend !== PITCHBEND_CENTER) emitPitchbend(inst, PITCHBEND_CENTER);
-
-	// D63 — drop any deferred bend transition. The bend is being
-	// aborted (steal / phrase end); we don't want completeBend to
-	// fire later and re-add a noteOn for the bend's target after
-	// allNotesOff has cleared everything.
+	// D59 + D72 — clean up any in-flight bend BEFORE allNotesOff. Two
+	// concerns:
+	//   (a) Pitchbend wheel must be back at center so the next voice's
+	//       noteOn doesn't play at source+offset (the original D59
+	//       reason — a one-frame audible "drop back to source pitch"
+	//       is preferable to a wrong-pitch new voice).
+	//   (b) D72 — for `slideViaBend` complexes (C6) with long bends,
+	//       the deferred `noteOff(source) + noteOn(target)` from
+	//       `completeBend` MUST fire so the dashboard sees a clean
+	//       end-of-bend sequence and the `preserveLegatoTail` mechanism
+	//       (next phrase's legato into the bend's target, not its
+	//       source) works correctly. Pre-D72 the bridge cancelled the
+	//       deferred transition outright (D63's "ghost-fire" concern);
+	//       with multi-second bends, that left the dashboard's
+	//       `bendSegments` entry dangling for up to MAX_BEND_DUR_MS
+	//       and the visual line at source's pitch instead of the
+	//       musically-arrived target pitch. completeBend below cancels
+	//       the pitchbend ramp internally (D72 race-fix) AND fires the
+	//       atomic transition, so the wheel-reset and the noteOff/
+	//       noteOn pair both happen synchronously here — no async
+	//       leakage past allNotesOff.
+	if (inst.bendPending) {
+		completeBend(inst, /*scheduled=*/ false);
+	} else {
+		cancelPitchbendRamp(inst);
+		if (inst.pitchbend !== PITCHBEND_CENTER) emitPitchbend(inst, PITCHBEND_CENTER);
+	}
+	// Defensive — completeBend clears these, but if bendPending was
+	// already null we still want to ensure the deferred task doesn't
+	// fire post-cancel (cleanup of a half-aborted prior cancel path).
 	if (inst.bendPendingTask) inst.bendPendingTask.cancel();
 	inst.bendPending = null;
 	inst.bendPendingTask = null;
@@ -1067,10 +1167,21 @@ function scheduleRelease(inst, dur) {
 // ================================================================
 function scheduleExprEnvelope(inst, peakExpr, env, durMs) {
 	var rm = REGIME_EXPR_RAMP_MULT[state.regime] || 1.0;
-	var aMs = (env.attackRampMs  != null ? env.attackRampMs  : 40) * rm;
-	var sMs = (env.sustainRampMs != null ? env.sustainRampMs : 120) * rm;
+	// Peak/sustain ramps scale with phrase length so long single-note phrases
+	// do not expose the cello VST with brief tier transitions between
+	// multi-second plateaus. The attack level is seeded synchronously below;
+	// using a proportional attack ramp here was the source of delayed-feeling
+	// pluck/stab gestures.
+	var baseS = (env.sustainRampMs != null ? env.sustainRampMs : 120) * rm;
+	var sMs = Math.max(baseS, Math.min(durMs * 0.25, 1500));
 
-	rampCC(inst, CC.EXPRESSION, Math.round(peakExpr * env.attack), aMs);
+	// Live-onset invariant: a phrase's first note must not wait for CC 11 to
+	// climb from zero before it becomes audible. The old attack ramp scaled up
+	// to 10% of phrase duration (often 200-500 ms, capped at 800 ms), which
+	// read as face-oriented latency on pluck/stab single-note gestures.
+	// Seed the attack level synchronously; subsequent peak/sustain ramps still
+	// carry the face/compex envelope shape.
+	ccForce(inst, CC.EXPRESSION, Math.round(peakExpr * env.attack));
 
 	var peakAt = Math.max(60, Math.round(durMs * 0.25));
 	scheduleAt(inst, peakAt, function() {
@@ -1095,6 +1206,8 @@ function phraseArcDirection(inst) {
 	if (env === 'swell') return 'cresc';
 	if (env === 'fade')  return 'dim';
 	if (env === 'burst') return 'dim';
+	if (env === 'hairpin-up')   return 'hairpin-up';   // <> peak in middle
+	if (env === 'hairpin-down') return 'hairpin-down'; // >< trough in middle
 	return null;
 }
 
@@ -1120,10 +1233,19 @@ function phraseArcDirection(inst) {
 // EXPRESSION); cancelPhrase also snapshots the chain state so a stolen
 // arc still seeds a chain candidate.
 //
-// REGIME ramp multiplier still applies so contemplative regime stretches
-// the arc and burst regime tightens it.
+// REGIME ramp multiplier applies asymmetrically: burst (rm=0.4) tightens
+// the arc so peak lands at ~40% of phrase and plateaus through the rest;
+// contemplative (rm=1.5) is CLAMPED to 1.0 — without the clamp it stretches
+// rampMs past durMs, the rampCC chain only completes 67% of its journey
+// before scheduleRelease fires, and the ARC FAIL assertion catches it
+// (landed ≠ phraseArcEnd by ~33% of total range). User-audible symptom
+// was a "sudden tail diminish": the release fade picked up from the
+// mid-trajectory landing value (e.g. 42 instead of intended 24 on a dim
+// phrase) and walked it down to 0 over fadeMs, producing a perceptually
+// abrupt ending where the dynamic should have already arrived at its
+// intended endpoint.
 function schedulePhraseArc(inst, peakExpr, dir, durMs) {
-	var rm = REGIME_EXPR_RAMP_MULT[state.regime] || 1.0;
+	var rm = Math.min(REGIME_EXPR_RAMP_MULT[state.regime] || 1.0, 1.0);
 	var rampMs = Math.max(60, Math.round(durMs * rm));
 	var lo = clamp(Math.round(peakExpr * ARC_FLOOR), 0, 127);
 	var hi = clamp(Math.round(peakExpr * ARC_CEIL),  0, 127);
@@ -1165,6 +1287,54 @@ function schedulePhraseArc(inst, peakExpr, dir, durMs) {
 	    (canChain ? " [chained gap=" + gap + "ms]" : ""));
 }
 
+// Hairpin phrase shape — `<>` (hairpin-up: peak in middle) or `><`
+// (hairpin-down: trough in middle). Trajectory: rampCC start → mid over
+// durMs/2, then at t=durMs/2 rampCC mid → end over durMs/2 where
+// end === start. Useful for sustained single-noteon phrases (D' / B' faces)
+// that would otherwise feel inert across long durations — the hairpin
+// gives "twice as much motion for the price of one" per user request.
+//
+// No chain mode: hairpin trajectories are symmetric and self-contained;
+// inheriting a mid-trajectory value from a previous phrase would distort
+// the shape. ccForce sets startVal explicitly at phrase entry.
+//
+// scheduleRelease's D47 ARC FAIL assertion sees inst.phraseArcEnd === startVal
+// (because the hairpin returns to its start) — the fade then walks startVal
+// → 0 over fadeMs (symmetric for hairpin-up landing low; longer-feeling for
+// hairpin-down landing high, which is intentional — the trough-and-recover
+// shape needs the recovery to register before the natural ending).
+function schedulePhraseHairpin(inst, peakExpr, dir, durMs) {
+	var rm = Math.min(REGIME_EXPR_RAMP_MULT[state.regime] || 1.0, 1.0);
+	var halfDur = Math.max(60, Math.round(durMs / 2));
+	var rampMs = Math.max(60, Math.round(halfDur * rm));
+	var lo = clamp(Math.round(peakExpr * ARC_FLOOR), 0, 127);
+	var hi = clamp(Math.round(peakExpr * ARC_CEIL),  0, 127);
+	var startVal, midVal;
+	if (dir === 'hairpin-up') {
+		startVal = lo;
+		midVal   = hi;
+	} else {
+		startVal = hi;
+		midVal   = lo;
+	}
+
+	ccForce(inst, CC.EXPRESSION, startVal);
+	rampCC(inst, CC.EXPRESSION, midVal, rampMs);
+
+	scheduleAt(inst, halfDur, function() {
+		rampCC(inst, CC.EXPRESSION, startVal, rampMs);
+	});
+
+	inst.phraseArcDir   = dir;
+	inst.phraseArcStart = startVal;
+	inst.phraseArcEnd   = startVal;  // returns to start by phrase end
+
+	log("inst " + inst.id + " phraseHairpin dir=" + dir +
+	    " face=" + (inst.faceEnvelope || "-") +
+	    " start=" + startVal + " mid=" + midVal + " end=" + startVal +
+	    " dur=" + Math.round(durMs) + "ms");
+}
+
 // ================================================================
 // HUMANIZATION
 // ================================================================
@@ -1172,6 +1342,21 @@ function humanVel(base) {
 	var jitter = (Math.random() - 0.5) * 0.3 * base;
 	var accent = (state.turnCount % 3 === 0) ? 8 : 0;
 	return clamp(Math.round(base + jitter + accent), 20, 127);
+}
+
+// Per-pluck velocity for C1 pizz cloud — gaussian (Box-Muller) distribution
+// around K-assigned dynamic centerpoint. humanVel's flat ±15% uniform was
+// audibly monotonous across many plucks ("all too same"); a 0.25-sigma
+// gaussian gives most plucks within ±25% of center (1σ), occasional outliers
+// at ±50% (2σ), preserving the K dynamic character (pp / mp / ff stays in
+// its zone) while making the cloud read as a textured ensemble of plucks
+// rather than a metronome at one velocity.
+function pizzVel(centerVel) {
+	var u1 = Math.max(1e-6, Math.random());
+	var u2 = Math.random();
+	var z = Math.sqrt(-2 * Math.log(u1)) * Math.cos(2 * Math.PI * u2);
+	var sigma = centerVel * 0.25;
+	return clamp(Math.round(centerVel + z * sigma), 20, 127);
 }
 
 function humanPitch(pitch) {
@@ -1204,8 +1389,8 @@ function setupComplex(inst, complexType) {
 		ccForce(inst, CC.TREMOLO_RATE, cmx.tremoloRate);
 	}
 
-	if (cmx.bowPos != null) ccForce(inst, CC.BOW_POSITION, cmx.bowPos);
-	inst.bowPressureBase = cmx.bowPressure;
+	inst.bowPosBase = cmx.bowPos;
+	if (inst.bowPosBase != null) ccForce(inst, CC.BOW_POSITION, inst.bowPosBase);
 	ccForce(inst, CC.BOW_PRESSURE, cmx.bowPressure);
 
 	ccForce(inst, CC.PORTAMENTO_ON,   cmx.portamento.on ? 127 : 0);
@@ -1222,7 +1407,7 @@ function setupComplex(inst, complexType) {
 	ccForce(inst, CC.ATTACK_CONTROL, cmx.attackCtrl);
 
 	ccForce(inst, CC.VIBRATO_RATE, cmx.vibrato.rate);
-	ccForce(inst, CC.VIBRATO_DEPTH, vibDepthForComplex(cmx));
+	ccForce(inst, CC.VIBRATO_DEPTH, cmx.vibrato.depth);
 
 	// Sieve walker is global (shared); not reset per-complex change —
 	// multi-instance would otherwise have one instance's C2/C6 reset
@@ -1238,15 +1423,12 @@ function pickPitch(complexType, inst) {
 	var cmx = COMPLEX[complexType];
 	var reg = cmx && cmx.register;
 	var lo, hi;
-	var path = inst ? inst.path : state.path;
-	var transpose = inst ? inst.transpose : state.transpose;
 	var faceTr = inst ? inst.faceTranspose : (state.faceTranspose || 0);
 	if (reg) {
-		var shift = (path === "V2") ? -12 : 0;
-		lo = Math.max(24, reg.lo + shift);
+		lo = Math.max(CELLO_MIN, reg.lo);
 		hi = Math.min(CELLO_MAX, reg.hi);
 	}
-	if (s.length === 0) return foldToRange(36 + transpose + faceTr, lo, hi);
+	if (s.length === 0) return foldToRange(36 + faceTr, lo, hi);
 
 	var pitch;
 	switch (complexType) {
@@ -1269,11 +1451,11 @@ function pickPitch(complexType, inst) {
 		default:
 			pitch = s[0];
 	}
-	return foldToRange(pitch + transpose + faceTr, lo, hi);
+	return foldToRange(pitch + faceTr, lo, hi);
 }
 
 function foldToRange(pitch, lo, hi) {
-	if (lo == null) lo = (state.path === "V2") ? 24 : CELLO_MIN;
+	if (lo == null) lo = CELLO_MIN;
 	if (hi == null) hi = CELLO_MAX;
 	while (pitch < lo) pitch += 12;
 	while (pitch > hi) pitch -= 12;
@@ -1285,10 +1467,10 @@ function foldToRange(pitch, lo, hi) {
 // ================================================================
 // Overlap window before the previous note's noteOff fires. 20 ms is fine
 // for plain legato chains — we just want the new note to sound before the
-// old one cuts. Gliss (C5/C6/C7) asks SWAM's Bow Polyphony "Mono Poly
-// Release" detector to treat the overlap as a portamento target, and 20 ms
-// is tight enough that cold-load / state-drift occasionally misses it —
-// so glissNote uses GLISS_OVERLAP_MS instead.
+// old one cuts. Legacy glissNote portamento asks SWAM to treat the overlap as
+// a slide target, and 20 ms is tight enough that cold-load / state-drift can
+// miss it — so that fallback uses GLISS_OVERLAP_MS instead. Current C5/C6/C7
+// normally route through bendStep because slideViaBend=true.
 var LEGATO_OVERLAP_MS = 20;
 var GLISS_OVERLAP_MS  = 60;
 
@@ -1463,12 +1645,12 @@ var ARC_COMPLEXES = { 2: true, 3: true, 4: true, 5: true, 6: true, 7: true, 8: t
 // intentional pauses).
 var ARC_CHAIN_GAP_MS = 1000;
 
-// D54 — handleExprTilt EMA coefficient. spinEMA uses 0.08; tilt is the
-// always-on always-emitting modulator (no deadband like spin's 200 ms low-
-// spin gate), so it gets stronger smoothing (0.05). Lower = smoother (more
-// lag); higher = more responsive (more flicker). The 30 Hz transmit rate
-// means τ ≈ 1 / (α × 30) ≈ 670 ms at α=0.05 — gyro static noise is fully
-// absorbed; intentional cube tilts respond within ~half a second.
+// D54 — handleExprTilt EMA coefficient. Tilt is always-on always-emitting
+// (no deadband like spin's 200 ms low-spin gate), so it needs stronger
+// smoothing than the now-removed spinEMA/devEMA used. Lower = smoother
+// (more lag); higher = more responsive (more flicker). The 30 Hz transmit
+// rate means τ ≈ 1 / (α × 30) ≈ 670 ms at α=0.05 — gyro static noise is
+// fully absorbed; intentional cube tilts respond within ~half a second.
 var TILT_EMA_ALPHA = 0.05;
 
 // D54 — bow-position flap fail threshold (CC 16 reversals per second of
@@ -1518,8 +1700,9 @@ function glissNote(inst, pitch, vel, accent) {
 	//     draws as gliss, producing the user-reported
 	//     "expected but not played, drawn as gliss" symptom.
 	//   • CC 64 (PORTAMENTO_ON) must equal 127.
-	//   • CC 81 (BOW_POLYPHONY) must equal Mono Poly Release for the
-	//     slide to engage cleanly (D44 invariant).
+	//   • CC 81 (BOW_POLYPHONY) must equal the current complex's configured
+	//     bowPoly value. Historically this was Mono Poly Release for gliss;
+	//     current C5/C6/C7 use Double/Hold plus slideViaBend.
 	// Cache vs expected catches bridge-internal bugs (skipped writes,
 	// diff-guard suppression). It does NOT catch SWAM↔bridge wire drift
 	// (would need a SWAM-side read-back via vst~ pattr — deferred). When
@@ -1560,14 +1743,14 @@ function glissNote(inst, pitch, vel, accent) {
 // D46 — string-crossing geometry.
 //
 // SWAM Cello is a physical-modeling instrument. Real cellos have four strings,
-// and the Mono Poly Release portamento engine slides cleanly only when both
-// source and target reach a single string. A cross-string overlap engages
-// SWAM's portamento state internally then bails to a string-cross leap when it
-// can't reach the target — audibly a leap, but the GUI shows a residual
-// portamento attempt that doesn't match the sound. To make MIDI intent
-// unambiguous, the bridge classifies every gliss step:
+// and the legacy portamento engine slides cleanly only when both source and
+// target reach a single string. A cross-string overlap engages SWAM's
+// portamento state internally then bails to a string-cross leap when it can't
+// reach the target — audibly a leap, but the GUI shows a residual portamento
+// attempt that doesn't match the sound. To make MIDI intent unambiguous, the
+// bridge classifies every gliss step:
 //
-//   sameString(src, dst) === true  → emit overlap (portamento engages cleanly)
+//   sameString(src, dst) === true  → emit overlap (legacy portamento fallback)
 //   sameString(src, dst) === false → emit clean noteOff → gap → noteOn (string
 //                                    crossing; SWAM doesn't try to portamento)
 //
@@ -1703,7 +1886,13 @@ function leapStep(inst, targetPitch) {
 // the new "source" for subsequent steps — this function returns
 // nothing; phraseC5/6/7 update lastPitchRef from the dispatcher
 // (glissStep returns target pitch).
-function bendStep(inst, sourcePitch, targetPitch, glissVel, accent, complex) {
+// `desiredDurMs` (optional, default null) — caller-supplied bend duration.
+// When provided, overrides the per-complex `_bendDur` formula and clamps to
+// `[80, MAX_BEND_DUR_MS]`. Used by C6 same-string slides (slideViaBend) to
+// scale duration with time-to-next-event; the default `_bendDur` is capped
+// at `MIN_GLISS_SPACING_MS - 5 = 195 ms` for D60 race-safety on cross-
+// string fallbacks where the caller doesn't know the inter-event gap.
+function bendStep(inst, sourcePitch, targetPitch, glissVel, accent, complex, desiredDurMs) {
 	// D60 — find the actual held source note, don't re-humanise.
 	// `humanPitch` has a 10% chance of shifting by ±1 SEMITONE (not
 	// the small jitter I assumed during D59 design). Calling humanPitch
@@ -1733,11 +1922,26 @@ function bendStep(inst, sourcePitch, targetPitch, glissVel, accent, complex) {
 		return;
 	}
 
-	var hpTarget = humanPitch(targetPitch);
-	// Compute bend in INTEGER semitones; humanPitch jitter on the
-	// source is irrelevant for the bend math (we bend the actual
-	// audible source toward the integer target).
-	var semis = Math.round(targetPitch) - Math.round(sourcePitch);
+	// D72.1 — bend target is NOT humanized. The bendstep echo emits the
+	// integer target to the dashboard (chain segment p1, bend-grace
+	// expected pitch); completeBend later fires noteOn(hpTarget). If
+	// hpTarget is humanPitch's 10%-chance ±1 shift of targetPitch, the
+	// echoed target and the actual noteOn pitch disagree by 1 semi 10%
+	// of the time → manifests as `GLISS SYNC FAIL ... linePitch=N
+	// chainPitch=N+1` with the line stuck 1 semi off the chain for the
+	// rest of the bend (and the next bend's heldSource lookup fails on
+	// the same shift, falling through to leapStep). Slides should land
+	// precisely on the sieve walk pitch — humanPitch jitter on slide
+	// targets was musically inert and visually load-bearing. Pre-D72
+	// this affected only cross-string bends (rare + short, ≤ 195 ms);
+	// D72's same-string bends made it constant + lingering up to
+	// MAX_BEND_DUR_MS.
+	var hpTarget = clamp(Math.round(targetPitch), CELLO_MIN, CELLO_MAX);
+	// Compute bend in INTEGER semitones from heldSource (humanPitch-
+	// shifted lookup of activeNotes via Math.round) toward the integer
+	// target. The bend's audible curve lands on the same pitch the
+	// noteOn fires on — visual sync invariant holds.
+	var semis = hpTarget - Math.round(sourcePitch);
 	var clamped = clamp(semis, -PITCHBEND_RANGE_SEMI, PITCHBEND_RANGE_SEMI);
 	if (clamped !== semis) {
 		log("BEND CLIP inst " + inst.id + " C" + (complex || inst.activeComplex) +
@@ -1745,14 +1949,26 @@ function bendStep(inst, sourcePitch, targetPitch, glissVel, accent, complex) {
 		    " — bendStep dispatched with over-range interval; should have routed to leapStep");
 	}
 	var targetBend = clamp(PITCHBEND_CENTER + Math.round(clamped * 8192 / PITCHBEND_RANGE_SEMI), 0, 16383);
-	var durMs = _bendDur(sourcePitch, targetPitch, complex || inst.activeComplex);
+	var durMs = (desiredDurMs != null)
+		? clamp(Math.round(desiredDurMs), 80, MAX_BEND_DUR_MS)
+		: _bendDur(sourcePitch, targetPitch, complex || inst.activeComplex);
 
 	// Echo to dashboard with INTEGER pitches — the dashboard's relay
 	// parses with `| 0` and the chain-grace match is integer-valued.
-	// Using humanised values here would mismatch on the 10%-of-the-
-	// time pitch shift case.
+	// D72.1 — echo `hpTarget` (= the integer target the noteOn will
+	// actually fire at) so the chain segment p1 + bend-grace expected
+	// pitch align with what the line model sees from the noteon echo.
+	// Pre-D72.1 this used `Math.round(targetPitch)` (the logical, pre-
+	// humanization target), which agreed with hpTarget's old humanPitch
+	// path 90% of the time and disagreed by 1 semi the other 10% — the
+	// chain-grace ±1 tolerance hid the chainStart classification but
+	// the chain segment's frozen p1 + the line's actual noteOn pitch
+	// stayed 1 semi apart, manifesting as `GLISS SYNC FAIL` with the
+	// stuck triangle the user saw post-D72. Now hpTarget is the integer
+	// target (no humanization), so all three sites (echo, semis math,
+	// completeBend's noteOn) reference the SAME integer.
 	outlet(ECHO_OUTLET, OSC.MIDI_BENDSTEP, inst.voice,
-	       Math.round(sourcePitch), Math.round(targetPitch), durMs | 0,
+	       Math.round(sourcePitch), hpTarget, durMs | 0,
 	       inst.activeComplex || (complex || 0));
 
 	// Optional accent: spike CC 18 just before target's noteOn fires.
@@ -1813,11 +2029,29 @@ function bendStep(inst, sourcePitch, targetPitch, glissVel, accent, complex) {
 // if the bend's atomic transition hasn't fired yet when the next
 // event dispatches, force-complete it inline.
 var BEND_DUR_MARGIN_MS = 5;
+
+// Upper cap on bend duration when the caller passes an explicit
+// `desiredDurMs` to `bendStep`. Used by C6 same-string slides
+// (slideViaBend = true) where the desired duration scales with the
+// time-to-next-event; without a cap, wide-spread phrases could request
+// multi-second bends and a voice steal mid-bend leaves a dashboard
+// chain segment with the original long `dur` registered, dangling
+// visually for up to that duration after the steal (the bend's `dur`
+// is committed to `bendSegments` at echo time and only cleaned up
+// when the segment ages past the cull horizon). 1200 ms balances the
+// user's "much longer than 100-200 ms" target against bounded
+// dangling-visual hang time on rapid cube-turn play.
+var MAX_BEND_DUR_MS = 1200;
 function _bendDur(fromP, toP, complex) {
 	var interval = Math.abs(Math.round(toP) - Math.round(fromP));
 	var perSemi;
+	// MUST match `PORTAMENTO_MS_PER_SEMITONE` in `public/js/constants.js`
+	// (visual-line + rolling-chain segment models read from there). C6 was
+	// out of sync at 80 here while the dashboard's mirror was bumped to 100;
+	// the mismatch only mattered for cross-string fallbacks (rare on C6),
+	// but resync to avoid drift surprising the next reader.
 	if (complex === 5) perSemi = 50;
-	else if (complex === 6) perSemi = 80;
+	else if (complex === 6) perSemi = 100;
 	else if (complex === 7) perSemi = 115;
 	else perSemi = 80;
 	var ms = interval * perSemi;
@@ -1861,12 +2095,13 @@ function enforceLeap(sourcePitch, targetPitch, minLeap) {
 }
 
 // Fire one gliss step. Coerces minimum leap, then dispatches:
-//   same-string  → glissNote (overlap → SWAM portamento engages)  → glissOverlapCount++
-//   cross-string → leapStep  (clean noteOff → gap → noteOn)        → glissLeapCount++
+//   slideViaBend / cross-string in range → bendStep   → glissBendCount++
+//   legacy same-string fallback          → glissNote  → glissOverlapCount++
+//   over-range fallback                  → leapStep   → glissLeapCount++
 // D46: explicit dispatch keeps SWAM out of the "tried to portamento, couldn't
 // reach target on this string, GUI shows residual portamento state without
-// the audible slide" failure mode. Both counters feed the D42 invariant
-// (totalEvents = slides + leaps must be ≥ 1 per gliss-complex voice).
+// the audible slide" failure mode. All counters feed the D42 invariant
+// (totalEvents = slides + bends + leaps must be ≥ 1 per gliss-complex voice).
 // D48 + D51: leap-alternation with tolerance. After MAX_CONSECUTIVE_LEAPS
 // consecutive leaps, the next cross-string outcome is nudged to same-string
 // to force a slide — caps leap-clusters while still allowing short leap
@@ -1878,7 +2113,14 @@ function enforceLeap(sourcePitch, targetPitch, minLeap) {
 // accent — passed by C5 to give each slide an audible attack moment.
 // Leap branch ignores it (LEAP_VEL=70 already produces a clear attack).
 // Returns the actual (post-coercion) pitch so callers can chain.
-function glissStep(inst, sourcePitch, targetPitch, minLeap, glissVel, accent) {
+// `bendDurOverride` (optional) — caller-supplied bend duration in ms.
+// Forwarded to `bendStep` when this dispatch routes through pitchbend
+// (cross-string OR same-string-on-slideViaBend complexes). Used by
+// `phraseC6` to scale slide duration with the gap to the next event so
+// long-spread C6 phrases produce the multi-second smooth contours the
+// performer expects, instead of every slide being capped at the
+// portamento-time-table value (~100 ms/semi for C6).
+function glissStep(inst, sourcePitch, targetPitch, minLeap, glissVel, accent, bendDurOverride) {
 	var p = enforceLeap(sourcePitch, targetPitch, minLeap);
 	// D58 — per-complex leap tolerance. C5 keeps 1 (wild punch); C6/C7
 	// drop to 0 (always nudge cross-string to same-string). With D59
@@ -1901,28 +2143,23 @@ function glissStep(inst, sourcePitch, targetPitch, minLeap, glissVel, accent) {
 	// the pending state. Safe to call when nothing is pending (no-op).
 	if (inst.bendPending) completeBend(inst, /*scheduled=*/ false);
 
-	// D46 + D59 three-way dispatch:
-	//   • same-string  → glissNote (portamento overlap on a single string)
-	//   • cross-string + interval ≤ PITCHBEND_RANGE_SEMI → bendStep
-	//                     (pitchbend wheel on held source; audible
-	//                     continuous curve regardless of which string)
-	//   • cross-string + interval > PITCHBEND_RANGE_SEMI → leapStep
-	//                     (over-range fallback; rare since SWAM preset
-	//                     covers ±48 = nearly every cello-range interval)
-	if (sameString(sourcePitch, p)) {
-		glissNote(inst, humanPitch(p), glissVel, accent);
-		inst.glissOverlapCount = (inst.glissOverlapCount | 0) + 1;
-		inst.lastWasLeap = false;
-		inst.consecutiveLeapCurrent = 0;
-	} else if (Math.abs(p - sourcePitch) <= PITCHBEND_RANGE_SEMI) {
-		bendStep(inst, sourcePitch, p, glissVel, accent, inst.activeComplex);
-		inst.glissBendCount = (inst.glissBendCount | 0) + 1;
-		// Bend slides count as slides for the leap-alternation counter
-		// (audible result is a slide). D58's MAX_LEAPS gate effectively
-		// counts ONLY over-range leapStep fallbacks now.
-		inst.lastWasLeap = false;
-		inst.consecutiveLeapCurrent = 0;
-	} else {
+	// D46 + D59 + D72 dispatch:
+	//   • interval > PITCHBEND_RANGE_SEMI                      → leapStep
+	//                  (over-range fallback; pitchbend wheel can't reach)
+	//   • interval ≤ PITCHBEND_RANGE_SEMI AND
+	//     (cmx.slideViaBend === true OR cross-string)          → bendStep
+	//                  (pitchbend wheel on held source; smooth audible
+	//                   curve. Same-string on slideViaBend complexes (C6)
+	//                   bypasses portamento's CC 5 ≤ 127 ms/semi cap and
+	//                   accepts a per-call duration override so phraseC6
+	//                   can time slides to the gap-to-next-event.)
+	//   • interval ≤ PITCHBEND_RANGE_SEMI AND same-string AND
+//     no slideViaBend                                       → glissNote
+//                  (legacy portamento overlap fallback)
+	var cmx = COMPLEX[inst.activeComplex];
+	var overRange = Math.abs(p - sourcePitch) > PITCHBEND_RANGE_SEMI;
+	var preferBend = cmx && cmx.slideViaBend === true;
+	if (overRange) {
 		log("BEND CLIP inst " + inst.id + " C" + inst.activeComplex +
 		    " interval=" + Math.abs(p - sourcePitch) +
 		    " > PITCHBEND_RANGE_SEMI=" + PITCHBEND_RANGE_SEMI +
@@ -1934,6 +2171,19 @@ function glissStep(inst, sourcePitch, targetPitch, minLeap, glissVel, accent) {
 		if (inst.consecutiveLeapCurrent > (inst.consecutiveLeapMax | 0)) {
 			inst.consecutiveLeapMax = inst.consecutiveLeapCurrent;
 		}
+	} else if (preferBend || !sameString(sourcePitch, p)) {
+		bendStep(inst, sourcePitch, p, glissVel, accent, inst.activeComplex, bendDurOverride);
+		inst.glissBendCount = (inst.glissBendCount | 0) + 1;
+		// Bend slides count as slides for the leap-alternation counter
+		// (audible result is a slide). D58's MAX_LEAPS gate effectively
+		// counts ONLY over-range leapStep fallbacks now.
+		inst.lastWasLeap = false;
+		inst.consecutiveLeapCurrent = 0;
+	} else {
+		glissNote(inst, humanPitch(p), glissVel, accent);
+		inst.glissOverlapCount = (inst.glissOverlapCount | 0) + 1;
+		inst.lastWasLeap = false;
+		inst.consecutiveLeapCurrent = 0;
 	}
 	return p;
 }
@@ -1973,11 +2223,10 @@ function glissSchedule(maxCount, firstMs, tailEnd, minSpacingMs) {
 // next legato overlap, scheduleRelease, stealInstance, or allNotesOff
 // tears both pitches down together — no leaks, no stuck notes.
 //
-// Gliss complexes (C5/C6/C7) deliberately DO NOT use this: Bow Polyphony
-// = Mono Poly Release mode would reinterpret the second noteOn as a slide
-// target, so a "double stop" on a gliss phrase becomes just another gliss.
-// If double-stop gliss is wanted later, it needs its own path with
-// different bow-polyphony state.
+// Gliss callers may use this only when their slides route through pitchbend
+// and Bow Polyphony is Double/Hold. C5/C6 satisfy that contract and call this
+// explicitly; C7 is configured so future companions could sound, but phraseC7
+// is currently single-voice until the musical design says otherwise.
 
 // Musical cello double-stop intervals (semitones). Weighted toward perfect
 // 4th / 5th / octave and major-6th — the "open string + stopped note"
@@ -2008,12 +2257,38 @@ function doubleStopCompanion(mainPitch) {
 // at 85% of the main velocity. The companion is registered in
 // inst.activeNotes so the next legato overlap / release / steal / panic
 // cleans it up the same way as any main pitch.
+//
+// Used by C2 / C3 plus C5 / C6 gliss companions. C4 and C8 create their
+// extra notes through local phrase logic instead of this helper. For C5/C6, the
+// companion bends *in parallel* with the source during each bendStep —
+// MIDI pitchbend is per-channel so all sustained notes shift together.
+// At each `completeBend` the wheel resets to center, briefly snapping
+// the companion back to its written pitch before the source's atomic
+// noteOff/noteOn transition. The user accepts this parallel-motion +
+// snapback artifact as the gliss double-stop character (real cellists
+// play parallel double-stops; the snap is the price of single-channel
+// MIDI vs MPE). C7 currently excludes this by omission: its phrase generator
+// never calls `maybeDoubleStop`, even though its COMPLEX entry is prepared for
+// future companions.
+// Returns the companion pitch if a companion was added, else null.
+// phraseC5 uses the return value to track and noteOff prior companions
+// before adding fresh ones (per-rebow companions accumulate otherwise
+// because bendStep's completeBend only noteoffs the slide source, not
+// any held companion). Other callers ignore the return value.
 function maybeDoubleStop(inst, mainPitch, vel, p) {
-	if (Math.random() >= p) return;
+	if (Math.random() >= p) return null;
 	var companion = doubleStopCompanion(mainPitch);
-	if (companion == null) return;
-	noteOn(inst, companion, Math.max(1, Math.round(vel * 0.85)));
+	if (companion == null) return null;
+	// `isCompanion=true` flags the noteon echo so dashboard renders the
+	// companion as a non-gliss brush (rather than getting absorbed into
+	// the main's gliss chain). Without this, C6 companions never showed
+	// up visually — `buildGlissChains` grouped both the main anchor and
+	// the companion noteon into one chain group, then drew a single
+	// connected path that zigzagged between them; the user-reported
+	// "C6 audible double-stop but only one voice drawn" symptom.
+	noteOn(inst, companion, Math.max(1, Math.round(vel * 0.85)), /*isCompanion=*/ true);
 	inst.activeNotes.push(companion);
+	return companion;
 }
 
 // ================================================================
@@ -2107,23 +2382,37 @@ function stepVelScale(velCurve, i, count) {
 
 // C1: Pizzicato cloud — short plucked notes, no legato
 function phraseC1(inst, vel, dur) {
-	var count = faceShapedCount(inst, 2, 5, false);
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var spread = Math.min(dur * 1000, 700);
-
+	// User request: a 4-second C1 should pluck across the WHOLE 4 seconds,
+	// not crowd into the first 700 ms. Pre-fix `spread = min(dur*1000, 700)`
+	// hard-capped pluck distribution at 700 ms regardless of duration.
+	// Now: rate-driven count (5/sec ≈ dense pizz cloud) with even-ish
+	// spacing + jitter, plus 25% chance of 2-3 pluck cluster for the
+	// "burst / polyphonic" character.
+	var rate = 5.0;
+	var count = Math.max(2, Math.round(dur * rate));
+	var spacing = (dur * 1000) / count;
 	for (var i = 0; i < count; i++) {
 		(function(idx, stepCount) {
-			var delay = idx === 0 ? 0 : rrand(20, Math.round(spread));
-			scheduleAt(inst, delay, function() {
-				var p = humanPitch(pickPitch(1, inst));
-				var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
-				noteOn(inst, p, v);
-				inst.activeNotes.push(p);
-				scheduleAt(inst, rrand(60, 220), function() {
-					noteOff(inst, p);
-					var pidx = inst.activeNotes.indexOf(p);
-					if (pidx >= 0) inst.activeNotes.splice(pidx, 1);
-				});
+			var jitter = (Math.random() - 0.5) * spacing * 0.6;
+			var t = Math.max(0, Math.round(idx * spacing + jitter));
+			scheduleAt(inst, t, function() {
+				var clusterSize = (Math.random() < 0.25) ? rrand(2, 3) : 1;
+				for (var k = 0; k < clusterSize; k++) {
+					(function(kk) {
+						scheduleAt(inst, kk * 8, function() {
+							var p = humanPitch(pickPitch(1, inst));
+							var v = pizzVel(vel * stepVelScale(velCurve, idx, stepCount));
+							noteOn(inst, p, v);
+							inst.activeNotes.push(p);
+							scheduleAt(inst, rrand(60, 220), function() {
+								noteOff(inst, p);
+								var pidx = inst.activeNotes.indexOf(p);
+								if (pidx >= 0) inst.activeNotes.splice(pidx, 1);
+							});
+						});
+					})(k);
+				}
 			});
 		})(i, count);
 	}
@@ -2147,7 +2436,7 @@ function phraseC2(inst, vel, dur) {
 				var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
 				var main = humanPitch(pickPitch(2, inst));
 				legatoNote(inst, main, v);
-				if (idx >= 1) maybeDoubleStop(inst, main, v, 0.35);
+				maybeDoubleStop(inst, main, v, 0.50);
 			});
 		})(i, count);
 	}
@@ -2171,7 +2460,7 @@ function phraseC3(inst, vel, dur) {
 				var v = humanVel(vel * stepVelScale(velCurve, idx, stepCount));
 				var main = humanPitch(p);
 				legatoNote(inst, main, v);
-				if (idx >= 1) maybeDoubleStop(inst, main, v, 0.40);
+				maybeDoubleStop(inst, main, v, 0.50);
 			});
 		})(i, count);
 	}
@@ -2181,44 +2470,65 @@ function phraseC3(inst, vel, dur) {
 // C4: IonizedAtom — harmonic attacks clustered near central pitch with
 // random-timed arrival across the phrase ("atom + ionized timing")
 function phraseC4(inst, vel, dur) {
-	var count = faceShapedCount(inst, 2, 5, false);
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var spread = Math.max(300, dur * 1000);
 	var s = state.sieve;
 	var cmx = COMPLEX[4];
 	var base = (s.length > 0) ? s[Math.floor(s.length / 2)] : 60;
 	var faceTr = inst.faceTranspose || 0;
-	var loReg = Math.max(24, cmx.register.lo + (inst.path === "V2" ? -12 : 0));
+	var loReg = Math.max(CELLO_MIN, cmx.register.lo);
 	var hiReg = Math.min(CELLO_MAX, cmx.register.hi);
+	// User request: a 4-second C4 should stream harmonics across the WHOLE
+	// 4 seconds, not produce 2-5 quick attacks scattered random-uniformly
+	// (which can all cluster in the first half). Now: rate-driven count
+	// (~2.5/sec for a sparse "stream" of harmonics) with even-ish spacing
+	// + jitter, plus 20% chance of 2-pitch simultaneous attack (polyphonic
+	// harmonic doublestop) for the "cloud" character.
+	var rate = 2.5;
+	var count = Math.max(2, Math.round(dur * rate));
+	var spacing = (dur * 1000) / count;
+	// Per-note duration scales with the spacing so each harmonic occupies
+	// ~50% of its time-share; preserves "ionized atom" sparseness while
+	// giving each note audible body. Pre-fix this was rrand(180, 400) flat.
+	var avgMs = clamp(Math.round(spacing * 0.55), 280, 900);
+	var minMs = Math.max(180, Math.round(avgMs * 0.6));
+	var maxMs = Math.max(400, Math.round(avgMs * 1.4));
 	for (var i = 0; i < count; i++) {
 		(function(idx, stepCount) {
-			var delay = idx === 0 ? 0 : rrand(40, Math.round(spread));
-			scheduleAt(inst, delay, function() {
-				var jitter = rrand(-2, 2);
-				var p = foldToRange(base + inst.transpose + faceTr + jitter, loReg, hiReg);
-				var v = clamp(humanVel(vel * stepVelScale(velCurve, idx, stepCount)) - 15, 25, 100);
-				// Capture the humanised pitch once: noteOn / activeNotes /
-				// noteOff must all reference the SAME pitch number, otherwise
-				// SWAM gets a noteOn it never sees a noteOff for (CC 120 on
-				// the next steal masks it audibly) and the dashboard pairs
-				// noteOn at hp with no matching noteOff at p — visible as a
-				// rectangle that grows forever until the 45 s watchdog.
-				var hp = humanPitch(p);
-				noteOn(inst, hp, v);
-				inst.activeNotes.push(hp);
-				scheduleAt(inst, rrand(180, 400), function() {
-					noteOff(inst, hp);
-					var pidx = inst.activeNotes.indexOf(hp);
-					if (pidx >= 0) inst.activeNotes.splice(pidx, 1);
-				});
+			var jitter = (Math.random() - 0.5) * spacing * 0.5;
+			var t = Math.max(0, Math.round(idx * spacing + jitter));
+			scheduleAt(inst, t, function() {
+				var clusterSize = (Math.random() < 0.50) ? 2 : 1;
+				for (var k = 0; k < clusterSize; k++) {
+					(function() {
+						var pjitter = rrand(-2, 2) + (k > 0 ? rrand(2, 5) : 0);
+						var p = foldToRange(base + faceTr + pjitter, loReg, hiReg);
+						var v = clamp(humanVel(vel * stepVelScale(velCurve, idx, stepCount)) - 15, 25, 100);
+						// Capture the humanised pitch once: noteOn /
+						// activeNotes / noteOff must all reference the SAME
+						// pitch number, otherwise SWAM gets a noteOn it never
+						// sees a noteOff for (CC 120 on the next steal masks
+						// it audibly) and the dashboard pairs noteOn at hp
+						// with no matching noteOff at p — visible as a
+						// rectangle that grows forever until 45 s watchdog.
+						var hp = humanPitch(p);
+						noteOn(inst, hp, v);
+						inst.activeNotes.push(hp);
+						scheduleAt(inst, rrand(minMs, maxMs), function() {
+							noteOff(inst, hp);
+							var pidx = inst.activeNotes.indexOf(hp);
+							if (pidx >= 0) inst.activeNotes.splice(pidx, 1);
+						});
+					})();
+				}
 			});
 		})(i, count);
 	}
 	scheduleRelease(inst, dur);
 }
 
-// C5: wild gliss — dense salvo of ≥8-semi leaps. glissStep GUARANTEES the
-// leap and the overlap that triggers SWAM's Mono Poly Release slide. D43:
+// C5: wild gliss — dense salvo of ≥8-semi leaps. Current C5 routes slides
+// through pitchbend (`slideViaBend=true`); the preserved legacy block below
+// shows the old Mono Poly Release portamento path. D43:
 // first slide fires at FIRST_GLISS_MS so even a stolen-short phrase reads
 // as gliss. D45: subsequent slides spaced ≥ MIN_GLISS_SPACING_MS so SWAM
 // has time to actually engage portamento between events — without the
@@ -2231,9 +2541,16 @@ function phraseC4(inst, vel, dur) {
 // on a stab face produced a single anchor → slide pair, audibly "1 glissando"
 // which by user definition is not wild. Wildness is the complex's identity;
 // the face's envelope can shape how the salvo sits in time (pluck = short
-// percussive salvo, drone = long sustained salvo via durationBias) but cannot
+// percussive salvo, hairpin/fade = longer sustained salvo via durationSec) but cannot
 // reduce the count below what reads as wild. The face's expressive shape
-// still applies via durationBias / velCurve / releaseMult.
+// still applies via durationSec / velCurve / releaseMult.
+// D72.4 — pre-pitchbend-port phraseC5 preserved for regression. Used
+// glissNote (Mono Poly Release portamento) for same-string slides and
+// bendStep for cross-string only. To regress: comment out the new
+// phraseC5 below this block, uncomment THIS block, set
+// COMPLEX[5].bowPoly = MONO_POLY_RELEASE, and remove
+// COMPLEX[5].slideViaBend.
+/*
 function phraseC5(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
 	var requestedCount = Math.max(WILD_MIN_COUNT, faceShapedCount(inst, 4, 9, true));
@@ -2245,13 +2562,6 @@ function phraseC5(inst, vel, dur) {
 	var times = glissSchedule(requestedCount, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
 	var count = times.length;
 
-	// Anchor seed: pre-load consecutiveLeapCurrent to MAX_CONSECUTIVE_LEAPS
-	// so the first glissStep is forced to slide. Wild gliss must always
-	// start with a slide (matching ord gliss / C6) — anchor → slide is the
-	// "always begins with a gliss" guarantee. Subsequent events are natural
-	// (slides or leaps up to MAX_CONSECUTIVE_LEAPS in a row, then forced
-	// slide). Without this seed, the first event could be a random leap and
-	// the user would hear "anchor + leap target sustaining" with no gliss.
 	inst.consecutiveLeapCurrent = MAX_CONSECUTIVE_LEAPS;
 
 	legatoNote(inst, humanPitch(lastPitchRef.p), humanVel(vel * stepVelScale(velCurve, 0, count + 1)));
@@ -2265,6 +2575,86 @@ function phraseC5(inst, vel, dur) {
 				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP, WILD_GLISS_VEL, WILD_GLISS_BPA);
 			});
 		})(times[i]);
+	}
+	scheduleRelease(inst, dur);
+}
+*/
+
+// D72.4 — wild gliss now uses pitchbend wheel for ALL slides (same as
+// C6 with slideViaBend=true). Each "slide event" is a discrete bendStep
+// segment with `bendDur` scaled to gap-to-next-event. User-accepted
+// character: multiple distinct glissandi per phrase, each segment
+// continuous (no dead air), atomic noteOff/noteOn transitions at
+// completeBend. With MIN_LEAP=8, bend amounts can hit 8-15 semis;
+// SWAM's pitchbend wheel handles ±24 semi via fingerboard slide
+// simulation. Leaps now only fire when interval > PITCHBEND_RANGE_SEMI
+// (24 semi) — rare given pickPitch's range relative to MIN_LEAP=8.
+function phraseC5(inst, vel, dur) {
+	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
+	var requestedCount = Math.max(WILD_MIN_COUNT, faceShapedCount(inst, 4, 9, true));
+	var MIN_LEAP = 8;
+	var lastPitchRef = { p: pickPitch(5, inst) };
+	// Track the most-recently-added double-stop companion so the next
+	// rebow can noteOff it before maybeDoubleStop tries to add a fresh
+	// one. bendStep's completeBend only noteoffs the slide source, not
+	// any held companion — without this tracking, companions accumulate
+	// across slides (~50% × N rebows = potentially many concurrent voices
+	// by phrase end, blowing past SWAM's polyphony limits).
+	var companionRef = { p: null };
+	function clearCompanion() {
+		if (companionRef.p == null) return;
+		noteOff(inst, companionRef.p);
+		var cidx = inst.activeNotes.indexOf(companionRef.p);
+		if (cidx >= 0) inst.activeNotes.splice(cidx, 1);
+		companionRef.p = null;
+	}
+
+	var durMs = dur * 1000;
+	var tailEnd = Math.max(FIRST_GLISS_MS + 200, durMs * 0.92);
+	var times = glissSchedule(requestedCount, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
+	var count = times.length;
+
+	// Anchor seed: pre-load consecutiveLeapCurrent to MAX_CONSECUTIVE_LEAPS
+	// so any cross-string outcome at the first event is nudged to same-
+	// string (i.e., the bend stays in-range). Mostly inert with
+	// slideViaBend=true since the dispatch goes to bendStep regardless,
+	// but the nudge keeps interval ≤ MIN_LEAP * something reasonable.
+	inst.consecutiveLeapCurrent = MAX_CONSECUTIVE_LEAPS;
+
+	// D72.4 — anchor uses exact integer (no humanPitch) so the first
+	// bendStep's heldSource lookup matches in inst.activeNotes.
+	var anchorVel = humanVel(vel * stepVelScale(velCurve, 0, count + 1));
+	legatoNote(inst, lastPitchRef.p, anchorVel);
+	// D72.5 — wild gliss: 50% companion chance INCLUDING the anchor (per
+	// user directive). Companion bends in parallel with the source via
+	// per-channel pitchbend — same parallel-motion + snap-back character
+	// as C6.
+	companionRef.p = maybeDoubleStop(inst, lastPitchRef.p, anchorVel, 0.50);
+
+	var phraseEndMs = durMs - 100;
+	for (var i = 0; i < count; i++) {
+		var nextEventMs = (i + 1 < count) ? times[i + 1] : phraseEndMs;
+		var gapMs = nextEventMs - times[i];
+		var bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
+		(function(tMs, bd, idx, stepCount) {
+			scheduleAt(inst, tMs, function() {
+				// Drop any companion held from the previous rebow before
+				// this slide's bendStep — keeps polyphony bounded at ≤ 2
+				// (source + at-most-one companion). Without this, every
+				// rebow's maybeDoubleStop would stack a new companion atop
+				// the old.
+				clearCompanion();
+				var p = pickPitch(5, inst);
+				var attempts = 0;
+				while (Math.abs(p - lastPitchRef.p) < MIN_LEAP && attempts < 12) { p = pickPitch(5, inst); attempts++; }
+				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP, WILD_GLISS_VEL, WILD_GLISS_BPA, bd);
+				// Per-rebow 50% companion at the new slide target. Fresh
+				// pitch each rebow (doubleStopCompanion's interval table
+				// is randomized).
+				var slideVel = humanVel(vel * stepVelScale(velCurve, idx + 1, stepCount + 1));
+				companionRef.p = maybeDoubleStop(inst, lastPitchRef.p, slideVel, 0.50);
+			});
+		})(times[i], bendDur, i, count);
 	}
 	scheduleRelease(inst, dur);
 }
@@ -2287,20 +2677,57 @@ function phraseC6(inst, vel, dur) {
 	var lastPitchRef = { p: null };
 
 	// Anchor — fires first, sets lastPitchRef for the slide chain.
+	// D72.2 — anchor noteOn pitch must match `lastPitchRef.p` EXACTLY
+	// because the next bend's `bendStep` looks up `heldSource` in
+	// `activeNotes` via `Math.round`-comparison against the next slide's
+	// `sourcePitch = lastPitchRef.p`. Pre-D72.2 used `humanPitch(...)`
+	// which introduces a 10%-chance ±1 semi shift; the resulting
+	// `Math.round` mismatch (42 ≠ 43) failed the heldSource lookup and
+	// fell through to `leapStep` on the first bend of ~10% of C6 phrases
+	// — visible as a discrete leap instead of a smooth slide for those
+	// phrases, and as the "stuck triangle" white-line behaviour the
+	// user reported. Slide / anchor pitches in slideViaBend phrases
+	// should land precisely on the sieve walk pitch (no humanization).
 	scheduleAt(inst, humanDelay(), function() {
 		lastPitchRef.p = pickPitch(6, inst);
 		var v = humanVel(vel * stepVelScale(velCurve, 0, totalCount));
-		legatoNote(inst, humanPitch(lastPitchRef.p), v);
+		legatoNote(inst, lastPitchRef.p, v);
+		// Per-phrase companion held alongside the slide chain. With
+		// slideViaBend the companion bends in parallel with the source
+		// during each bendStep (MIDI pitchbend is per-channel; all
+		// sustained notes on MIDI_CH shift together). At each
+		// `completeBend` the wheel resets to center, snapping the
+		// companion back to its written pitch — audible as a brief
+		// "tick" on the held interval at every slide boundary. User
+		// accepts this as the C6 double-stop character. Companion is
+		// pushed once at anchor time and rides through every slide;
+		// `bendStep`'s heldSource lookup correctly picks the current
+		// slide source (not the companion) because activeNotes order
+		// is [companion, source] post-anchor and the lookup matches by
+		// pitch — companion's pitch (≥ 4 semi from main per
+		// `doubleStopCompanion`'s interval table) won't collide with
+		// the current slide source unless the sieve walks far enough
+		// to land on it.
+		maybeDoubleStop(inst, lastPitchRef.p, v, 0.50);
 	});
 
 	// Slides — read lastPitchRef.p set by the anchor / previous slide.
+	// D72 — per-slide bend duration scales with gap-to-next-event so the
+	// slide audibly fills the inter-event time. For the LAST slide, gap =
+	// remaining phrase time minus a 100 ms margin before scheduleRelease's
+	// fade. 50 ms safety margin between bend completion and next event
+	// matches D45's MIN_GLISS_SPACING_MS slack expectation.
+	var phraseEndMs = durMs - 100;
 	for (var i = 0; i < slideTimes.length; i++) {
-		(function(tMs) {
+		var nextEventMs = (i + 1 < slideTimes.length) ? slideTimes[i + 1] : phraseEndMs;
+		var gapMs = nextEventMs - slideTimes[i];
+		var bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
+		(function(tMs, bd) {
 			scheduleAt(inst, tMs + humanDelay(), function() {
 				var p = pickPitch(6, inst);
-				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, 1);
+				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, 1, undefined, undefined, bd);
 			});
-		})(slideTimes[i]);
+		})(slideTimes[i], bendDur);
 	}
 	scheduleRelease(inst, dur);
 }
@@ -2314,7 +2741,12 @@ function phraseC6(inst, vel, dur) {
 function phraseC7(inst, vel, dur) {
 	var isSingle = (inst.faceEnvProfile && inst.faceEnvProfile.isSingle) === true;
 	var p1 = pickPitch(7, inst);
-	legatoNote(inst, humanPitch(p1), humanVel(vel));
+	// D72.4 — anchor uses exact integer (no humanPitch) so first bendStep's
+	// heldSource lookup matches. Track lastPitchRef so subsequent drifts'
+	// bendStep finds the actual current held pitch (not the original
+	// anchor) — chained drifts walk via pitchbend instead of leaping.
+	var lastPitchRef = { p: p1 };
+	legatoNote(inst, p1, humanVel(vel));
 	var driftCount = isSingle
 		? 1
 		: 1 + (intensityDensity(inst) >= 1.1 ? rrand(1, 2) : 0);
@@ -2325,9 +2757,10 @@ function phraseC7(inst, vel, dur) {
 	var durMs = dur * 1000;
 	// D53 — C7 first drift fires at FIRST_GLISS_MS_C7 (= 30 ms) so the slide
 	// kicks in almost immediately after the anchor, distinguishing C7's
-	// "continuous floating" character from C6's "deliberate stepping". The
-	// slow portamento (COMPLEX[7].portamento.time = 250 ms/semi) means each
-	// drift then audibly exposes microtonal pitch change for 250–500 ms.
+	// "continuous floating" character from C6's "deliberate stepping".
+	// D72.4 — slides now via pitchbend wheel (slideViaBend=true on
+	// COMPLEX[7]); per-slide bendDur scales with gap-to-next-event so the
+	// drift fills the inter-event time as a continuous bend curve.
 	var tailEnd = Math.max(FIRST_GLISS_MS_C7 + 250, durMs * 0.88);
 	var times = glissSchedule(driftCount, FIRST_GLISS_MS_C7, tailEnd, MIN_GLISS_SPACING_MS);
 
@@ -2338,21 +2771,27 @@ function phraseC7(inst, vel, dur) {
 	// has a bias (up/down), drifts go monotonically in that direction —
 	// face semantics override the rocking pattern. Magnitude rrand(1, 2)
 	// (was rrand(-3, 3)): caps swings between consecutive drifts at 4
-	// semitones (was 6), reads as "drift" not "wandering slide", and
-	// average ±1.2 keeps the character subtle.
+	// semitones, reads as "drift" not "wandering slide", and average ±1.2
+	// keeps the character subtle. Targets are anchor-relative (p1 + sign *
+	// mag), so drifts oscillate around the anchor pitch even though the
+	// bendStep source chains from the previous target.
 	var phraseStartSign = (Math.random() < 0.5) ? 1 : -1;
+	var phraseEndMs = durMs - 100;
 	for (var i = 0; i < times.length; i++) {
-		(function(tMs, idx) {
+		var nextEventMs = (i + 1 < times.length) ? times[i + 1] : phraseEndMs;
+		var gapMs = nextEventMs - times[i];
+		var bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
+		(function(tMs, idx, bd) {
 			scheduleAt(inst, tMs, function() {
-				var lo = (inst.path === "V2") ? 24 : CELLO_MIN;
+				var lo = CELLO_MIN;
 				var sign = (motionDir !== 0)
 					? motionDir
 					: phraseStartSign * ((idx % 2 === 0) ? 1 : -1);
 				var mag = rrand(1, 2);
 				var p2 = clamp(p1 + sign * mag, lo, CELLO_MAX);
-				glissStep(inst, p1, p2, 1);
+				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p2, 1, undefined, undefined, bd);
 			});
-		})(times[i], i);
+		})(times[i], i, bendDur);
 	}
 	scheduleRelease(inst, dur);
 }
@@ -2364,24 +2803,25 @@ function phraseC7(inst, vel, dur) {
 // interval, not a rotating set.
 function phraseC8(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var count = faceShapedCount(inst, 2, 4, false);
 	var mainPitch = pickPitch(8, inst);
-	var companion = (Math.random() < 0.30) ? doubleStopCompanion(mainPitch) : null;
-	var spacing = Math.max(150, Math.round(dur * 1000 / (count + 1)));
-	for (var i = 0; i < count; i++) {
-		(function(idx, stepCount) {
-			scheduleAt(inst, idx * spacing + humanDelay(), function() {
-				var curveScale = stepVelScale(velCurve, idx, stepCount);
-				var v = clamp(humanVel(vel * curveScale) + 8 - idx * 3, 40, 120);
-				var main = humanPitch(mainPitch);
-				legatoNote(inst, main, v);
-				if (companion != null) {
-					noteOn(inst, companion, Math.max(1, Math.round(v * 0.85)));
-					inst.activeNotes.push(companion);
-				}
-			});
-		})(i, count);
-	}
+	var companion = (Math.random() < 0.50) ? doubleStopCompanion(mainPitch) : null;
+	// Single noteon per C8 phrase — SWAM's TREMOLO.FAST does the rebow
+	// cycling internally, so the bridge's prior manual rebow loop was
+	// double-tremoloing on top of SWAM's internal cycle AND fragmenting
+	// the dashboard visual into 3-4 stair-stepped brushes that didn't
+	// match the audible single-trajectory cresc/dim. Companion (optional
+	// 30% double-stop for the "cluster" character) is fired once. The
+	// phrase-spanning CC 11 arc + tremRamp + bowPosBase=5 (sul pont)
+	// carry the dynamic / tremolo / timbre throughout the phrase.
+	scheduleAt(inst, humanDelay(), function() {
+		var v = clamp(humanVel(vel * stepVelScale(velCurve, 0, 1)) + 8, 40, 120);
+		var main = humanPitch(mainPitch);
+		legatoNote(inst, main, v);
+		if (companion != null) {
+			noteOn(inst, companion, Math.max(1, Math.round(v * 0.85)));
+			inst.activeNotes.push(companion);
+		}
+	});
 	scheduleRelease(inst, dur);
 }
 
@@ -2390,7 +2830,7 @@ function phraseC8(inst, vel, dur) {
 // ================================================================
 // FACE_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE are declared in
 // gen_includes.js (source: src/face-gesture.ts → buildFaceMap, and
-// src/swam-mapping.ts). See docs/swam_cello_reference.md and the TS
+// src/swam-mapping.ts). See docs/swam/swam_cello_reference.md and the TS
 // type definitions for the semantics of each field.
 
 // /xk/face fires BEFORE /xk/voice; stash the signature globally so
@@ -2403,7 +2843,7 @@ function handleFace(face) {
 	var sig = FACE_MAP[face];
 	if (!sig) {
 		state.face = null;
-		state.faceDurationBias = 1.0;
+		state.faceDurationSec = null;
 		state.faceTranspose = 0;
 		state.faceEnvelope = null;
 		state.faceArticulation = null;
@@ -2414,7 +2854,10 @@ function handleFace(face) {
 		return;
 	}
 	state.face = face;
-	state.faceDurationBias = sig.durationBias;
+	state.faceDurationSec = (sig.durationSec > 0) ? sig.durationSec : null;
+	if (state.faceDurationSec == null) {
+		log("FACE DURATION FAIL face=" + face + " missing durationSec in FACE_MAP");
+	}
 	state.faceEnvelope = sig.envelope;
 	state.faceArticulation = sig.articulation;
 	state.faceMotion = sig.motion;
@@ -2426,7 +2869,7 @@ function handleFace(face) {
 	var offVel = ART_OFF_VEL[sig.articulation];
 	state.faceOffVelOverride = (offVel != null) ? offVel : null;
 
-	var spread = (state.path === "V2") ? 6 : 12;
+	var spread = 12;
 	var nudge = MOTION_NUDGE[sig.motion] || 0;
 	if (sig.motion === "oscillate") {
 		nudge = (state.turnCount % 2 === 0) ? 2 : -2;
@@ -2441,9 +2884,21 @@ function handleFace(face) {
 function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	if (state.frozen) return;
 
-	// Scale duration by face's bias before snapshotting — every downstream
-	// timer (envelope, release, phrase rebows) reads the scaled value.
-	duration = duration * (state.faceDurationBias || 1.0);
+	// Face moves own phrase duration; the incoming vertex duration is now a
+	// neutral fallback for non-face / future triggers.
+	// D74: Max resolves face duration absolutely; no K-duration multiply remains.
+	var incomingDuration = duration;
+	var durationSource = "vertex";
+	if (state.face !== null) {
+		if (state.faceDurationSec != null && state.faceDurationSec > 0) {
+			duration = state.faceDurationSec;
+			durationSource = "face";
+		} else {
+			log("FACE DURATION FAIL face=" + state.face +
+			    " has no absolute duration; falling back to vertexDur=" +
+			    Number(incomingDuration).toFixed(2));
+		}
+	}
 
 	// Hard ceiling — Xenakis V2 K3/K5 are intrinsically 30 s. Without this,
 	// 30 s × face drone bias (1.8×) stacked with legacy phrase multipliers
@@ -2463,16 +2918,14 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	state.lastAllocatedInstance = inst.id;
 	inst.lastVoiceTime = now;
 
-	// Snapshot voice-shot state onto the instance so later face / path /
-	// intensity changes from subsequent turns don't retroactively reshape
-	// this in-flight phrase.
+	// Snapshot voice-shot state onto the instance so later face / intensity
+	// changes from subsequent turns don't retroactively reshape this
+	// in-flight phrase.
 	inst.intensity  = intensity;
 	inst.density    = density;
 	inst.duration   = duration;
-	inst.path       = state.path;
-	inst.transpose  = state.transpose;
 	inst.tetra      = state.tetra;
-	inst.faceDurationBias = state.faceDurationBias;
+	inst.faceDurationSec  = state.faceDurationSec;
 	inst.faceTranspose    = state.faceTranspose || 0;
 	inst.faceEnvelope     = state.faceEnvelope;
 	inst.faceMotion       = state.faceMotion;
@@ -2514,6 +2967,17 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 
 	inst.status = 'PLAYING';
 
+	// C7 timbral coin-flip per phrase trigger: tasto (cmx.bowPos) vs pont
+	// (cmx.bowPosAlt). Re-rolls every voice trigger, not just on complex
+	// change, so consecutive C7 phrases vary independently. Everything else
+	// about C7 is preserved — only CC 16 baseline shifts.
+	if (complexType === 7 && cmx.bowPosAlt != null) {
+		inst.bowPosBase = (Math.random() < 0.5) ? cmx.bowPosAlt : cmx.bowPos;
+		ccForce(inst, CC.BOW_POSITION, inst.bowPosBase);
+		log("inst " + inst.id + " C7 bow=" +
+		    (inst.bowPosBase === cmx.bowPosAlt ? "pont" : "tasto"));
+	}
+
 	// D42 + D46 + D59 gliss invariant — reset slide + bend + leap counters;
 	// scheduleRelease's offT asserts ≥1 (slide OR bend OR leap) fired for
 	// C5/C6/C7 and logs the per-phrase breakdown.
@@ -2543,20 +3007,17 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	inst.baseExpr = intMap.expr;
 	var baseVel = intMap.vel;
 
-	var pathScale = (inst.path === "V2") ? 0.7 : 1.0;
 	var envPeakMult = (inst.faceEnvProfile && inst.faceEnvProfile.peakMult) || 1.0;
-	inst.peakExpr = clamp(intMap.expr * pathScale * envPeakMult, 0, 127);
+	inst.peakExpr = clamp(intMap.expr * envPeakMult, 0, 127);
 
 	var bowBase = clamp(cmx.bowPressure * intMap.bowMult, 0, 127);
-	inst.bowPressureBase = bowBase;
 	ccForce(inst, CC.BOW_PRESSURE, Math.round(bowBase));
 
 	// D39 — per-phrase stochastic tremolo-rate envelope (only when tremolo on)
 	if (cmx.tremoloRate != null && cmx.tremolo !== TREMOLO.OFF && HAS_TREMOLO_RATE) {
 		cancelCCRamp(inst, CC.TREMOLO_RATE);
 		var phraseMs = Math.max(duration * 1000, 250);
-		var pathTrem = (inst.path === "V2") ? 0.85 : 1.0;
-		var steadyBase = clamp(Math.round(cmx.tremoloRate * intMap.tremRateMult * pathTrem), 0, 127);
+		var steadyBase = clamp(Math.round(cmx.tremoloRate * intMap.tremRateMult), 0, 127);
 		var SLOW = 20;
 		var FAST = 118;
 		var roll = Math.random();
@@ -2599,6 +3060,7 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	    " face=" + (state.face || "-") +
 	    "/" + (state.faceEnvelope || "-") +
 	    "/" + (state.faceMotion || "-") +
+	    " dur=" + duration.toFixed(2) + "s(" + durationSource + ")" +
 	    " porta=" + (cmx.portamento.on ? "on" : "off") +
 	    " time=" + cmx.portamento.time + " bow=" + Math.round(bowBase) + " int=" + intensity);
 
@@ -2633,8 +3095,10 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	//     without a direction): legacy 3-stage envelope, appropriate for
 	//     short single-note gestures.
 	var arcDir = ARC_COMPLEXES[complexType] ? phraseArcDirection(inst) : null;
-	if (arcDir) {
+	if (arcDir === 'cresc' || arcDir === 'dim') {
 		schedulePhraseArc(inst, inst.peakExpr, arcDir, Math.max(duration * 1000, 250));
+	} else if (arcDir === 'hairpin-up' || arcDir === 'hairpin-down') {
+		schedulePhraseHairpin(inst, inst.peakExpr, arcDir, Math.max(duration * 1000, 250));
 	} else if (complexType === 1) {
 		// D57 — pizz: static expression. Per-pluck velocity is the dynamic.
 		inst.phraseArcDir = null;
@@ -2665,17 +3129,6 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 // shapes every sounding voice using each instance's own active complex.
 // ================================================================
 
-function vibDepthForComplex(cmx) {
-	var base = cmx.vibrato.depth;
-	var s = state.spinEMA;
-	var extra = 0;
-	if (s > 0.15) {
-		var u = (s - 0.15) / 0.85;
-		extra = u * u * 30;
-	}
-	return clamp(base + extra, 0, 127);
-}
-
 function shouldTransmit(now) {
 	if (state.spin < 0.02) {
 		if (state.spinLowSince === 0) state.spinLowSince = now;
@@ -2690,8 +3143,7 @@ function handleExprTilt(val) {
 	state.tilt = val;
 	// D54 — EMA the input so the rounded CC 16 emit doesn't flicker between
 	// two adjacent integers from gyro static-pose noise (perceived as a
-	// 30 Hz bow buzz on sustained voices). spinEMA / devEMA had this from
-	// the start; tilt was the only handleExpr* without smoothing.
+	// 30 Hz bow buzz on sustained voices).
 	state.tiltEMA = state.tiltEMA + TILT_EMA_ALPHA * (val - state.tiltEMA);
 
 	var now = Date.now();
@@ -2701,8 +3153,17 @@ function handleExprTilt(val) {
 		var inst = instances[i];
 		if (inst.status === 'IDLE') continue;
 		var cmx = COMPLEX[inst.activeComplex];
-		if (!cmx || cmx.bowPos == null) continue;
-		var newVal = clamp(Math.round(cmx.bowPos + jitter + state.scrambleBowBias), 0, 127);
+		if (!cmx || inst.bowPosBase == null) continue;
+		// C8 sul-pont tremolo: SWAM drives the bow physics internally
+		// at the tremolo rate; layering gyro tilt's ~18 Hz CC 16 flap on
+		// top creates destructive interference with the physical model
+		// (bow simulation collapses → premature audio cutout → late
+		// "failed pizz" transient when the release fade re-engages the
+		// stuck bow). Lock bow position at its baseline for C8. Scramble
+		// bias still applies via handleExprScramble so the deliberate
+		// scramble→tasto pull on C8 stays available.
+		if (inst.activeComplex === 8) continue;
+		var newVal = clamp(Math.round(inst.bowPosBase + jitter + state.scrambleBowBias), 0, 127);
 		var oldVal = inst.ccCache[CC.BOW_POSITION];
 		cc(inst, CC.BOW_POSITION, newVal);
 		// D54 flap telemetry — count reversals (direction changes in the
@@ -2722,43 +3183,18 @@ function handleExprTilt(val) {
 	}
 }
 
+// Spin → vibrato (depth + rate) and dev → bow (pressure + speed) are
+// both unmapped from gyro — owned by SWAM internal Random Vibrato / Bow
+// Random instead. Handlers retain the state.spin write + frame60 tick
+// because shouldTransmit (used by handleExprTilt) reads them for the
+// global motion deadband and 30 Hz rate-halving.
 function handleExprSpin(val) {
 	state.spin = val;
-	state.spinEMA = state.spinEMA + 0.08 * (val - state.spinEMA);
-
-	var now = Date.now();
 	state.frame60++;
-	if (!shouldTransmit(now)) return;
-
-	for (var i = 0; i < POOL_SIZE; i++) {
-		var inst = instances[i];
-		if (inst.status === 'IDLE') continue;
-		var cmx = COMPLEX[inst.activeComplex];
-		if (!cmx) continue;
-		cc(inst, CC.VIBRATO_DEPTH, vibDepthForComplex(cmx));
-		var rate = cmx.vibrato.rate + Math.round(state.spinEMA * 40);
-		cc(inst, CC.VIBRATO_RATE, rate);
-	}
 }
 
 function handleExprDev(val) {
 	state.dev = val;
-	state.devEMA = state.devEMA + 0.1 * (val - state.devEMA);
-	var now = Date.now();
-	if (!shouldTransmit(now)) return;
-
-	var mod = (state.devEMA - 0.5) * 50;
-	for (var i = 0; i < POOL_SIZE; i++) {
-		var inst = instances[i];
-		if (inst.status === 'IDLE') continue;
-		var cmx = COMPLEX[inst.activeComplex];
-		if (!cmx) continue;
-		var base = inst.bowPressureBase != null ? inst.bowPressureBase : cmx.bowPressure;
-		cc(inst, CC.BOW_PRESSURE, Math.round(base + mod));
-		if (inst.activeComplex !== 3 && inst.activeComplex !== 7) {
-			cc(inst, CC.BOW_SPEED, Math.round(40 + state.devEMA * 80));
-		}
-	}
 }
 
 // Scramble → Bow Position bias (sul tasto ↔ sul pont). Applied globally
@@ -2791,9 +3227,9 @@ function handleExprScramble(val) {
 		var inst = instances[i];
 		if (inst.status === 'IDLE') continue;
 		var cmx = COMPLEX[inst.activeComplex];
-		if (!cmx || cmx.bowPos == null) continue;
+		if (!cmx || inst.bowPosBase == null) continue;
 		var effectiveBias = (inst.activeComplex === 8 && newBias < 0) ? 0 : newBias;
-		ccForce(inst, CC.BOW_POSITION, Math.round(cmx.bowPos + jitter + effectiveBias));
+		ccForce(inst, CC.BOW_POSITION, Math.round(inst.bowPosBase + jitter + effectiveBias));
 	}
 	log("scramble bow bias -> " + newBias);
 }
@@ -2801,17 +3237,11 @@ function handleExprScramble(val) {
 // ================================================================
 // STRUCTURAL MODIFIERS — global, take effect on the NEXT voice event
 // (the just-arrived one hasn't called allocateInstance yet when these
-// arrive via OSC; engine.ts sends path/regime/tetra in the state burst
-// before the /xk/voice message).
+// arrive via OSC; engine.ts sends regime/tetra in the state burst before
+// the /xk/voice message).
 // ================================================================
 function handleTetra(orbit) {
 	state.tetra = orbit;
-}
-
-function handlePath(p) {
-	state.path = p;
-	state.transpose = (p === "V2") ? -12 : 0;
-	log("path -> " + p);
 }
 
 function handleRegime(r) {
@@ -2841,7 +3271,10 @@ function handleSieve() {
 	state.sieve = [];
 	for (var i = 0; i < args.length; i++) state.sieve.push(args[i] + SIEVE_BASE);
 	state.sieveIdx = clamp(state.sieveIdx, 0, Math.max(0, state.sieve.length - 1));
-	log("sieve -> " + state.sieve.length + " pitches");
+	// (Removed `log("sieve -> N pitches")`. /xk/sieve fires inside every
+	// engine state burst — once per cube turn at minimum — and the line
+	// drowned out per-phrase invariant logs in [print xk_swam]. Re-enable
+	// behind a debug flag if you ever need to verify sieve length live.)
 }
 
 // ================================================================
@@ -3024,7 +3457,6 @@ function anything() {
 	else if (addr === OSC.EXPR_DEV)      { handleExprDev(args[0]); }
 	else if (addr === OSC.EXPR_SCRAMBLE) { handleExprScramble(args[0]); }
 	else if (addr === OSC.TETRA)         { handleTetra(args[0]); }
-	else if (addr === OSC.PATH)          { handlePath(args[0]); }
 	else if (addr === OSC.REGIME)        { handleRegime(args[0]); }
 	else if (addr === OSC.RATE)          { handleRate(args[0]); }
 	else if (addr === OSC.SIEVE)         { handleSieve.apply(this, args); }
@@ -3060,14 +3492,11 @@ function resetInstance(inst) {
 	inst.keepBowDir = false;
 	inst.baseExpr = 0;
 	inst.peakExpr = 0;
-	inst.bowPressureBase = 64;
 	inst.intensity = "mf";
 	inst.density = 2.0;
 	inst.duration = 1.0;
-	inst.path = "V1";
-	inst.transpose = 0;
 	inst.tetra = 0;
-	inst.faceDurationBias = 1.0;
+	inst.faceDurationSec = null;
 	inst.faceTranspose = 0;
 	inst.faceEnvelope = null;
 	inst.faceMotion = null;
@@ -3150,9 +3579,7 @@ function bang() {
 	state.duration = 1.0;
 	state.tilt = 0.5;
 	state.spin = 0;
-	state.spinEMA = 0;
 	state.dev = 0;
-	state.devEMA = 0;
 	state.spinLowSince = 0;
 	state.frame60 = 0;
 	state.scrambleBowBias = 0;
@@ -3162,7 +3589,7 @@ function bang() {
 	state.turnRate = 0;
 	state.noteOffVel = 64;
 	state.face = null;
-	state.faceDurationBias = 1.0;
+	state.faceDurationSec = null;
 	state.faceTranspose = 0;
 	state.faceEnvelope = null;
 	state.faceArticulation = null;

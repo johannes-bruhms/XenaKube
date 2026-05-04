@@ -13,7 +13,7 @@
 // these signatures.
 
 import { FACE_SIGNATURES, type FaceMove, type EnvelopeShape, type Articulation, type Motion } from './face-gesture.js';
-import type { Path, ComplexType } from './types.js';
+import type { ComplexType } from './types.js';
 
 // ================================================================
 // SWAM technique enums
@@ -76,15 +76,22 @@ export interface IntensityEntry {
   tremRateMult: number;
 }
 
-export type IntensityLabel = 'p' | 'mp' | 'mf' | 'f' | 'ff' | 'fff';
+export type IntensityLabel = 'ppp' | 'pp' | 'p' | 'mp' | 'mf' | 'f' | 'ff' | 'fff';
 
+// Eight-step western-notation dynamic palette spanning SWAM Cello's full
+// audible range. ppp sits at the audibility floor (CC 11 ≈ 15 / Expression
+// slider 0.12 of 1.0 in the SWAM GUI); fff hits the MIDI ceiling (127). Other
+// scalars (bowMult / density / tremRateMult) extend the existing curves
+// downward at the new ppp/pp end while preserving values at p..fff.
 export const INTENSITY_MAP: Record<IntensityLabel, IntensityEntry> = {
-  p:   { expr:  20, vel:  35, bowMult: 0.70, density: 0.6, tremRateMult: 0.85 },
-  mp:  { expr:  38, vel:  50, bowMult: 0.85, density: 0.8, tremRateMult: 0.92 },
-  mf:  { expr:  55, vel:  68, bowMult: 1.00, density: 1.0, tremRateMult: 1.00 },
-  f:   { expr:  75, vel:  85, bowMult: 1.15, density: 1.2, tremRateMult: 1.08 },
-  ff:  { expr:  95, vel: 100, bowMult: 1.30, density: 1.4, tremRateMult: 1.15 },
-  fff: { expr: 115, vel: 120, bowMult: 1.45, density: 1.7, tremRateMult: 1.22 },
+  ppp: { expr:  15, vel:  16, bowMult: 0.40, density: 0.30, tremRateMult: 0.71 },
+  pp:  { expr:  31, vel:  32, bowMult: 0.55, density: 0.45, tremRateMult: 0.78 },
+  p:   { expr:  47, vel:  48, bowMult: 0.70, density: 0.60, tremRateMult: 0.85 },
+  mp:  { expr:  63, vel:  64, bowMult: 0.85, density: 0.80, tremRateMult: 0.92 },
+  mf:  { expr:  79, vel:  80, bowMult: 1.00, density: 1.00, tremRateMult: 1.00 },
+  f:   { expr:  95, vel:  96, bowMult: 1.15, density: 1.20, tremRateMult: 1.08 },
+  ff:  { expr: 111, vel: 112, bowMult: 1.30, density: 1.40, tremRateMult: 1.15 },
+  fff: { expr: 127, vel: 127, bowMult: 1.45, density: 1.70, tremRateMult: 1.22 },
 };
 
 export function intensityEntry(label: string): IntensityEntry {
@@ -132,9 +139,17 @@ export const ENV_PROFILE: Record<EnvelopeShape, EnvProfile> = {
   swell: { peakMult: 0.90, attackMult: 2.00, releaseMult: 1.3,
            attackCoef: 0.40, peakCoef: 0.95, sustainCoef: 1.00,
            countMult: 1.0, isSingle: false, isDrone: false, velCurve: 'cresc' },
-  drone: { peakMult: 0.80, attackMult: 1.50, releaseMult: 1.5,
-           attackCoef: 0.60, peakCoef: 0.85, sustainCoef: 1.00,
-           countMult: 1.0, isSingle: true,  isDrone: true,  velCurve: 'flat' },
+  // Hairpin: single-noteon dynamic with `<>` (hairpin-up: peak in middle) or
+  // `><` (hairpin-down: trough in middle). attackCoef / peakCoef / sustainCoef
+  // are unused — schedulePhraseHairpin in the bridge ramps CC 11 directly
+  // along the hairpin trajectory, bypassing scheduleExprEnvelope's 3-stage
+  // path. Fields kept for type compliance.
+  'hairpin-up':   { peakMult: 0.95, attackMult: 1.50, releaseMult: 1.2,
+                    attackCoef: 0.30, peakCoef: 1.00, sustainCoef: 0.30,
+                    countMult: 1.0, isSingle: true,  isDrone: false, velCurve: 'flat' },
+  'hairpin-down': { peakMult: 0.95, attackMult: 1.50, releaseMult: 1.2,
+                    attackCoef: 1.00, peakCoef: 0.30, sustainCoef: 1.00,
+                    countMult: 1.0, isSingle: true,  isDrone: false, velCurve: 'flat' },
   fade:  { peakMult: 1.00, attackMult: 1.00, releaseMult: 2.2,
            attackCoef: 1.20, peakCoef: 1.00, sustainCoef: 0.25,
            countMult: 1.0, isSingle: false, isDrone: false, velCurve: 'dim' },
@@ -166,13 +181,13 @@ export const MOTION_NUDGE: Record<Motion, number> = {
 };
 
 // ================================================================
-// Face signature — Max-side shape (durationBias, registerBias,
+// Face signature — Max-side shape (durationSec, registerBias,
 // envelope name, articulation name, motion name). Generated from
 // FACE_SIGNATURES by `buildFaceMap()` for codegen.
 // ================================================================
 
 export interface FaceMapEntry {
-  durationBias: number;
+  durationSec: number;
   registerBias: number;
   envelope:     EnvelopeShape;
   articulation: Articulation;
@@ -183,7 +198,7 @@ export function buildFaceMap(): Record<FaceMove, FaceMapEntry> {
   const out = {} as Record<FaceMove, FaceMapEntry>;
   for (const [face, sig] of Object.entries(FACE_SIGNATURES)) {
     out[face as FaceMove] = {
-      durationBias: sig.durationBias,
+      durationSec: sig.durationSec,
       registerBias: sig.registerBias,
       envelope:     sig.envelope,
       articulation: sig.articulation,
@@ -222,18 +237,14 @@ export function clamp(x: number, lo: number, hi: number): number {
 }
 
 /**
- * C4 harmonic rotation by (path, tetra parity). Four (path × parity)
- * combos map to three harmonic modes so C4 audibly mutates across the
- * S4 / path axes without ever landing on OFF.
- *
- *   V1 + even → OCT
- *   V1 + odd  → OCT_5TH
- *   V2 + even → OCT_5TH
- *   V2 + odd  → CTRL
+ * C4 harmonic rotation by tetrahedral-orbit parity. Two-state output:
+ *   even tetra → OCT
+ *   odd  tetra → OCT_5TH
+ * CTRL is reserved for algorithm-driven pings (niklas) — not reachable via
+ * the per-voice rotation since the V1/V2 axis was retired.
  */
-export function harmonicsForC4(path: Path, tetra: 0 | 1): HarmonicsMode {
-  if (path === 'V1') return tetra === 1 ? HARMONICS.OCT_5TH : HARMONICS.OCT;
-  return tetra === 1 ? HARMONICS.CTRL : HARMONICS.OCT_5TH;
+export function harmonicsForC4(tetra: 0 | 1): HarmonicsMode {
+  return tetra === 1 ? HARMONICS.OCT_5TH : HARMONICS.OCT;
 }
 
 /**
@@ -333,14 +344,14 @@ export function commitSieveWalk(
   return { idx: sieveIdx, dir: sieveDir };
 }
 
-/** Face-motion nudge including oscillate's per-turn flip. */
+/** Face-motion nudge including oscillate's per-turn flip. Single 12-semi
+ *  spread (V1's value, kept after V2 retirement). */
 export function faceTranspose(
   registerBias: number,
   motion: Motion,
-  path: Path,
   turnCount: number,
 ): number {
-  const spread = path === 'V2' ? 6 : 12;
+  const spread = 12;
   let nudge = MOTION_NUDGE[motion] ?? 0;
   if (motion === 'oscillate') nudge = turnCount % 2 === 0 ? 2 : -2;
   return Math.round(registerBias * spread) + nudge;

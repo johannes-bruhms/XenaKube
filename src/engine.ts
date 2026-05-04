@@ -4,7 +4,7 @@
 // computes full composition state per transformation, and emits it.
 
 import type {
-  GroupElement, MoveString, Quaternion, Path,
+  GroupElement, MoveString, Quaternion,
   XenaKubeState, EngineMode, ComplexType, Permutation8,
 } from './types.js';
 import {
@@ -54,7 +54,6 @@ export class XenaKubeEngine {
   private mode: EngineMode = {
     kCube: 'direct',
     cCube: 'algorithmic',
-    path: 'V1',
   };
 
   // === Tracking ===
@@ -208,12 +207,12 @@ export class XenaKubeEngine {
 
     // Voice output — computed first, emitted LAST so that downstream
     // consumers (max/xk_swam.js) see the post-turn state burst
-    // (/xk/path, /xk/tetra, …) BEFORE the /xk/voice trigger. Reversing
-    // that order caused a 1-turn lag in any bridge-side logic keyed on
-    // path or tetra (e.g. D37's path × tetra harmonic rotation for C4):
-    // handleVoice would read state.path/state.tetra reflecting turn N-1
-    // because the state burst from turn N hadn't arrived yet.
-    const vertices = getTransformedVertices(this.mode.path, this.kGroup);
+    // (/xk/tetra, …) BEFORE the /xk/voice trigger. Reversing that order
+    // caused a 1-turn lag in any bridge-side logic keyed on the
+    // post-turn state (e.g. tetra-driven harmonic rotation for C4):
+    // handleVoice would read state.tetra reflecting turn N-1 because
+    // the state burst from turn N hadn't arrived yet.
+    const vertices = getTransformedVertices(this.kGroup);
     const complexes = this.complexCube.getAssignments();
     // Face identity is the Phase A1 gesture-type selector. parseFace returns
     // null for half-turns and invalid strings, so the voice output carries
@@ -279,11 +278,10 @@ export class XenaKubeEngine {
     return {
       kGroup: this.kGroup,
       kPermutation: perm,
-      kVertices: getTransformedVertices(this.mode.path, this.kGroup),
+      kVertices: getTransformedVertices(this.kGroup),
       cGroup: this.complexCube.groupElement,
       cAssignments: this.complexCube.getAssignments(),
       cyclicPhase: this.complexCube.phase,
-      path: this.mode.path,
       tetraIndex: tetraOrbit(this.kGroup),
       sieve: this.sieve.getPitches(),
       gyro: this.gyro,

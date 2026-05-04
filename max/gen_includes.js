@@ -11,7 +11,6 @@ var OSC = {
   GROUP_C: "/xk/group/c",
   VERTEX: "/xk/vertex/",
   COMPLEX: "/xk/complex/",
-  PATH: "/xk/path",
   CYCLE: "/xk/cycle",
   TETRA: "/xk/tetra",
   SIEVE: "/xk/sieve",
@@ -39,6 +38,7 @@ var OSC = {
   MIDI_NOTEOFF: "/xk/midi/noteoff",
   MIDI_PANIC: "/xk/midi/panic",
   MIDI_BENDSTEP: "/xk/midi/bendstep",
+  MIDI_EXPR: "/xk/midi/expr",
   GAN_TURN: "/gan/turn",
   GAN_GYRO: "/gan/gyro"
 };
@@ -89,44 +89,58 @@ var BOW_POLY_CC_VAL = {
 
 // ---------------- Intensity → Expr/Vel/Bow/Density/Trem ---------
 var INTENSITY_MAP = {
+  ppp: {
+    expr: 15,
+    vel: 16,
+    bowMult: 0.4,
+    density: 0.3,
+    tremRateMult: 0.71
+  },
+  pp: {
+    expr: 31,
+    vel: 32,
+    bowMult: 0.55,
+    density: 0.45,
+    tremRateMult: 0.78
+  },
   p: {
-    expr: 20,
-    vel: 35,
+    expr: 47,
+    vel: 48,
     bowMult: 0.7,
     density: 0.6,
     tremRateMult: 0.85
   },
   mp: {
-    expr: 38,
-    vel: 50,
+    expr: 63,
+    vel: 64,
     bowMult: 0.85,
     density: 0.8,
     tremRateMult: 0.92
   },
   mf: {
-    expr: 55,
-    vel: 68,
+    expr: 79,
+    vel: 80,
     bowMult: 1,
     density: 1,
     tremRateMult: 1
   },
   f: {
-    expr: 75,
-    vel: 85,
+    expr: 95,
+    vel: 96,
     bowMult: 1.15,
     density: 1.2,
     tremRateMult: 1.08
   },
   ff: {
-    expr: 95,
-    vel: 100,
+    expr: 111,
+    vel: 112,
     bowMult: 1.3,
     density: 1.4,
     tremRateMult: 1.15
   },
   fff: {
-    expr: 115,
-    vel: 120,
+    expr: 127,
+    vel: 127,
     bowMult: 1.45,
     density: 1.7,
     tremRateMult: 1.22
@@ -171,16 +185,28 @@ var ENV_PROFILE = {
     isDrone: false,
     velCurve: "cresc"
   },
-  drone: {
-    peakMult: 0.8,
+  "hairpin-up": {
+    peakMult: 0.95,
     attackMult: 1.5,
-    releaseMult: 1.5,
-    attackCoef: 0.6,
-    peakCoef: 0.85,
+    releaseMult: 1.2,
+    attackCoef: 0.3,
+    peakCoef: 1,
+    sustainCoef: 0.3,
+    countMult: 1,
+    isSingle: true,
+    isDrone: false,
+    velCurve: "flat"
+  },
+  "hairpin-down": {
+    peakMult: 0.95,
+    attackMult: 1.5,
+    releaseMult: 1.2,
+    attackCoef: 1,
+    peakCoef: 0.3,
     sustainCoef: 1,
     countMult: 1,
     isSingle: true,
-    isDrone: true,
+    isDrone: false,
     velCurve: "flat"
   },
   fade: {
@@ -228,86 +254,86 @@ var MOTION_NUDGE = {
 // ---------------- 12 face signatures (derived from TS source) ----
 var FACE_MAP = {
   U: {
-    durationBias: 0.7,
+    durationSec: 0.7,
     registerBias: 0.8,
     envelope: "pluck",
     articulation: "attack",
     motion: "up"
   },
   "U'": {
-    durationBias: 1.4,
+    durationSec: 1.7,
     registerBias: 0.8,
     envelope: "fade",
     articulation: "release",
     motion: "down"
   },
   D: {
-    durationBias: 0.6,
+    durationSec: 0.6,
     registerBias: -0.8,
     envelope: "stab",
     articulation: "attack",
     motion: "down"
   },
   "D'": {
-    durationBias: 1.8,
+    durationSec: 2.5,
     registerBias: -0.8,
-    envelope: "drone",
+    envelope: "hairpin-up",
     articulation: "sustained",
     motion: "static"
   },
   L: {
-    durationBias: 1.3,
+    durationSec: 1.85,
     registerBias: 0,
     envelope: "swell",
     articulation: "sustained",
     motion: "up"
   },
   "L'": {
-    durationBias: 1.3,
+    durationSec: 1.85,
     registerBias: 0,
     envelope: "fade",
     articulation: "release",
     motion: "down"
   },
   R: {
-    durationBias: 0.5,
+    durationSec: 0.5,
     registerBias: 0,
     envelope: "stab",
     articulation: "attack",
     motion: "static"
   },
   "R'": {
-    durationBias: 0.6,
+    durationSec: 0.95,
     registerBias: 0,
     envelope: "burst",
     articulation: "iterative",
     motion: "oscillate"
   },
   F: {
-    durationBias: 1.2,
+    durationSec: 1.45,
     registerBias: 0.3,
     envelope: "swell",
     articulation: "sustained",
     motion: "up"
   },
   "F'": {
-    durationBias: 1.2,
+    durationSec: 1.45,
     registerBias: 0.3,
     envelope: "swell",
     articulation: "sustained",
     motion: "down"
   },
   B: {
-    durationBias: 0.9,
+    durationSec: 0.9,
     registerBias: -0.3,
     envelope: "pluck",
     articulation: "attack",
     motion: "static"
   },
   "B'": {
-    durationBias: 1.6,
+    durationSec: 2.25,
     registerBias: -0.3,
-    envelope: "drone",
+    envelope: "hairpin-down",
     articulation: "sustained",
     motion: "oscillate"
   }
