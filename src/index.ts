@@ -1,16 +1,27 @@
 // XenaKube Engine — public API
 export { XenaKubeEngine, type StateListener, type CubeAlgorithmListener, type VoiceListener, type SolveListener } from './engine.js';
-export { stateToOsc, expressionToOsc, algorithmToOsc, voiceToOsc, solveToOsc, type OscMessage } from './osc-output.js';
+export {
+  stateToOsc, expressionToOsc, algorithmToOsc, voiceToOsc, phrasePlanToOsc,
+  solveToOsc, type OscMessage,
+} from './osc-output.js';
 export { OSC, vertexAddr, complexAddr, ALL_XK_ADDRESSES, MIDI_ECHO_PORT } from './osc-schema.js';
 export {
   HARMONICS, TREMOLO, BOW_POLY,
   HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,
   INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE,
-  LEGATO_COMPLEX, REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
-  clamp, harmonicsForC4, phraseCountBounds, applyEnvelopeCount,
+  LEGATO_COMPLEX, MAX_PHRASE_DURATION_SEC, COMPLEX_DURATION_FLOOR_SEC,
+  REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
+  RATE_PRESSURE_START_TPS, RATE_PRESSURE_FULL_TPS,
+  RATE_DENSITY_GAIN_BY_COMPLEX, RATE_VELOCITY_GAIN_BY_COMPLEX,
+  RATE_EXPR_GAIN_BY_COMPLEX, RATE_BOW_GAIN_BY_COMPLEX,
+  RATE_TREMOLO_GAIN_BY_COMPLEX, RATE_ACCENT_GAIN_BY_COMPLEX,
+  clamp, harmonicsForC4, resolvePhraseDuration, phraseCountBounds, applyEnvelopeCount,
+  turnRatePressure, rateDensityMultiplier, rateVelocityMultiplier,
+  rateExpressionMultiplier, rateBowPressureMultiplier, rateTremoloMultiplier,
+  rateAccentValue,
   stepVelScale, commitSieveWalk, faceTranspose,
   buildFaceMap, intensityEntry,
-  type EnvProfile, type VelCurve, type IntensityEntry, type IntensityLabel,
+  type DurationSource, type EnvProfile, type VelCurve, type IntensityEntry, type IntensityLabel,
   type FaceMapEntry,
 } from './swam-mapping.js';
 export {
@@ -18,7 +29,18 @@ export {
   multiply, inverse, getPermutation, tetraOrbit,
   parseMoveToElement, moveToString, findElement,
 } from './group.js';
-export { getBaseVertices, permuteVertices, getTransformedVertices, compareIntensity } from './vertices.js';
+export { getBaseVertices, permuteVertices, permuteVertexSet, getTransformedVertices, compareIntensity } from './vertices.js';
+export {
+  IDENTITY_CORNER_PERM,
+  CORNER_MOVE_PERMS,
+  CORNER_QUARTER_MOVES,
+  parseMoveToCornerPermutation,
+  applyCornerPermutation,
+  applyCornerMove,
+  cornerPermutationKey,
+  isSolvedCornerPermutation,
+  encodeCornerPermutation,
+} from './corner-topology.js';
 export { ComplexCube, COMPLEX_DESCRIPTIONS } from './complexes.js';
 export { getBuiltinDiagrams, DiagramTraversal, type KinematicDiagram } from './kinematic.js';
 export {
@@ -36,8 +58,28 @@ export {
   type CubeAlgorithmEffect,
   type CubeAlgorithmMatch,
 } from './cube-algorithm.js';
-export { scrambleDistance, scrambleFactor, getAllDistances, MAX_DISTANCE } from './scramble.js';
+export {
+  scrambleDistance, scrambleFactor, getAllDistances,
+  MAX_DISTANCE, CORNER_STATE_COUNT,
+} from './scramble.js';
 export { VoiceEngine, type VoiceMode, type VoiceEvent, type VoiceOutput } from './voice-engine.js';
+export {
+  PhrasePlanner,
+  phrasePlanSummary,
+  type PhrasePlan,
+  type PhraseEvent,
+  type PhraseEventKind,
+  type PhrasePlannerOptions,
+} from './phrase-plan.js';
+export {
+  PhraseEchoAuditor,
+  phraseAuditSummary,
+  type PhraseEchoEvent,
+  type PhraseAuditCounts,
+  type PhraseAuditReason,
+  type PhraseAuditResult,
+  type PhraseAuditStatus,
+} from './phrase-audit.js';
 export { ExpressionProcessor, type ExpressionState } from './expression.js';
 export { ModeManager, type PerformanceMode, type ModeChangeListener } from './mode-manager.js';
 export { TurnRateTracker, type Regime } from './turn-rate.js';
@@ -50,5 +92,5 @@ export {
   ComplexType,
   type GroupElement, type Permutation8, type CubeMove, type CubeFace, type MoveString,
   type VertexParams, type VertexSet, type CyclicPhase,
-  type EngineMode, type Quaternion, type XenaKubeState,
+  type CosmologyMode, type EngineMode, type Quaternion, type XenaKubeState,
 } from './types.js';

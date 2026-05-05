@@ -26,6 +26,8 @@ let ws = null;
 //   diagrams       — diagram-list response from `get_diagrams`. (data).
 //   algorithm      — `{ type: 'algorithm', data }` cube algorithm match. (data).
 //   algorithmBook  — `{ type: 'algorithm_book', data }` initial book download. (data).
+//   phrasePlan     — `{ type: 'phrase_plan', data }` TS shadow phrase plan. (data).
+//   phraseAudit    — `{ type: 'phrase_audit', data }` planned-vs-actual phrase echo result. (data).
 //   solve          — `{ type: 'solve' }` cube returned to identity. (no args).
 //   midiEcho       — `{ type: 'midi_echo', data }` from Max/SWAM. (data).
 const handlers = {
@@ -37,6 +39,8 @@ const handlers = {
   diagrams:      [],
   algorithm:     [],
   algorithmBook: [],
+  phrasePlan:    [],
+  phraseAudit:   [],
   solve:         [],
   midiEcho:      [],
 };
@@ -87,6 +91,8 @@ export function connect() {
         case 'diagrams':        emit('diagrams',  msg.data);          break;
         case 'algorithm':       emit('algorithm', msg.data);          break;
         case 'algorithm_book':  emit('algorithmBook', msg.data);      break;
+        case 'phrase_plan':     emit('phrasePlan', msg.data);         break;
+        case 'phrase_audit':    emit('phraseAudit', msg.data);        break;
         case 'solve':           emit('solve');                        break;
         case 'midi_echo':       emit('midiEcho',  msg.data);          break;
       }

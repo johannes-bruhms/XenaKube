@@ -86,7 +86,12 @@
     display: flex;
     flex-direction: column;
     gap: 10px;
-    overflow-y: auto;
+    /* overflow: visible so the title's text-stroke isn't clipped at the cap
+       and the right edge of the last letter isn't sliced. Per CSS spec,
+       overflow-y: auto with overflow-x: visible computes both axes to auto
+       and clips horizontally — that was cropping XENAKUBE. Content
+       shouldn't exceed max-height in practice. */
+    overflow: visible;
     scrollbar-width: none;
     font-size: 13px;
   }
@@ -178,11 +183,17 @@
   .ovl-section { display: flex; flex-direction: column; gap: 6px; }
 
   h1.title {
-    font-size: 69px;
+    /* Scale with viewport so the 8-letter wordmark fits within --left-col-w
+       at narrower windows; clamp keeps it from getting either tiny or
+       absurdly large at the extremes. */
+    font-size: clamp(44px, 4.4vw, 69px);
     font-weight: 700;
     color: var(--accent);
     letter-spacing: 3px;
-    line-height: 1;
+    /* line-height >1 leaves room for -webkit-text-stroke (used in the
+       toggled-off outline state) so the stroke doesn't get sliced at the
+       top of the letter caps. */
+    line-height: 1.12;
     margin: 2px 0 6px;
     cursor: pointer;
     user-select: none;
@@ -191,18 +202,26 @@
   }
   h1.title:hover { text-shadow: 0 0 12px var(--accent); }
   h1.title:focus-visible { outline: 1px solid var(--accent); outline-offset: 2px; }
-  /* Performance mode (UI hidden): title lights up. */
+  /* Performance mode (UI hidden): title fades to a faint stroked outline so
+     the toggle target stays present without competing with the visuals. */
   h1.title[aria-pressed="true"] {
-    opacity: 1;
-    text-shadow: 0 0 18px var(--accent), 0 0 36px var(--accent);
+    opacity: 0.35;
+    color: transparent;
+    text-shadow: none;
+    -webkit-text-stroke: 1px var(--accent);
+  }
+  h1.title[aria-pressed="true"]:hover {
+    opacity: 0.6;
+    text-shadow: none;
   }
 
   /* Title-toggle: clicking XENAKUBE collapses the dashboard's chrome panels
      (state, mode pills, conn row, gizmo cluster, sliders, move buffer,
-     algorithm toasts) so only the cube + sieve + rolling-score + active K/C
-     cards remain. Persisted via localStorage('uiHidden') in main.js. */
+     algorithm toasts, active K/C cards) so only the cube + sieve +
+     rolling-score remain. Persisted via localStorage('uiHidden') in main.js. */
   body.ui-hidden .conn-row,
   body.ui-hidden .mode-row,
+  body.ui-hidden .active-cards,
   body.ui-hidden .ovl-bl,
   body.ui-hidden .ovl-tr,
   body.ui-hidden .ovl-br,
@@ -849,6 +868,18 @@
     min-width: 40px;
     text-align: right;
     font-variant-numeric: tabular-nums;
+  }
+  .br-slider-row .motion-indicator {
+    flex: 1;
+    text-align: center;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.3);
+    font-size: 14px;
+    transition: color 120ms ease, text-shadow 120ms ease;
+  }
+  .br-slider-row .motion-indicator.still {
+    color: #4ade80;
+    text-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
   }
 
   /* Algorithm-history toast — top-right, just below the move-buffer + algorithm-row.

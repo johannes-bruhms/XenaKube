@@ -207,7 +207,7 @@ function drawLineOverlay() {
   const now = performance.now();
   let toRemove = null;
 
-  lineCtx.lineWidth = 1.8 * lineDpr;
+  lineCtx.lineWidth = 1.5 * lineDpr;
   lineCtx.lineCap = 'round';
   lineCtx.lineJoin = 'round';
 
@@ -550,17 +550,28 @@ export function bendStep(data) {
 /**
  * Snapshot the FIRST active gliss line's currently displayed state, or
  * null. Used by rolling-score.js's `assertGlissSync` to compare line ↔
- * chain trajectories without a circular import. Returns
- * `{ voice, complex, pitch }` (pitch is the eased-interpolated value at
- * `now`, matching what drawLineOverlay will paint this frame).
+ * chain trajectories without a circular import.
+ *
+ * Returns `{ voice, complex, pitch, sieveY }` where:
+ *   • `pitch` is the eased-interpolated value at `now` (fractional)
+ *   • `sieveY` is the line's ACTUAL rendered sieve-end Y in CSS pixels
+ *     (i.e. what `drawLineOverlay` will paint this frame). This is the
+ *     load-bearing assertion handle: rolling-score compares it against
+ *     `midiToY(chainPitch)` so any pitch→Y resolver inside triangle.js
+ *     that throws away fractional pitch (e.g. integer-truncated cell
+ *     lookup) trips GLISS SYNC FAIL immediately. `null` if cellPos
+ *     could not be resolved (out of sieve range, etc.).
  */
 export function getActiveGlissLineDisplay(now) {
   for (const ln of lineNotes) {
     if (ln.isGliss) {
+      const pitch = _displayedPitch(ln, now);
+      const cellPos = sieveCellLeftEdgePos(pitch);
       return {
         voice:   ln.voice,
         complex: ln.complex,
-        pitch:   _displayedPitch(ln, now),
+        pitch,
+        sieveY:  cellPos ? cellPos.y : null,
       };
     }
   }

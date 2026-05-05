@@ -18,11 +18,11 @@ export interface CubeMove {
 /** Move as string notation (e.g. "R", "U'", "F2") */
 export type MoveString = string;
 
-/** Density/Intensity parameter bundle for a vertex, plus neutral duration fallback */
+/** Density/Intensity/Duration parameter bundle for a K_i vertex. */
 export interface VertexParams {
   density: number;
   intensity: string;   // dynamic marking: ppp, pp, p, mp, mf, f, ff, fff
-  duration: number;     // seconds; face gestures own duration for normal turns
+  duration: number;     // seconds; material base, reshaped by face gestures
 }
 
 /** The 8 vertices K1-K8 as parameter bundles */
@@ -44,27 +44,46 @@ export enum ComplexType {
 /** Cyclic mapping phase for C_i assignments */
 export type CyclicPhase = 'alpha' | 'beta' | 'gamma';
 
+/** Structural cosmology: Xenakis-faithful S4 walks vs performer-visible corners. */
+export type CosmologyMode = 'alpha-cosmo' | 'beta-cosmo';
+
 /** Performance/interaction mode */
 export interface EngineMode {
-  /** How K_i cube is driven */
+  /** Alpha restores the S4 walks; beta uses physically followable corners. */
+  cosmology: CosmologyMode;
+  /** In alpha, diagrams drive K_i walks; in beta they remain shadow paths. */
   kCube: 'direct' | 'diagram';
-  /** How C_i cube is driven */
+  /** In alpha, C S4 state permutes assignments; in beta it remains shadow. */
   cCube: 'gyro' | 'algorithmic';
 }
 
 /** Quaternion as [x, y, z, w] */
 export type Quaternion = [number, number, number, number];
 
+/** Motion-derived primitives surfaced to bridge / dashboard. */
+export interface MotionState {
+  /** Angular speed magnitude in rad/s. */
+  accelMag: number;
+  /** True when accelMag is below STILL_OMEGA_THRESHOLD. */
+  isStill: boolean;
+  /** How long isStill has been continuously true, in ms. */
+  dwellMs: number;
+}
+
 /** Full engine state emitted after each transformation */
 export interface XenaKubeState {
-  /** K_i cube: current group element */
+  /** Active structural cosmology. */
+  cosmology: CosmologyMode;
+  /** K S4 element: live walk in alpha-cosmo, gyro/orientation shadow in beta-cosmo. */
   kGroup: GroupElement;
-  /** K_i cube: current vertex permutation (which K is at which position) */
+  /** Current K assignment: S4 walk in alpha-cosmo, physical corner topology in beta-cosmo. */
   kPermutation: Permutation8;
   /** K_i cube: vertex parameter values in current order */
   kVertices: VertexSet;
-  /** C_i cube: current group element */
+  /** C_i S4 element: live assignment walk in alpha-cosmo, shadow metadata in beta-cosmo. */
   cGroup: GroupElement;
+  /** C_i quaternion (cGroup as a unit quat). Ghost-cube target — locked during phrase. */
+  cQuat: Quaternion;
   /** C_i cube: current complex assignments */
   cAssignments: ComplexType[];
   /** Current cyclic phase */
@@ -79,6 +98,10 @@ export interface XenaKubeState {
   step: number;
   /** Active vertex index (0-7): the single vertex currently sounding */
   activeVertex: number;
+  /** K_i label currently sounding at activeVertex. */
+  activeK: number;
+  /** Beta-cosmo tracked K_i label; activeVertex is its current physical position. */
+  trackedK: number;
   /** Active diagram name (null if none) */
   activeDiagram: string | null;
   /** Diagram position info */
@@ -89,7 +112,7 @@ export interface XenaKubeState {
   snapQuat: Quaternion;
   /** Angular distance from gyro to nearest snap, normalized 0..1 (0 = locked, 1 = at flip boundary) */
   gyroDeviation: number;
-  /** Scramble factor: 0 = solved, 1 = maximally scrambled (BFS distance in S4) */
+  /** Scramble factor: normalized exact quarter-turn distance of visible corners */
   scrambleFactor: number;
   /** Current turn rate in turns/sec */
   turnRate: number;
@@ -102,4 +125,10 @@ export interface XenaKubeState {
     deviation: number;
     scramble: number;
   };
+  /** Last face turned (after MOVE_REMAP), or null before any face turn. */
+  lastTurnedFace: CubeFace | null;
+  /** Cube face currently most aligned with world +Y under the gyro. */
+  upFace: CubeFace;
+  /** Still-state and dwell tracking from MotionTracker. */
+  motion: MotionState;
 }

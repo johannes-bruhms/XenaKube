@@ -181,13 +181,13 @@ export const MOTION_NUDGE: Record<Motion, number> = {
 };
 
 // ================================================================
-// Face signature — Max-side shape (durationSec, registerBias,
+// Face signature — Max-side shape (durationMult, registerBias,
 // envelope name, articulation name, motion name). Generated from
 // FACE_SIGNATURES by `buildFaceMap()` for codegen.
 // ================================================================
 
 export interface FaceMapEntry {
-  durationSec: number;
+  durationMult: number;
   registerBias: number;
   envelope:     EnvelopeShape;
   articulation: Articulation;
@@ -198,7 +198,7 @@ export function buildFaceMap(): Record<FaceMove, FaceMapEntry> {
   const out = {} as Record<FaceMove, FaceMapEntry>;
   for (const [face, sig] of Object.entries(FACE_SIGNATURES)) {
     out[face as FaceMove] = {
-      durationSec: sig.durationSec,
+      durationMult: sig.durationMult,
       registerBias: sig.registerBias,
       envelope:     sig.envelope,
       articulation: sig.articulation,
@@ -221,11 +221,112 @@ export const LEGATO_COMPLEX: Record<number, boolean> = {
 };
 
 // ================================================================
+// Phrase duration bounds
+// ================================================================
+
+export const MAX_PHRASE_DURATION_SEC = 30;
+
+// Complex-specific lower bounds protect identity-bearing gestures from being
+// compressed below recognisable span by short K_i × attack-face combinations.
+export const COMPLEX_DURATION_FLOOR_SEC: Record<number, number> = {
+  1: 0.35,
+  2: 0.70,
+  3: 0.80,
+  4: 0.50,
+  5: 1.20,
+  6: 1.00,
+  7: 1.00,
+  8: 0.80,
+};
+
+export type DurationSource =
+  | 'vertex'
+  | 'vertex+floor'
+  | 'vertex*face'
+  | 'vertex*face+floor';
+
+// ================================================================
 // Regime → ramp multipliers
 // ================================================================
 
 export const REGIME_ATTACK_MULT    = { contemplative: 1.2, conversational: 1.0, burst: 0.5 } as const;
 export const REGIME_EXPR_RAMP_MULT = { contemplative: 1.5, conversational: 1.0, burst: 0.4 } as const;
+
+// ================================================================
+// Turn-rate pressure
+// ================================================================
+
+// Continuous pressure starts at the contemplative/conversational threshold and
+// reaches full strength above the burst threshold. K_i remains the baseline
+// identity; these gains only bend it toward urgency.
+export const RATE_PRESSURE_START_TPS = 0.3;
+export const RATE_PRESSURE_FULL_TPS = 3.0;
+
+export const RATE_DENSITY_GAIN_BY_COMPLEX: Record<number, number> = {
+  1: 0.40,  // pizz points can safely saturate
+  2: 0.32,  // ordered cloud gets more rebows
+  3: 0.24,  // flat cloud thickens, but less than C2
+  4: 0.36,  // harmonic atoms tolerate more attacks
+  5: 0.28,  // wild gliss intensifies without replacing WILD_MIN_COUNT
+  6: 0.14,  // ordered gliss stays legible
+  7: 0.18,  // drift becomes nervous, not dense
+  8: 0.00,  // tremolo density is internal to SWAM
+};
+
+export const RATE_VELOCITY_GAIN_BY_COMPLEX: Record<number, number> = {
+  1: 0.18,
+  2: 0.12,
+  3: 0.10,
+  4: 0.10,
+  5: 0.12,
+  6: 0.08,
+  7: 0.06,
+  8: 0.12,
+};
+
+export const RATE_EXPR_GAIN_BY_COMPLEX: Record<number, number> = {
+  1: 0.00,  // pizz dynamics are per-pluck velocity
+  2: 0.08,
+  3: 0.08,
+  4: 0.06,
+  5: 0.08,
+  6: 0.06,
+  7: 0.04,
+  8: 0.08,
+};
+
+export const RATE_BOW_GAIN_BY_COMPLEX: Record<number, number> = {
+  1: 0.00,
+  2: 0.10,
+  3: 0.08,
+  4: 0.06,
+  5: 0.14,
+  6: 0.10,
+  7: 0.06,
+  8: 0.10,
+};
+
+export const RATE_TREMOLO_GAIN_BY_COMPLEX: Record<number, number> = {
+  1: 0.00,
+  2: 0.00,
+  3: 0.00,
+  4: 0.00,
+  5: 0.00,
+  6: 0.00,
+  7: 0.00,
+  8: 0.25,
+};
+
+export const RATE_ACCENT_GAIN_BY_COMPLEX: Record<number, number> = {
+  1: 0.00,
+  2: 0.00,
+  3: 0.00,
+  4: 0.00,
+  5: 0.30,  // only C5 uses Bow Pressure Accent per gliss event today
+  6: 0.00,
+  7: 0.00,
+  8: 0.00,
+};
 
 // ================================================================
 // PURE HELPERS — tested in swam-mapping.test.ts, mirrored in xk_swam.js
@@ -234,6 +335,67 @@ export const REGIME_EXPR_RAMP_MULT = { contemplative: 1.5, conversational: 1.0, 
 /** Clamp `x` into `[lo, hi]`. */
 export function clamp(x: number, lo: number, hi: number): number {
   return x < lo ? lo : x > hi ? hi : x;
+}
+
+/** Normalize turn rate into [0, 1] pressure without touching K identity. */
+export function turnRatePressure(turnRate: number): number {
+  if (!Number.isFinite(turnRate)) return 0;
+  return clamp(
+    (turnRate - RATE_PRESSURE_START_TPS) / (RATE_PRESSURE_FULL_TPS - RATE_PRESSURE_START_TPS),
+    0,
+    1,
+  );
+}
+
+function rateMultiplier(table: Record<number, number>, complexType: number, turnRate: number): number {
+  return 1 + (table[complexType] ?? 0) * turnRatePressure(turnRate);
+}
+
+export function rateDensityMultiplier(complexType: number, turnRate: number): number {
+  return rateMultiplier(RATE_DENSITY_GAIN_BY_COMPLEX, complexType, turnRate);
+}
+
+export function rateVelocityMultiplier(complexType: number, turnRate: number): number {
+  return rateMultiplier(RATE_VELOCITY_GAIN_BY_COMPLEX, complexType, turnRate);
+}
+
+export function rateExpressionMultiplier(complexType: number, turnRate: number): number {
+  return rateMultiplier(RATE_EXPR_GAIN_BY_COMPLEX, complexType, turnRate);
+}
+
+export function rateBowPressureMultiplier(complexType: number, turnRate: number): number {
+  return rateMultiplier(RATE_BOW_GAIN_BY_COMPLEX, complexType, turnRate);
+}
+
+export function rateTremoloMultiplier(complexType: number, turnRate: number): number {
+  return rateMultiplier(RATE_TREMOLO_GAIN_BY_COMPLEX, complexType, turnRate);
+}
+
+export function rateAccentValue(baseValue: number, complexType: number, turnRate: number): number {
+  return clamp(Math.round(baseValue * rateMultiplier(RATE_ACCENT_GAIN_BY_COMPLEX, complexType, turnRate)), 0, 127);
+}
+
+export function resolvePhraseDuration(
+  vertexDuration: number,
+  faceDurationMult: number | null,
+  complexType: number,
+): { durationSec: number; durationSource: DurationSource } {
+  const base = Number.isFinite(vertexDuration) && vertexDuration > 0 ? vertexDuration : 1;
+  const mult = faceDurationMult != null && Number.isFinite(faceDurationMult) && faceDurationMult > 0
+    ? faceDurationMult
+    : null;
+  const raw = mult == null ? base : base * mult;
+  const floor = COMPLEX_DURATION_FLOOR_SEC[complexType] ?? 0;
+  const floored = Math.max(raw, floor);
+  const durationSec = Math.min(floored, MAX_PHRASE_DURATION_SEC);
+  const usedFloor = floored > raw;
+  let durationSource: DurationSource;
+  if (mult == null) {
+    durationSource = usedFloor ? 'vertex+floor' : 'vertex';
+  } else {
+    durationSource = usedFloor ? 'vertex*face+floor' : 'vertex*face';
+  }
+  return { durationSec, durationSource };
 }
 
 /**
@@ -266,11 +428,14 @@ export function phraseCountBounds(
   density: number,
   baseLo: number,
   baseHi: number,
+  complexType = 0,
+  turnRate = 0,
 ): { lo: number; hi: number } {
   const iMult = intensityEntry(intensityLabel).density;
   const dMult = clamp(0.6 + density * 0.25, 0.6, 1.8);
+  const rMult = rateDensityMultiplier(complexType, turnRate);
   const lo = Math.max(1, Math.round(baseLo * iMult));
-  const hi = Math.max(lo, Math.round(baseHi * iMult * dMult));
+  const hi = Math.max(lo, Math.round(baseHi * iMult * dMult * rMult));
   return { lo, hi };
 }
 

@@ -23,7 +23,7 @@ describe('face-gesture framework (Phase A1)', () => {
       for (const face of ALL_FACES) {
         const sig = FACE_SIGNATURES[face];
         expect(typeof sig.envelope).toBe('string');
-        expect(typeof sig.durationSec).toBe('number');
+        expect(typeof sig.durationMult).toBe('number');
         expect(typeof sig.articulation).toBe('string');
         expect(typeof sig.panBias).toBe('number');
         expect(typeof sig.registerBias).toBe('number');
@@ -31,20 +31,20 @@ describe('face-gesture framework (Phase A1)', () => {
       }
     });
 
-    it('durationSec stays in a performable phrase range', () => {
+    it('durationMult stays in a performable scaling range', () => {
       for (const face of ALL_FACES) {
-        const d = FACE_SIGNATURES[face].durationSec;
+        const d = FACE_SIGNATURES[face].durationMult;
         expect(d).toBeGreaterThanOrEqual(0.3);
         expect(d).toBeLessThanOrEqual(3.0);
       }
     });
 
-    it('attack faces are durationally distinct from sustained hairpin/fade faces', () => {
+    it('attack faces compress time while sustained hairpin/fade faces expand it', () => {
       for (const face of ['R', 'D', 'U', 'B'] as FaceMove[]) {
-        expect(FACE_SIGNATURES[face].durationSec).toBeLessThan(1.0);
+        expect(FACE_SIGNATURES[face].durationMult).toBeLessThan(1.0);
       }
       for (const face of ["U'", "D'", 'L', "L'", "B'"] as FaceMove[]) {
-        expect(FACE_SIGNATURES[face].durationSec).toBeGreaterThanOrEqual(1.7);
+        expect(FACE_SIGNATURES[face].durationMult).toBeGreaterThanOrEqual(1.7);
       }
     });
 

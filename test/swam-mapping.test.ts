@@ -4,12 +4,20 @@ import {
   HARMONICS, TREMOLO, BOW_POLY,
   HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,
   INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE,
-  LEGATO_COMPLEX, REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
+  LEGATO_COMPLEX, MAX_PHRASE_DURATION_SEC, COMPLEX_DURATION_FLOOR_SEC,
+  REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
+  RATE_PRESSURE_START_TPS, RATE_PRESSURE_FULL_TPS,
+  RATE_DENSITY_GAIN_BY_COMPLEX, RATE_VELOCITY_GAIN_BY_COMPLEX,
+  RATE_EXPR_GAIN_BY_COMPLEX, RATE_BOW_GAIN_BY_COMPLEX,
+  RATE_TREMOLO_GAIN_BY_COMPLEX, RATE_ACCENT_GAIN_BY_COMPLEX,
   // helpers
   clamp, harmonicsForC4,
   phraseCountBounds, applyEnvelopeCount, stepVelScale,
-  commitSieveWalk, faceTranspose,
+  commitSieveWalk, faceTranspose, resolvePhraseDuration,
   buildFaceMap,
+  turnRatePressure, rateDensityMultiplier, rateVelocityMultiplier,
+  rateExpressionMultiplier, rateBowPressureMultiplier, rateTremoloMultiplier,
+  rateAccentValue,
   intensityEntry,
   type EnvProfile, type VelCurve,
 } from '../src/swam-mapping.js';
@@ -81,11 +89,36 @@ describe('swam-mapping — tables', () => {
     expect(Object.keys(LEGATO_COMPLEX).sort()).toEqual(['2', '3', '5', '6', '7']);
   });
 
+  it('phrase duration bounds cover all complexes and keep C5 identity protected', () => {
+    expect(MAX_PHRASE_DURATION_SEC).toBe(30);
+    expect(Object.keys(COMPLEX_DURATION_FLOOR_SEC).sort()).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+    expect(COMPLEX_DURATION_FLOOR_SEC[5]).toBeGreaterThan(COMPLEX_DURATION_FLOOR_SEC[1]);
+  });
+
   it('REGIME_{ATTACK,EXPR_RAMP}_MULT cover all three regimes with contemplative > conversational > burst', () => {
     expect(REGIME_ATTACK_MULT.contemplative).toBeGreaterThan(REGIME_ATTACK_MULT.conversational);
     expect(REGIME_ATTACK_MULT.conversational).toBeGreaterThan(REGIME_ATTACK_MULT.burst);
     expect(REGIME_EXPR_RAMP_MULT.contemplative).toBeGreaterThan(REGIME_EXPR_RAMP_MULT.conversational);
     expect(REGIME_EXPR_RAMP_MULT.conversational).toBeGreaterThan(REGIME_EXPR_RAMP_MULT.burst);
+  });
+
+  it('RATE_* gains cover all eight complexes and keep C8 density inert', () => {
+    for (const table of [
+      RATE_DENSITY_GAIN_BY_COMPLEX,
+      RATE_VELOCITY_GAIN_BY_COMPLEX,
+      RATE_EXPR_GAIN_BY_COMPLEX,
+      RATE_BOW_GAIN_BY_COMPLEX,
+      RATE_TREMOLO_GAIN_BY_COMPLEX,
+      RATE_ACCENT_GAIN_BY_COMPLEX,
+    ]) {
+      expect(Object.keys(table).sort()).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+      for (const v of Object.values(table)) {
+        expect(v).toBeGreaterThanOrEqual(0);
+        expect(v).toBeLessThanOrEqual(0.5);
+      }
+    }
+    expect(RATE_DENSITY_GAIN_BY_COMPLEX[8]).toBe(0);
+    expect(RATE_TREMOLO_GAIN_BY_COMPLEX[8]).toBeGreaterThan(0);
   });
 });
 
@@ -122,6 +155,37 @@ describe('swam-mapping — helpers', () => {
     it('clamps hi ≥ lo', () => {
       const r = phraseCountBounds('p', 0, 2, 5);
       expect(r.hi).toBeGreaterThanOrEqual(r.lo);
+    });
+    it('turn-rate pressure increases hi through the complex-specific density gain', () => {
+      const slow = phraseCountBounds('mf', 1.5, 3, 5, 2, RATE_PRESSURE_START_TPS);
+      const fast = phraseCountBounds('mf', 1.5, 3, 5, 2, RATE_PRESSURE_FULL_TPS);
+      expect(fast.hi).toBeGreaterThan(slow.hi);
+
+      const c8Slow = phraseCountBounds('mf', 1.5, 3, 5, 8, RATE_PRESSURE_START_TPS);
+      const c8Fast = phraseCountBounds('mf', 1.5, 3, 5, 8, RATE_PRESSURE_FULL_TPS);
+      expect(c8Fast.hi).toBe(c8Slow.hi);
+    });
+  });
+
+  describe('turn-rate pressure helpers', () => {
+    it('normalizes turn rate into a bounded pressure scalar', () => {
+      expect(turnRatePressure(0)).toBe(0);
+      expect(turnRatePressure(RATE_PRESSURE_START_TPS)).toBe(0);
+      expect(turnRatePressure(RATE_PRESSURE_FULL_TPS)).toBe(1);
+      expect(turnRatePressure(RATE_PRESSURE_FULL_TPS + 10)).toBe(1);
+    });
+
+    it('keeps multipliers at 1 below pressure start and applies per-complex gains at full pressure', () => {
+      expect(rateDensityMultiplier(5, 0)).toBe(1);
+      expect(rateVelocityMultiplier(5, RATE_PRESSURE_FULL_TPS)).toBeCloseTo(1 + RATE_VELOCITY_GAIN_BY_COMPLEX[5], 5);
+      expect(rateExpressionMultiplier(7, RATE_PRESSURE_FULL_TPS)).toBeCloseTo(1 + RATE_EXPR_GAIN_BY_COMPLEX[7], 5);
+      expect(rateBowPressureMultiplier(2, RATE_PRESSURE_FULL_TPS)).toBeCloseTo(1 + RATE_BOW_GAIN_BY_COMPLEX[2], 5);
+      expect(rateTremoloMultiplier(8, RATE_PRESSURE_FULL_TPS)).toBeCloseTo(1 + RATE_TREMOLO_GAIN_BY_COMPLEX[8], 5);
+    });
+
+    it('raises C5 accent value but leaves non-accent complexes unchanged', () => {
+      expect(rateAccentValue(80, 5, RATE_PRESSURE_FULL_TPS)).toBe(Math.round(80 * (1 + RATE_ACCENT_GAIN_BY_COMPLEX[5])));
+      expect(rateAccentValue(80, 6, RATE_PRESSURE_FULL_TPS)).toBe(80);
     });
   });
 
@@ -225,12 +289,38 @@ describe('swam-mapping — helpers', () => {
     });
   });
 
+  describe('resolvePhraseDuration', () => {
+    it('uses vertex duration as the material base', () => {
+      expect(resolvePhraseDuration(4, null, 2)).toEqual({
+        durationSec: 4,
+        durationSource: 'vertex',
+      });
+    });
+
+    it('scales vertex duration by face multiplier', () => {
+      const resolved = resolvePhraseDuration(4, 1.85, 2);
+      expect(resolved.durationSec).toBeCloseTo(7.4);
+      expect(resolved.durationSource).toBe('vertex*face');
+    });
+
+    it('applies complex floors after face scaling', () => {
+      expect(resolvePhraseDuration(1, 0.5, 5)).toEqual({
+        durationSec: COMPLEX_DURATION_FLOOR_SEC[5],
+        durationSource: 'vertex*face+floor',
+      });
+    });
+
+    it('caps very long spans at the max phrase duration', () => {
+      expect(resolvePhraseDuration(20, 2.5, 8).durationSec).toBe(MAX_PHRASE_DURATION_SEC);
+    });
+  });
+
   describe('buildFaceMap', () => {
     it('produces 12 entries derived from FACE_SIGNATURES', () => {
       const map = buildFaceMap();
       expect(Object.keys(map)).toHaveLength(12);
       for (const entry of Object.values(map)) {
-        expect(typeof entry.durationSec).toBe('number');
+        expect(typeof entry.durationMult).toBe('number');
         expect(typeof entry.registerBias).toBe('number');
         expect(['pluck', 'swell', 'stab', 'hairpin-up', 'hairpin-down', 'fade', 'burst']).toContain(entry.envelope);
         expect(['attack', 'sustained', 'release', 'iterative']).toContain(entry.articulation);

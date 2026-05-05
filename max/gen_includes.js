@@ -32,6 +32,7 @@ var OSC = {
   ALGORITHM: "/xk/algorithm",
   FACE: "/xk/face",
   VOICE: "/xk/voice",
+  PHRASE_PLAN: "/xk/phrase/plan",
   PANIC: "/xk/panic",
   TREM_LEARN: "/xk/tremLearn",
   MIDI_NOTEON: "/xk/midi/noteon",
@@ -254,84 +255,84 @@ var MOTION_NUDGE = {
 // ---------------- 12 face signatures (derived from TS source) ----
 var FACE_MAP = {
   U: {
-    durationSec: 0.7,
+    durationMult: 0.7,
     registerBias: 0.8,
     envelope: "pluck",
     articulation: "attack",
     motion: "up"
   },
   "U'": {
-    durationSec: 1.7,
+    durationMult: 1.7,
     registerBias: 0.8,
     envelope: "fade",
     articulation: "release",
     motion: "down"
   },
   D: {
-    durationSec: 0.6,
+    durationMult: 0.6,
     registerBias: -0.8,
     envelope: "stab",
     articulation: "attack",
     motion: "down"
   },
   "D'": {
-    durationSec: 2.5,
+    durationMult: 2.5,
     registerBias: -0.8,
     envelope: "hairpin-up",
     articulation: "sustained",
     motion: "static"
   },
   L: {
-    durationSec: 1.85,
+    durationMult: 1.85,
     registerBias: 0,
     envelope: "swell",
     articulation: "sustained",
     motion: "up"
   },
   "L'": {
-    durationSec: 1.85,
+    durationMult: 1.85,
     registerBias: 0,
     envelope: "fade",
     articulation: "release",
     motion: "down"
   },
   R: {
-    durationSec: 0.5,
+    durationMult: 0.5,
     registerBias: 0,
     envelope: "stab",
     articulation: "attack",
     motion: "static"
   },
   "R'": {
-    durationSec: 0.95,
+    durationMult: 0.95,
     registerBias: 0,
     envelope: "burst",
     articulation: "iterative",
     motion: "oscillate"
   },
   F: {
-    durationSec: 1.45,
+    durationMult: 1.45,
     registerBias: 0.3,
     envelope: "swell",
     articulation: "sustained",
     motion: "up"
   },
   "F'": {
-    durationSec: 1.45,
+    durationMult: 1.45,
     registerBias: 0.3,
     envelope: "swell",
     articulation: "sustained",
     motion: "down"
   },
   B: {
-    durationSec: 0.9,
+    durationMult: 0.9,
     registerBias: -0.3,
     envelope: "pluck",
     articulation: "attack",
     motion: "static"
   },
   "B'": {
-    durationSec: 2.25,
+    durationMult: 2.25,
     registerBias: -0.3,
     envelope: "hairpin-down",
     articulation: "sustained",
@@ -348,6 +349,20 @@ var LEGATO_COMPLEX = {
   "7": true
 };
 
+// ---------------- Phrase duration bounds -------------------------
+var MAX_PHRASE_DURATION_SEC = 30;
+
+var COMPLEX_DURATION_FLOOR_SEC = {
+  "1": 0.35,
+  "2": 0.7,
+  "3": 0.8,
+  "4": 0.5,
+  "5": 1.2,
+  "6": 1,
+  "7": 1,
+  "8": 0.8
+};
+
 // ---------------- Regime → attack/expr ramp multipliers ----------
 var REGIME_ATTACK_MULT = {
   contemplative: 1.2,
@@ -359,4 +374,75 @@ var REGIME_EXPR_RAMP_MULT = {
   contemplative: 1.5,
   conversational: 1,
   burst: 0.4
+};
+
+// ---------------- Turn-rate pressure gains -----------------------
+var RATE_PRESSURE_START_TPS = 0.3;
+
+var RATE_PRESSURE_FULL_TPS = 3;
+
+var RATE_DENSITY_GAIN_BY_COMPLEX = {
+  "1": 0.4,
+  "2": 0.32,
+  "3": 0.24,
+  "4": 0.36,
+  "5": 0.28,
+  "6": 0.14,
+  "7": 0.18,
+  "8": 0
+};
+
+var RATE_VELOCITY_GAIN_BY_COMPLEX = {
+  "1": 0.18,
+  "2": 0.12,
+  "3": 0.1,
+  "4": 0.1,
+  "5": 0.12,
+  "6": 0.08,
+  "7": 0.06,
+  "8": 0.12
+};
+
+var RATE_EXPR_GAIN_BY_COMPLEX = {
+  "1": 0,
+  "2": 0.08,
+  "3": 0.08,
+  "4": 0.06,
+  "5": 0.08,
+  "6": 0.06,
+  "7": 0.04,
+  "8": 0.08
+};
+
+var RATE_BOW_GAIN_BY_COMPLEX = {
+  "1": 0,
+  "2": 0.1,
+  "3": 0.08,
+  "4": 0.06,
+  "5": 0.14,
+  "6": 0.1,
+  "7": 0.06,
+  "8": 0.1
+};
+
+var RATE_TREMOLO_GAIN_BY_COMPLEX = {
+  "1": 0,
+  "2": 0,
+  "3": 0,
+  "4": 0,
+  "5": 0,
+  "6": 0,
+  "7": 0,
+  "8": 0.25
+};
+
+var RATE_ACCENT_GAIN_BY_COMPLEX = {
+  "1": 0,
+  "2": 0,
+  "3": 0,
+  "4": 0,
+  "5": 0.3,
+  "6": 0,
+  "7": 0,
+  "8": 0
 };

@@ -1471,8 +1471,20 @@ function assertGlissSync(nowMs) {
 
   const linePitch  = display.pitch;
   const chainPitch = _glissPitchAt(nowMs, segs);
-  const lineY  = midiToY(linePitch,  rollCanvas.height) / rollDpr;
-  const chainY = midiToY(chainPitch, rollCanvas.height) / rollDpr;
+  const chainY     = midiToY(chainPitch, rollCanvas.height) / rollDpr;
+  // Prefer the line's ACTUAL rendered CSS-px Y (display.sieveY) over a
+  // pitch-via-midiToY proxy. The proxy makes the assertion silent when
+  // line and chain agree on fractional pitch but the line's pitch→Y
+  // resolver truncates (e.g. sieveCellLeftEdgePos snapping to integer
+  // cell centres) — both sides report the same midiToY(pitch) value
+  // even though the line is drawing a stair-stepping endpoint and the
+  // chain is drawing a continuous curve. Comparing display.sieveY
+  // against midiToY(chainPitch) catches that resolver-level drift.
+  // Fallback to the legacy proxy if the line did not report sieveY
+  // (line out of sieve range, missing init).
+  const lineY = (typeof display.sieveY === 'number')
+    ? display.sieveY
+    : midiToY(linePitch, rollCanvas.height) / rollDpr;
   const drift  = Math.abs(lineY - chainY);
   // D67 — threshold raised from 1 px to 5 px. With chain segment dur
   // now gap-based (next.onsetMs - this.onsetMs - 5) and line animDur

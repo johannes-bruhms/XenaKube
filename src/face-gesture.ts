@@ -3,7 +3,7 @@
 // Each of the 12 face-moves (L L' R R' F F' B B' U U' D D') owns a
 // distinct gesture TYPE, fixed to the GAN cube's color-fixed face
 // identity. K_i / C_i / path / tetra then MODULATE the content inside
-// that shape rather than selecting the shape or its phrase duration.
+// that shape rather than replacing the K_i material.
 //
 // Performer's forward model: the *kind* of sound a turn will produce
 // is predictable from the face alone. The *detail* still evolves with
@@ -33,13 +33,12 @@ export interface FaceSignature {
   /** Amplitude envelope archetype. */
   envelope: EnvelopeShape;
   /**
-   * Absolute phrase duration in seconds.
+   * Phrase duration multiplier.
    *
-   * Temporal Identity rule: the face owns time. K_i still modulates density,
-   * intensity, and pitch placement, but it must not make the same face feel
-   * short on one turn and long on another unrelated turn.
+   * K_i supplies the base phrase span; the face scales it so the move keeps a
+   * recognisable temporal bias without erasing the old long/short material.
    */
-  durationSec: number;
+  durationMult: number;
   /** Where the gesture's energy sits in time. */
   articulation: Articulation;
   /** Stereo bias [-1..+1]. Reserved for future stereo routing; SWAM is mono. */
@@ -66,18 +65,18 @@ export interface FaceSignature {
  * distinguishable by ear while the 6 face-pairs still feel related.
  */
 export const FACE_SIGNATURES: Record<FaceMove, FaceSignature> = {
-  'U':  { face: 'U',  envelope: 'pluck', durationSec: 0.70, articulation: 'attack',    panBias:  0.0, registerBias:  0.8, motion: 'up' },
-  "U'": { face: "U'", envelope: 'fade',  durationSec: 1.70, articulation: 'release',   panBias:  0.0, registerBias:  0.8, motion: 'down' },
-  'D':  { face: 'D',  envelope: 'stab',  durationSec: 0.60, articulation: 'attack',    panBias:  0.0, registerBias: -0.8, motion: 'down' },
-  "D'": { face: "D'", envelope: 'hairpin-up',   durationSec: 2.50, articulation: 'sustained', panBias:  0.0, registerBias: -0.8, motion: 'static' },
-  'L':  { face: 'L',  envelope: 'swell', durationSec: 1.85, articulation: 'sustained', panBias: -0.7, registerBias:  0.0, motion: 'up' },
-  "L'": { face: "L'", envelope: 'fade',  durationSec: 1.85, articulation: 'release',   panBias: -0.7, registerBias:  0.0, motion: 'down' },
-  'R':  { face: 'R',  envelope: 'stab',  durationSec: 0.50, articulation: 'attack',    panBias:  0.7, registerBias:  0.0, motion: 'static' },
-  "R'": { face: "R'", envelope: 'burst', durationSec: 0.95, articulation: 'iterative', panBias:  0.7, registerBias:  0.0, motion: 'oscillate' },
-  'F':  { face: 'F',  envelope: 'swell', durationSec: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'up' },
-  "F'": { face: "F'", envelope: 'swell', durationSec: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'down' },
-  'B':  { face: 'B',  envelope: 'pluck', durationSec: 0.90, articulation: 'attack',    panBias:  0.0, registerBias: -0.3, motion: 'static' },
-  "B'": { face: "B'", envelope: 'hairpin-down', durationSec: 2.25, articulation: 'sustained', panBias:  0.0, registerBias: -0.3, motion: 'oscillate' },
+  'U':  { face: 'U',  envelope: 'pluck', durationMult: 0.70, articulation: 'attack',    panBias:  0.0, registerBias:  0.8, motion: 'up' },
+  "U'": { face: "U'", envelope: 'fade',  durationMult: 1.70, articulation: 'release',   panBias:  0.0, registerBias:  0.8, motion: 'down' },
+  'D':  { face: 'D',  envelope: 'stab',  durationMult: 0.60, articulation: 'attack',    panBias:  0.0, registerBias: -0.8, motion: 'down' },
+  "D'": { face: "D'", envelope: 'hairpin-up',   durationMult: 2.50, articulation: 'sustained', panBias:  0.0, registerBias: -0.8, motion: 'static' },
+  'L':  { face: 'L',  envelope: 'swell', durationMult: 1.85, articulation: 'sustained', panBias: -0.7, registerBias:  0.0, motion: 'up' },
+  "L'": { face: "L'", envelope: 'fade',  durationMult: 1.85, articulation: 'release',   panBias: -0.7, registerBias:  0.0, motion: 'down' },
+  'R':  { face: 'R',  envelope: 'stab',  durationMult: 0.50, articulation: 'attack',    panBias:  0.7, registerBias:  0.0, motion: 'static' },
+  "R'": { face: "R'", envelope: 'burst', durationMult: 0.95, articulation: 'iterative', panBias:  0.7, registerBias:  0.0, motion: 'oscillate' },
+  'F':  { face: 'F',  envelope: 'swell', durationMult: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'up' },
+  "F'": { face: "F'", envelope: 'swell', durationMult: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'down' },
+  'B':  { face: 'B',  envelope: 'pluck', durationMult: 0.90, articulation: 'attack',    panBias:  0.0, registerBias: -0.3, motion: 'static' },
+  "B'": { face: "B'", envelope: 'hairpin-down', durationMult: 2.25, articulation: 'sustained', panBias:  0.0, registerBias: -0.3, motion: 'oscillate' },
 };
 
 /** Strict parse: returns the FaceMove if `move` is one of the 12, else null.

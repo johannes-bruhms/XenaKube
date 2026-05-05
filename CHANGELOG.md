@@ -4,6 +4,40 @@ All notable changes to XenaKube are documented here.
 
 **Entry format**: dated section per release/working-day; under it, `### Added / Changed / Fixed` headers; under each header, **terse bullets** — one or two sentences naming the user-visible change and the file(s) touched. Long rationale, root-cause analyses, and D-coded design narratives belong in `docs/revision_roadmap.md` (bridge / SWAM) or `docs/research_notes.md` (engine / dashboard). When in doubt, link rather than copy. Older entries below predate this discipline and are kept as-is.
 
+## 2026-05-05
+
+### Added
+- Added explicit `alpha-cosmo` / `beta-cosmo` engine cosmologies. `beta-cosmo` remains default and uses physically followable corner topology; `alpha-cosmo` restores the historical S4 K/C walks behind `XK_COSMO=alpha-cosmo` or `set_mode.cosmology`.
+- Added beta-cosmo tracked-K read-head support. Sequential voice selection now follows a chosen K corner through physical face turns instead of stepping through an impossible fixed vertex cycle; WS `set_tracked_k` is available for future UI/control mapping.
+- Added bounded turn-rate pressure as a shared SWAM mapping layer. `src/swam-mapping.ts` now owns per-complex `RATE_*` gains and pure helpers, `src/phrase-plan.ts` mirrors the pressure in TS phrase plans, `max/xk_swam.js` applies it to density/dynamics/C8 tremolo/C5 accent, and `max/gen_includes.js` is regenerated from the shared tables.
+- Added canonical-pose face-letter remap (`MOVE_REMAP = {R↔L, F↔B, U/D unchanged}`) at the relay's WS `move` handler. Assumes performer holds cube red-front, white-top at connect; realigns engine, `/xk/face` OSC, dashboard animation, and algorithm-buffer to user-pose face geometry. Algorithm detection stays orientation-invariant via `cube-algorithm.ts`'s 24 pre-expanded rotation variants.
+- Added two paired invariants for the remap (per "Recurring-Bug Discipline"): `assertCubeAlignment()` in `public/js/cube-scene.js` (geometric chain check at end of `applyConnectView`, logs `[CUBE ALIGN FAIL]` if CUBE_VERTS / camera / dashboard CANONICAL_REMAP drifts) and `verifyMoveRemap` in `public/js/main.js` (per-connect first-move audit, logs `[CUBE REMAP FAIL]` if relay's MOVE_REMAP drifts from the dashboard mirrors).
+- Added Design C beta-cosmo selector: `src/orientation.ts` exposes `upFace(quat)` and `topRightCorner(face, quat)` with target-based gyro-anchored homes (5 distinct cubies; R/U intentionally collide on BTR). `engine.ts` records `lastTurnedFace` per turn and recomputes `activeVertex = topRightCorner(lastTurnedFace, gyro)` on every face turn AND every gyro tick. Phrase parameters commit at noteOn — gyro tilt mid-phrase only affects the *next* turn. Supersedes the earlier tracked-K read-head approach.
+- Added `src/motion.ts MotionTracker` (still-state and dwell tracking). Threshold 0.1 rad/s, exposed via `state.motion = { accelMag, isStill, dwellMs }`. Foundation for dwell-driven auto-zero and bridge motion-aware phrase modulation.
+- Added `state.lastTurnedFace` and `state.upFace` to `XenaKubeState` for downstream use.
+
+### Changed
+- Restored K_i V1 duration as material phrase time. `src/vertices.ts` again carries the 2/5/5/2/3/4/4/3 second contour; `FACE_SIGNATURES` now exposes `durationMult`; TS phrase planning and Max resolve duration as K base × face multiplier with complex floors and a 30 s cap.
+- Updated bridge/performance/operator docs to state the new control contract: turn rate raises pressure above K_i baselines without replacing K_i density/intensity or collapsing complex identity.
+- Locked beta-cosmo cyclic phase to ALPHA permanently. Phase clock no longer advances in beta-cosmo (per user intent: stationary complexes that K_i rotates *into*); phase clock + S4 walks remain in alpha-cosmo. Beta-cosmo C-assignments now derive from the ALPHA mapping permuted by `complexCube.groupElement`, which is set to `snapToNearest(gyro)` on every gyro update — so the locked map *rotates with the ghost cube*. User tilts directly drive C-assignment variety.
+- Restored alpha-style ghost-cube SLERP-snap rendering in `public/js/cube-scene.js`. Ghost glides toward `state.snapQuat`; live cube continues raw-gyro rendering. Visible angle between live and ghost is the existing `gyroDeviation` source, now meaningful again.
+
+### Fixed
+- Flipped R/L/F/B perm direction in `src/corner-topology.ts` to match standard WCA convention (CW from outside the face). Previous perms encoded CCW for R/L/F/B (inconsistent — U/D were already CW), which left dashboard face-turn animations rotating opposite to the user's physical action even after the canonical-pose remap landed the right face. Algorithm matching unaffected (string-based). Added `quarter turns rotate CW from outside` test in `test/corner-topology.test.ts` to pin the convention.
+
+## 2026-05-04
+
+### Added
+- Added a relay-side TypeScript `PhrasePlanner` shadow path for C1-C8. `relay.js` now computes a phrase plan per `engine.onVoice`, sends `/xk/phrase/plan` summaries to Max for audit logging, broadcasts full plans to the dashboard, and tests assert face-owned duration, near-immediate planned first note, C7 single-voice behavior, and C5 companion planning.
+- Added plan-id phrase echo auditing for dropped/late Max events. `/xk/phrase/plan` now precedes the matching `/xk/voice`, Max stamps `/xk/midi/*` echoes with `planId`, `relay.js` logs `[PHRASE ECHO ...]` planned-vs-actual results, and the dashboard exposes a `phrase audit` state row.
+- Added `src/corner-topology.ts` for the performer-visible 8-corner K_i permutation plus exact precomputed quarter-turn distance across all 40,320 visible corner states.
+
+### Changed
+- Moved phrase duration ownership from K_i vertices to the 12 face gestures. `FACE_SIGNATURES` now carries absolute `durationSec`, K_i vertex duration is neutral fallback, Max resolves face-triggered voices from generated `FACE_MAP.durationSec`, and `/xk/face -` resets stale face state for null-face triggers.
+- Added D74 face-duration guardrails: tests assert neutral K duration and face duration bands, Max logs `FACE DURATION FAIL` if a face lacks `durationSec`, and docs now describe face-owned duration as part of Temporal Identity.
+- Decoupled hidden walks from live vertex permutation. Physical face turns now mutate K_i through explicit corner topology; K diagrams, C algorithmic walks, and C gyro mode remain as non-permuting shadow metadata. `/xk/scramble` now reports normalized exact visible-corner solve distance instead of S4 Cayley distance.
+- Made the dashboard's ghost C-cube a fully fixed reference. The ghost no longer slerps to the gyro's S4 snap target (orientation = `ghostViewOffset` only — gizmo-controlled, identity by default), and ghost C-vertices stay pinned to `CUBE_VERTS[c]` regardless of `state.cAssignments` (no more "walking" between corners on permutation changes). Active-C highlight (scale pulse + ring) still travels between fixed corners when the active complex changes. Removed snap-slerp + cAssignments→position-LERP machinery and the deviation-driven opacity fade in `public/js/cube-scene.js`; baked the formerly-bright (dev=0) opacities into the ghost edge / sphere materials. Updated `docs/dashboard-architecture.md`.
+
 ## 2026-05-03
 
 ### Added

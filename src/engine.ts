@@ -1,76 +1,87 @@
 // === XenaKube Engine: Central Orchestrator ===
 //
-// Receives cube events (turns, gyro, lock), runs both cubes (K_i + C_i),
-// computes full composition state per transformation, and emits it.
+// Receives cube turns and gyro updates, maintains the performer-visible
+// corner topology, computes composition state, and emits state/voice events.
 
 import type {
   GroupElement, MoveString, Quaternion,
-  XenaKubeState, EngineMode, ComplexType, Permutation8,
+  XenaKubeState, EngineMode, Permutation8,
 } from './types.js';
-import {
-  multiply, parseMoveToElement, getPermutation,
-  IDENTITY, tetraOrbit,
-} from './group.js';
-
-// Fixed S4 element used to shift the C-cube's advance law so it diverges
-// from the K-cube. U generator (order 4) gives a 4-cycle offset; combined
-// with the α/β/γ 3-cycle, the C-cube's full visible period is lcm(4,3)=12
-// substitutions, plenty of contrast against K. See engine.onTurn for why.
-const C_SHIFT = parseMoveToElement('U')!;
-import { getTransformedVertices, getBaseVertices } from './vertices.js';
+import { parseMoveToElement, IDENTITY, tetraOrbit, multiply, getPermutation } from './group.js';
+import { getBaseVertices, permuteVertexSet } from './vertices.js';
 import { ComplexCube } from './complexes.js';
 import { DiagramTraversal, getBuiltinDiagrams, type KinematicDiagram } from './kinematic.js';
 import { SieveState } from './sieve.js';
 import { snapToNearest, distanceToNearest, getQuaternion } from './quaternion.js';
 import { CubeAlgorithmDetector, type CubeAlgorithmMatch } from './cube-algorithm.js';
 import { scrambleFactor } from './scramble.js';
+import { IDENTITY_CORNER_PERM, applyCornerMove } from './corner-topology.js';
 import { VoiceEngine, type VoiceOutput } from './voice-engine.js';
 import { ExpressionProcessor, type ExpressionState } from './expression.js';
-import { ModeManager, type PerformanceMode } from './mode-manager.js';
-import { TurnRateTracker, type Regime } from './turn-rate.js';
-import { parseFace } from './face-gesture.js';
+import { ModeManager } from './mode-manager.js';
+import { TurnRateTracker } from './turn-rate.js';
+import { parseFace, getFaceSignature } from './face-gesture.js';
+import { topRightCorner, upFace, type Face } from './orientation.js';
+import { MotionTracker } from './motion.js';
 
 export type StateListener = (state: XenaKubeState) => void;
 export type CubeAlgorithmListener = (match: CubeAlgorithmMatch) => void;
 export type VoiceListener = (output: VoiceOutput) => void;
 export type SolveListener = () => void;
 
+const C_SHIFT = parseMoveToElement('U') ?? IDENTITY;
+
 export class XenaKubeEngine {
-  // === K_i cube state ===
+  // K S4 element. In alpha-cosmo this is the live K_i walk; in beta-cosmo it
+  // mirrors the gyro-snapped orientation shadow for dashboard/tetra metadata.
   private kGroup: GroupElement = IDENTITY;
 
-  // === C_i cube ===
+  // Gyro-snapped orientation kept separate so alpha-cosmo gyro updates cannot
+  // overwrite the Xenakis walk state.
+  private orientationGroup: GroupElement = IDENTITY;
+
+  // Performer-visible K_i topology: position i contains K corner perm[i].
+  // Physical face turns are the only source of mutation in beta-cosmo.
+  private cornerPermutation: Permutation8 = [...IDENTITY_CORNER_PERM] as Permutation8;
+
+  // C_i state keeps the alpha/beta/gamma phase and the optional S4 walk.
   private complexCube = new ComplexCube();
 
-  // === Kinematic diagram traversal (optional) ===
+  // Kinematic diagrams drive S4 walks in alpha-cosmo and remain shadow paths
+  // in beta-cosmo.
   private kDiagram: DiagramTraversal | null = null;
   private kDiagramName: string | null = null;
   private cDiagram: DiagramTraversal | null = null;
 
-  // === Sieve state ===
   private sieve = new SieveState();
 
-  // === Mode ===
   private mode: EngineMode = {
+    cosmology: 'beta-cosmo',
     kCube: 'direct',
     cCube: 'algorithmic',
   };
 
-  // === Tracking ===
   private step = 0;
   private gyro: Quaternion = [0, 0, 0, 1];
   private substitutionCount = 0;
   private activeVertex = 0;
-  private expressionState: import('./expression.js').ExpressionState = { tilt: 0.5, spin: 0, deviation: 0, scramble: 0 };
+  private trackedK = 0;
+  private lastTurnedFace: Face | null = null;
+  // Phrase-lock window: while Date.now() < voiceLockUntilMs, the current
+  // (K, C) at activeVertex stays frozen — gyro tilt cannot drift the
+  // read-head or rotate the C-assignments mid-phrase. Set on every onTurn
+  // to (now + estimated phrase duration). The next turn naturally resets it
+  // for the new phrase, so "interruption" is implicit.
+  private voiceLockUntilMs = 0;
+  private expressionState: ExpressionState = { tilt: 0.5, spin: 0, deviation: 0, scramble: 0 };
 
-  // === New v2 modules ===
   readonly algorithmDetector = new CubeAlgorithmDetector();
   readonly voiceEngine = new VoiceEngine();
   readonly expression = new ExpressionProcessor();
   readonly modeManager = new ModeManager();
   readonly turnRateTracker = new TurnRateTracker();
+  readonly motion = new MotionTracker();
 
-  // === Listeners ===
   private listeners: StateListener[] = [];
   private algorithmListeners: CubeAlgorithmListener[] = [];
   private voiceListeners: VoiceListener[] = [];
@@ -80,7 +91,6 @@ export class XenaKubeEngine {
     if (mode) this.setMode(mode);
   }
 
-  /** Subscribe to state changes */
   onState(listener: StateListener): () => void {
     this.listeners.push(listener);
     return () => {
@@ -88,7 +98,6 @@ export class XenaKubeEngine {
     };
   }
 
-  /** Subscribe to cube algorithm detections */
   onAlgorithm(listener: CubeAlgorithmListener): () => void {
     this.algorithmListeners.push(listener);
     return () => {
@@ -96,7 +105,6 @@ export class XenaKubeEngine {
     };
   }
 
-  /** Subscribe to voice output events */
   onVoice(listener: VoiceListener): () => void {
     this.voiceListeners.push(listener);
     return () => {
@@ -105,10 +113,8 @@ export class XenaKubeEngine {
   }
 
   /**
-   * Subscribe to cube-solved transitions. Fires each time `reportCubeSolved()`
-   * is called — edge detection is the caller's responsibility. The browser
-   * owns the FACELETS stream from the cube and detects solved→unsolved→solved
-   * cycles before telling the relay, which calls `reportCubeSolved()`.
+   * Subscribe to cube-solved transitions. Edge detection is owned by the
+   * browser FACELETS stream; reportCubeSolved() forwards the event.
    */
   onSolve(listener: SolveListener): () => void {
     this.solveListeners.push(listener);
@@ -117,38 +123,50 @@ export class XenaKubeEngine {
     };
   }
 
-  /** External report: cube is physically solved. Fires all solve listeners. */
   reportCubeSolved(): void {
     for (const listener of this.solveListeners) listener();
   }
 
-  /** Set engine mode */
   setMode(mode: Partial<EngineMode>): void {
+    const previousCosmology = this.mode.cosmology;
     this.mode = { ...this.mode, ...mode };
+    if (!this.mode.cosmology) this.mode.cosmology = 'beta-cosmo';
+    if (this.mode.cosmology !== previousCosmology) {
+      this.reset();
+    } else {
+      this.activeVertex = this.nextActiveVertex();
+    }
   }
 
-  /** Set kinematic diagram for K_i cube */
+  /** In beta-cosmo, choose which K corner the read-head physically follows. */
+  setTrackedK(k: number): void {
+    if (!Number.isInteger(k) || k < 0 || k > 7) {
+      throw new RangeError(`tracked K corner must be an integer 0..7, got ${k}`);
+    }
+    this.trackedK = k;
+    if (this.mode.cosmology === 'beta-cosmo') this.activeVertex = this.positionOfTrackedK();
+  }
+
+  /** Set K_i diagram. It drives alpha-cosmo and remains shadow in beta-cosmo. */
   setKDiagram(diagram: KinematicDiagram): void {
     this.kDiagram = new DiagramTraversal(diagram);
     this.kDiagramName = diagram.name;
     this.mode.kCube = 'diagram';
   }
 
-  /** Set kinematic diagram for C_i cube */
+  /** Set C_i diagram. It drives alpha-cosmo and remains shadow in beta-cosmo. */
   setCDiagram(diagram: KinematicDiagram): void {
     this.cDiagram = new DiagramTraversal(diagram);
   }
 
-  /** Process a physical face turn */
+  /** Process a physical cube face turn. */
   onTurn(move: MoveString): XenaKubeState | null {
     const el = parseMoveToElement(move);
-    if (el === null) return null;
+    const nextCornerPermutation = applyCornerMove(this.cornerPermutation, move);
+    if (el === null || !nextCornerPermutation) return null;
 
-    // Track turn timing for regime detection
     this.turnRateTracker.push(Date.now());
 
-    // Check for cube algorithms (layered — multiple can fire on the same move)
-    // Apply shortest-first so longest (hardest to execute) wins on conflicts
     const algorithmMatches = this.algorithmDetector.pushAll(move);
     for (let i = algorithmMatches.length - 1; i >= 0; i--) {
       const match = algorithmMatches[i];
@@ -157,69 +175,52 @@ export class XenaKubeEngine {
       for (const listener of this.algorithmListeners) listener(match);
     }
 
-    // If frozen, emit state but don't advance
     if (this.modeManager.mode.frozen) {
       const state = this.getState();
       this.emitState(state);
       return state;
     }
 
-    // Advance K_i cube
-    if (this.mode.kCube === 'direct') {
-      this.kGroup = multiply(this.kGroup, el);
-    } else if (this.kDiagram) {
-      this.kGroup = this.kDiagram.advance();
-    }
+    this.cornerPermutation = nextCornerPermutation;
 
-    // Advance C_i cube.
-    // Xenakis (Formalized Music pp. 223-224, §IV): K_i and C_i traverse
-    // *separate* closed graphs — "C_i graph {D Q12}" vs "K_i graph {D Q3}" —
-    // so the two cubes must not advance by the same element. Prior behaviour
-    // multiplied both by `el` from IDENTITY, which made
-    // `complexCube.groupElement === kGroup` forever; the ghost cube was just
-    // the live cube rendered twice, and K# ↔ complex pairing only shifted
-    // when α → β → γ rotated every 3 substitutions.
-    //
-    // Fix: when no explicit cDiagram is loaded, shift each move by the
-    // fixed generator U before applying it to the C-cube. The move still
-    // drives the advance (so different physical turns produce different
-    // complex states), but C's orbit diverges from K's by a 4-cycle offset,
-    // and landing on the same K-permutation no longer forces the same
-    // complex assignment.
-    if (this.mode.cCube === 'algorithmic') {
-      if (this.cDiagram) {
-        const cEl = this.cDiagram.advance();
-        this.complexCube.transform(cEl);
-      } else {
-        this.complexCube.transform(multiply(C_SHIFT, el));
-      }
+    const kDiagramStep = this.kDiagram ? this.kDiagram.advance() : null;
+    const cDiagramStep = this.cDiagram ? this.cDiagram.advance() : null;
+
+    if (this.mode.cosmology === 'alpha-cosmo') {
+      const kStep = kDiagramStep ?? el;
+      this.kGroup = multiply(this.kGroup, kStep);
+      const cStep = cDiagramStep ?? multiply(C_SHIFT, el);
+      this.complexCube.transform(cStep);
     }
+    // Beta-cosmo: phase clock is locked, complexCube.groupElement is driven
+    // by gyro-snap (set in onGyro). Diagrams remain non-permuting shadows.
+
+    const face = parseFace(move);
+    if (face !== null) this.lastTurnedFace = face[0] as Face;
 
     this.step++;
     this.substitutionCount++;
-    this.activeVertex = this.step % 8;
+    this.activeVertex = this.nextActiveVertex();
 
-    // Advance sieve every 3 substitutions
     if (this.substitutionCount >= 3) {
       this.substitutionCount = 0;
       this.sieve.advance();
     }
 
-    // Voice output — computed first, emitted LAST so that downstream
-    // consumers (max/xk_swam.js) see the post-turn state burst
-    // (/xk/tetra, …) BEFORE the /xk/voice trigger. Reversing that order
-    // caused a 1-turn lag in any bridge-side logic keyed on the
-    // post-turn state (e.g. tetra-driven harmonic rotation for C4):
-    // handleVoice would read state.tetra reflecting turn N-1 because
-    // the state burst from turn N hadn't arrived yet.
-    const vertices = getTransformedVertices(this.kGroup);
-    const complexes = this.complexCube.getAssignments();
-    // Face identity is the Phase A1 gesture-type selector. parseFace returns
-    // null for half-turns and invalid strings, so the voice output carries
-    // a well-formed FaceMove or null (downstream bridges skip face dispatch
-    // on null — e.g. diagram-driven turns, future silent synthesis).
-    const face = parseFace(move);
+    const vertices = permuteVertexSet(getBaseVertices(), this.currentKPermutation());
+    const complexes = this.complexCube.getAssignments(this.mode.cosmology);
     const voiceOutput = this.voiceEngine.emit(vertices, this.activeVertex, complexes, face);
+
+    // Lock phrase materials (activeVertex slot + C-rotation) for the
+    // estimated phrase duration: K-vertex base × face durationMult. While
+    // locked, gyro tilt does not re-anchor activeVertex or rotate
+    // complexCube.groupElement — the playing (K, C) stays committed until
+    // natural end or the next turn (which resets the lock for the new phrase).
+    const lockedK = vertices[this.activeVertex];
+    const sig = getFaceSignature(move);
+    const faceMul = sig?.durationMult ?? 1;
+    const phraseSec = (lockedK?.duration ?? 1) * faceMul;
+    this.voiceLockUntilMs = Date.now() + phraseSec * 1000;
 
     const state = this.getState();
     this.emitState(state);
@@ -227,21 +228,38 @@ export class XenaKubeEngine {
     return state;
   }
 
-  /** Process gyro quaternion update */
+  /** Process gyro quaternion update. */
   onGyro(x: number, y: number, z: number, w: number): XenaKubeState | null {
     this.gyro = [x, y, z, w];
+    this.motion.pushQuat(this.gyro, Date.now());
 
-    if (this.mode.cCube === 'gyro') {
-      const snapped = snapToNearest(this.gyro);
-      if (snapped !== this.complexCube.groupElement) {
-        this.complexCube.groupElement = snapped;
-      }
+    const snapped = snapToNearest(this.gyro);
+    this.orientationGroup = snapped;
+
+    // Phrase-lock guard: while a voice is in flight the playing
+    // (K, C) at activeVertex must not shift mid-phrase. We still advance
+    // the orientation shadow (kGroup) so live cube tilt and motion telemetry
+    // keep tracking, but cAssignments rotation and read-head re-anchor are
+    // suppressed until the lock expires (or the next turn resets it).
+    const phraseLocked = Date.now() < this.voiceLockUntilMs;
+
+    if (this.mode.cosmology === 'beta-cosmo') {
+      this.kGroup = snapped;
+      if (!phraseLocked) this.complexCube.groupElement = snapped;
+    }
+    if (this.mode.cosmology === 'alpha-cosmo' && this.mode.cCube === 'gyro' && !phraseLocked) {
+      this.complexCube.groupElement = snapped;
     }
 
-    // Update expression from gyro
+    // Re-anchor the read-head only when no phrase is in flight; otherwise
+    // gyro tilt is preview-only for the *next* turn after this phrase ends.
+    if (!phraseLocked) {
+      this.activeVertex = this.nextActiveVertex();
+    }
+
     const { angle } = distanceToNearest(this.gyro);
     const deviation = Math.min(1, angle / (Math.PI / 4));
-    const scramble = scrambleFactor(this.kGroup);
+    const scramble = scrambleFactor(this.cornerPermutation);
     this.expressionState = this.expression.process(this.gyro, deviation, scramble);
 
     const state = this.getState();
@@ -249,64 +267,74 @@ export class XenaKubeEngine {
     return state;
   }
 
-  /** Get current expression state (gyro-derived continuous params) */
   getExpression(): ExpressionState {
     return this.expressionState;
   }
 
-  /** Compute expression from an arbitrary quaternion (for relay's 60Hz Kalman-filtered quat) */
   getExpressionFor(quat: Quaternion, now?: number): ExpressionState {
     const { angle } = distanceToNearest(quat);
     const deviation = Math.min(1, angle / (Math.PI / 4));
-    const scramble = scrambleFactor(this.kGroup);
+    const scramble = scrambleFactor(this.cornerPermutation);
     return this.expression.process(quat, deviation, scramble, now);
   }
 
-  /** Get current scramble factor (0 = solved, 1 = max scrambled) */
   getScrambleFactor(): number {
-    return scrambleFactor(this.kGroup);
+    return scrambleFactor(this.cornerPermutation);
   }
 
-  /** Get current full state */
   getState(): XenaKubeState {
-    const perm = getPermutation(this.kGroup);
-
     const { element: snapElement, angle: snapAngle } = distanceToNearest(this.gyro);
     const snapQuat = getQuaternion(snapElement);
     const gyroDeviation = Math.min(1, snapAngle / (Math.PI / 4));
+    const kPermutation = this.currentKPermutation();
+    const activeK = kPermutation[this.activeVertex] ?? 0;
 
     return {
+      cosmology: this.mode.cosmology,
       kGroup: this.kGroup,
-      kPermutation: perm,
-      kVertices: getTransformedVertices(this.kGroup),
+      kPermutation,
+      kVertices: permuteVertexSet(getBaseVertices(), kPermutation),
       cGroup: this.complexCube.groupElement,
-      cAssignments: this.complexCube.getAssignments(),
+      cQuat: getQuaternion(this.complexCube.groupElement),
+      cAssignments: this.complexCube.getAssignments(this.mode.cosmology),
       cyclicPhase: this.complexCube.phase,
       tetraIndex: tetraOrbit(this.kGroup),
       sieve: this.sieve.getPitches(),
       gyro: this.gyro,
       step: this.step,
       activeVertex: this.activeVertex,
+      activeK,
+      trackedK: this.trackedK,
       activeDiagram: this.kDiagramName,
       diagramPosition: this.kDiagram ? this.kDiagram.getPosition() : null,
       snapElement,
       snapQuat,
       gyroDeviation,
-      scrambleFactor: scrambleFactor(this.kGroup),
+      scrambleFactor: scrambleFactor(this.cornerPermutation),
       turnRate: this.turnRateTracker.getRate(),
       regime: this.turnRateTracker.getRegime(),
       expression: this.expressionState,
+      lastTurnedFace: this.lastTurnedFace,
+      upFace: upFace(this.gyro),
+      motion: {
+        accelMag: this.motion.accelMag,
+        isStill: this.motion.isStill,
+        dwellMs: this.motion.dwellMs,
+      },
     };
   }
 
-  /** Reset all state */
   reset(): void {
     this.kGroup = IDENTITY;
+    this.orientationGroup = IDENTITY;
+    this.cornerPermutation = [...IDENTITY_CORNER_PERM] as Permutation8;
     this.complexCube.reset();
     this.sieve.reset();
     this.step = 0;
     this.substitutionCount = 0;
-    this.activeVertex = 0;
+    this.lastTurnedFace = null;
+    this.voiceLockUntilMs = 0;
+    this.activeVertex = this.nextActiveVertexAfterStep(0);
     this.gyro = [0, 0, 0, 1];
     this.kDiagram?.reset();
     this.cDiagram?.reset();
@@ -314,24 +342,48 @@ export class XenaKubeEngine {
     this.expression.reset();
     this.modeManager.reset();
     this.turnRateTracker.reset();
+    this.motion.reset();
     this.voiceEngine.setMode('sequential');
   }
 
-  /** Clear K_i diagram (back to direct mode) */
   clearKDiagram(): void {
     this.kDiagram = null;
     this.kDiagramName = null;
     this.mode.kCube = 'direct';
   }
 
-  /** Get available kinematic diagrams */
   getDiagrams(): KinematicDiagram[] {
     return getBuiltinDiagrams();
   }
 
   private emitState(state: XenaKubeState): void {
-    for (const listener of this.listeners) {
-      listener(state);
+    for (const listener of this.listeners) listener(state);
+  }
+
+  private currentKPermutation(): Permutation8 {
+    if (this.mode.cosmology === 'alpha-cosmo') {
+      return [...getPermutation(this.kGroup)] as Permutation8;
     }
+    return [...this.cornerPermutation] as Permutation8;
+  }
+
+  private nextActiveVertex(): number {
+    return this.nextActiveVertexAfterStep(this.step);
+  }
+
+  private nextActiveVertexAfterStep(step: number): number {
+    if (this.mode.cosmology === 'alpha-cosmo') return step % 8;
+    // Beta-cosmo Design C: read-head is the top-right corner of the
+    // last-turned face under current gyro orientation. Until the first turn,
+    // fall back to the tracked-K position for a deterministic initial state.
+    if (this.lastTurnedFace !== null) {
+      return topRightCorner(this.lastTurnedFace, this.gyro);
+    }
+    return this.positionOfTrackedK();
+  }
+
+  private positionOfTrackedK(): number {
+    const idx = this.cornerPermutation.indexOf(this.trackedK);
+    return idx >= 0 ? idx : 0;
   }
 }

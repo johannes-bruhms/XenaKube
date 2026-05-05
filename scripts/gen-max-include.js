@@ -24,7 +24,12 @@ const {
   HARMONICS, TREMOLO, BOW_POLY,
   HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,
   INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE,
-  LEGATO_COMPLEX, REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
+  LEGATO_COMPLEX, MAX_PHRASE_DURATION_SEC, COMPLEX_DURATION_FLOOR_SEC,
+  REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
+  RATE_PRESSURE_START_TPS, RATE_PRESSURE_FULL_TPS,
+  RATE_DENSITY_GAIN_BY_COMPLEX, RATE_VELOCITY_GAIN_BY_COMPLEX,
+  RATE_EXPR_GAIN_BY_COMPLEX, RATE_BOW_GAIN_BY_COMPLEX,
+  RATE_TREMOLO_GAIN_BY_COMPLEX, RATE_ACCENT_GAIN_BY_COMPLEX,
   buildFaceMap,
 } = require('../src/swam-mapping.ts');
 
@@ -84,9 +89,21 @@ lines.push('// ---------------- 12 face signatures (derived from TS source) ----
 lines.push(block('FACE_MAP', buildFaceMap()));
 lines.push('// ---------------- Gliss (legato/portamento) complexes ------------');
 lines.push(block('LEGATO_COMPLEX', LEGATO_COMPLEX));
+lines.push('// ---------------- Phrase duration bounds -------------------------');
+lines.push(block('MAX_PHRASE_DURATION_SEC', MAX_PHRASE_DURATION_SEC));
+lines.push(block('COMPLEX_DURATION_FLOOR_SEC', COMPLEX_DURATION_FLOOR_SEC));
 lines.push('// ---------------- Regime → attack/expr ramp multipliers ----------');
 lines.push(block('REGIME_ATTACK_MULT',    REGIME_ATTACK_MULT));
 lines.push(block('REGIME_EXPR_RAMP_MULT', REGIME_EXPR_RAMP_MULT));
+lines.push('// ---------------- Turn-rate pressure gains -----------------------');
+lines.push(block('RATE_PRESSURE_START_TPS', RATE_PRESSURE_START_TPS));
+lines.push(block('RATE_PRESSURE_FULL_TPS',  RATE_PRESSURE_FULL_TPS));
+lines.push(block('RATE_DENSITY_GAIN_BY_COMPLEX',  RATE_DENSITY_GAIN_BY_COMPLEX));
+lines.push(block('RATE_VELOCITY_GAIN_BY_COMPLEX', RATE_VELOCITY_GAIN_BY_COMPLEX));
+lines.push(block('RATE_EXPR_GAIN_BY_COMPLEX',     RATE_EXPR_GAIN_BY_COMPLEX));
+lines.push(block('RATE_BOW_GAIN_BY_COMPLEX',      RATE_BOW_GAIN_BY_COMPLEX));
+lines.push(block('RATE_TREMOLO_GAIN_BY_COMPLEX',  RATE_TREMOLO_GAIN_BY_COMPLEX));
+lines.push(block('RATE_ACCENT_GAIN_BY_COMPLEX',   RATE_ACCENT_GAIN_BY_COMPLEX));
 
 fs.writeFileSync(OUT, lines.join('\n'), 'utf8');
 console.log(`[gen:max] wrote ${OUT}`);

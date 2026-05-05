@@ -8,13 +8,14 @@ XenaKube is a performance system with four parts working together:
 
 - A GAN i4 smart cube provides turn and gyro data.
 - Chrome connects to the cube over Web Bluetooth and forwards events to `relay.js`.
-- `XenaKubeEngine` maps those events into `S4` state, parameter permutations, sound-complex assignments, cube-algorithm detections, and expression values.
+- `XenaKubeEngine` maps those events into the selected cosmology, visible corner topology, S4 state, sound-complex assignments, cube-algorithm detections, and expression values.
 - Max/MSP + SWAM Cello turn the resulting voice events into playable phrases, while the browser dashboard visualizes the session in real time.
 
 In practice, each turn is more than a note trigger. A turn can:
 
-- permute the active `K_i` parameter bundle (density, intensity, duration)
-- permute the active `C_i` sound complex (`C1`-`C8`)
+- in beta-cosmo, permute the active `K_i` parameter bundle through physically followable corner topology
+- in alpha-cosmo, run the historical S4 K/C walks
+- advance the `C_i` alpha/beta/gamma phase
 - trigger a phrase shaped by face identity and current engine state
 - contribute to a Rubik's algorithm match that changes higher-level musical behavior
 - update the live GUI with cube state, sieve state, rolling-score output, and mode badges
@@ -38,14 +39,15 @@ GAN i4 Cube (BLE) --> Chrome Web Bluetooth --> relay.js (Node)
                                                Max/SWAM    Browser
 ```
 
-A performer physically turns a Bluetooth-enabled Rubik's cube. Each turn is a musical event: the cube's S4 group state permutes which sound parameters apply to which voice. Rubik's algorithms (like the "sexy move" R U R' U') are detected from the move stream and trigger performance mode changes — palette switching, voice mode toggles, freezes.
+A performer physically turns a Bluetooth-enabled Rubik's cube. Each turn is a musical event: beta-cosmo makes the visible corner topology determine which K_i density/intensity/duration bundle is active, while alpha-cosmo restores the earlier S4 walk model for comparison.
 
 ### Two Cubes, One Performance
 
-Following Xenakis' method, two S4 group cubes operate simultaneously:
+Following Xenakis' method as source material, XenaKube now exposes two cosmologies:
 
-- **K_i cube** -- maps 8 vertices to (Density × Intensity); Duration is neutral, since phrase time is owned by the 12 face-moves per Temporal Identity. Intensity covers the full ppp..fff palette, one unique dynamic per vertex; each turn permutes which level lands at which voice position.
-- **C_i cube** -- maps 8 vertices to sound complex types (C1-C8). Transformations reassign which synthesis method each voice uses.
+- **beta-cosmo** -- maps 8 physical corners to (Density x Intensity x Duration). Face turns are the only topology-changing actions, and the active read-head follows a tracked K corner through the permutation.
+- **alpha-cosmo** -- restores the historical Nomos Alpha-style S4 K/C walks: K_i and C_i assignments both permute through group state.
+- **C_i phase layer** -- maps 8 vertices to sound complex types (C1-C8) through alpha/beta/gamma tables; beta keeps S4 as shadow metadata, alpha applies it.
 
 ### Cube Algorithms
 
@@ -65,11 +67,11 @@ Detection still fires (the dashboard logs every match) but the effect handlers i
 
 ### Phrase Generation (Max/SWAM)
 
-Each cube turn triggers a **musical phrase**, not a single MIDI note. Phrase shape depends on the active complex type (C1-C8): pizzicato clouds, legato runs, glissando slides, sustained swells, ponticello tremolos. Phrases humanize velocity/pitch/timing and auto-release based on the Xenakis `duration` parameter. See `docs/synthesis-bridge.md` for the per-complex mapping detail.
+Each cube turn triggers a **musical phrase**, not a single MIDI note. Phrase shape depends on the active complex type (C1-C8): pizzicato clouds, legato runs, glissando slides, sustained swells, ponticello tremolos. Phrases humanize velocity/pitch/timing and resolve duration from K_i base time multiplied by the face signature, with complex floors protecting identity. See `docs/synthesis-bridge.md` for the per-complex mapping detail.
 
 ### Voice Modes
 
-- **Sequential** -- one voice at a time, cycling through positions
+- **Sequential** -- one voice at a time; beta follows the tracked K corner, alpha uses the historical walk index
 - **Polyphonic** -- all 8 voices sounding simultaneously, each turn morphs the ensemble
 
 ### Expression
@@ -78,7 +80,7 @@ Continuous gyro-derived control values (all normalized 0-1):
 - **Tilt** -- cube pitch angle
 - **Spin** -- angular velocity
 - **Deviation** -- distance from nearest S4 snap point
-- **Scramble** -- BFS distance from solved state in S4
+- **Scramble** -- exact quarter-turn distance over the visible 8-corner topology
 
 ## Requirements
 
@@ -102,6 +104,13 @@ Open the SWAM Cello bridge patch in Max 9+ (see `max/` + `CLAUDE.md` → "Synthe
 **2. Start the relay**
 
 ```bash
+npx tsx relay.js
+```
+
+Default cosmology is `beta-cosmo`. To boot the historical walk path for A/B testing:
+
+```bash
+$env:XK_COSMO = 'alpha-cosmo'
 npx tsx relay.js
 ```
 

@@ -6,7 +6,21 @@ const WebSocket = require('ws');
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
-const { XenaKubeEngine, stateToOsc, expressionToOsc, algorithmToOsc, voiceToOsc, solveToOsc, getBuiltinDiagrams, OSC, MIDI_ECHO_PORT } = require('./src/index.ts');
+const {
+  XenaKubeEngine,
+  PhrasePlanner,
+  PhraseEchoAuditor,
+  stateToOsc,
+  expressionToOsc,
+  algorithmToOsc,
+  voiceToOsc,
+  phrasePlanSummary,
+  phraseAuditSummary,
+  solveToOsc,
+  getBuiltinDiagrams,
+  OSC,
+  MIDI_ECHO_PORT,
+} = require('./src/index.ts');
 
 /*
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
@@ -14,6 +28,25 @@ const { XenaKubeEngine, stateToOsc, expressionToOsc, algorithmToOsc, voiceToOsc,
    Library now ignores device.id and uses this method
    Prefilled with your real MAC (AB:12:34:5E:83:F7)
 */
+
+// === Canonical-pose GAN→engine face-letter remap ===
+//
+// Assumes the performer holds the cube red-front, white-top at connect
+// time. GAN's `gan-web-bluetooth` library reports moves in factory sticker
+// frame (R = red, L = orange, U = white, D = yellow, F = green, B = blue),
+// not in current-orientation frame — empirically confirmed by a 6-turn
+// test in canonical pose. Without remap, the user's right-hand twist
+// (which physically turns blue) arrives at the engine as `B`, the engine
+// permutes the back-face vertex set, and the dashboard animates the wrong
+// face. Rotating the labels 180° around U (R↔L, F↔B) realigns the chain so
+// the engine, /xk/face OSC, dashboard, and algorithm-buffer HUD all speak
+// the user-pose face geometry.
+//
+// MIRROR: `CANONICAL_REMAP` constants in `public/js/cube-scene.js` and
+// `public/js/main.js` MUST track this table. Drift between any two
+// is caught by `[CUBE REMAP FAIL]` (per-move) and `[CUBE ALIGN FAIL]`
+// (geometric, on connect).
+const MOVE_REMAP = { R: 'L', L: 'R', F: 'B', B: 'F', U: 'U', D: 'D' };
 
 // === BLE Rate Measurement ===
 let _bleGyroCount = 0, _bleMoveCount = 0, _bleT0 = Date.now();
@@ -31,7 +64,14 @@ setInterval(() => {
 }, 5000);
 
 // === XenaKube Engine ===
-const engine = new XenaKubeEngine();
+// Default stays beta-cosmo. Set XK_COSMO=alpha-cosmo to run the historical
+// Nomos Alpha walk path without adding a dashboard mapping yet.
+const START_COSMO = process.env.XK_COSMO === 'alpha-cosmo' ? 'alpha-cosmo' : 'beta-cosmo';
+const engine = new XenaKubeEngine({ cosmology: START_COSMO });
+const phrasePlanner = new PhrasePlanner();
+const phraseAuditor = new PhraseEchoAuditor();
+let latestEngineState = engine.getState();
+console.log(`[COSMO] ${START_COSMO}`);
 
 // === OSC Clients ===
 const oscTD  = new Client('127.0.0.1', 8000);   // TouchDesigner — receives raw /gan/* + /xk/gyro
@@ -62,6 +102,13 @@ function quatMul(a, b) {
   };
 }
 function quatConj(q) { return { x: -q.x, y: -q.y, z: -q.z, w: q.w }; }
+// BLE → scene-frame axis remap, MUST mirror `setCubeQuat` in cube-scene.js
+// (BLE qx → scene -qx, BLE qy → scene qz, BLE qz → scene qy). Without this
+// the engine snaps a BLE-frame gyro against scene-frame S4 quaternions and
+// returns wrong cells, which the dashboard then renders as a chaotic ghost.
+function axisRemapToScene(q) {
+  return { x: -q.x, y: q.z, z: q.y, w: q.w };
+}
 function quatNorm(q) {
   const len = Math.sqrt(q.x**2 + q.y**2 + q.z**2 + q.w**2);
   if (len < 1e-10) return { x: 0, y: 0, z: 0, w: 1 };
@@ -175,9 +222,11 @@ function summarizeLatency(complex, stats) {
   return `C${complex} n=${stats.total} p50=${percentile(sorted, 0.50)}ms p95=${percentile(sorted, 0.95)}ms max=${sorted[sorted.length - 1] || 0}ms`;
 }
 
-function startVoiceLatencyProbe(output) {
+function startVoiceLatencyProbe(output, phrasePlans = []) {
   if (!output || !Array.isArray(output.active) || output.active.length === 0) return;
   const complexes = output.active.map((ev) => ev.complex | 0);
+  const firstPlan = Array.isArray(phrasePlans) ? phrasePlans[0] : null;
+  const expectedFirstNoteOnMs = firstPlan?.expected?.firstNoteOnMs ?? 0;
   pendingVoiceLatency.push({
     id: ++latencySeq,
     t0: Date.now(),
@@ -187,10 +236,14 @@ function startVoiceLatencyProbe(output) {
     mode: output.mode || 'unknown',
     expectedComplex: complexes[0],
     complexes,
+    expectedFirstNoteOnMs,
+    plannedNoteOnCount: firstPlan?.expected?.noteOnCount ?? null,
+    plannedBendStepCount: firstPlan?.expected?.bendStepCount ?? null,
+    plannedCompanionNoteOnCount: firstPlan?.expected?.companionNoteOnCount ?? null,
   });
   while (pendingVoiceLatency.length > 32) {
     const dropped = pendingVoiceLatency.shift();
-    console.error(`[LATENCY FAIL] dropped stale pending voice id=${dropped.id} C${dropped.expectedComplex} without noteon echo`);
+    console.error(`[LATENCY FAIL] dropped stale pending voice id=${dropped.id} C${dropped.expectedComplex} planFirst=${dropped.expectedFirstNoteOnMs}ms without noteon echo`);
   }
 }
 
@@ -202,6 +255,7 @@ function completeVoiceLatencyProbe(data) {
 
   const dt = Date.now() - pending.t0;
   const moveDt = Date.now() - pending.moveT0;
+  const planOverrunMs = Math.max(0, dt - (pending.expectedFirstNoteOnMs || 0));
   const complex = data.complex || pending.expectedComplex || 0;
   const expr = latestExprByVoice.get(data.voice);
   const exprText = expr ? `expr=${expr.val} exprAge=${Date.now() - expr.t}ms` : 'expr=unknown';
@@ -210,7 +264,8 @@ function completeVoiceLatencyProbe(data) {
   stats.total++;
   if (stats.samples.length > LATENCY_WINDOW) stats.samples.shift();
 
-  const base = `[LATENCY] voice->noteon ${dt}ms move->noteon ${moveDt}ms move=${pending.move} C${complex} face=${pending.face} expected=C${pending.expectedComplex} mode=${pending.mode} ${exprText}`;
+  const planText = `planFirst=${pending.expectedFirstNoteOnMs}ms planOverrun=${planOverrunMs}ms planNoteons=${pending.plannedNoteOnCount ?? '?'} planBends=${pending.plannedBendStepCount ?? '?'} planCompanions=${pending.plannedCompanionNoteOnCount ?? '?'}`;
+  const base = `[LATENCY] voice->noteon ${dt}ms move->noteon ${moveDt}ms ${planText} move=${pending.move} C${complex} face=${pending.face} expected=C${pending.expectedComplex} mode=${pending.mode} ${exprText}`;
   if (dt >= LATENCY_FAIL_MS) {
     console.error(`[LATENCY FAIL] ${base} | ${summarizeLatency(complex, stats)}`);
   } else if (dt >= LATENCY_WARN_MS) {
@@ -225,11 +280,34 @@ function completeVoiceLatencyProbe(data) {
 function expireVoiceLatencyProbes(now) {
   while (pendingVoiceLatency.length > 0 && now - pendingVoiceLatency[0].t0 >= LATENCY_MISSING_MS) {
     const stale = pendingVoiceLatency.shift();
-    console.error(`[LATENCY FAIL] no noteon echo within ${LATENCY_MISSING_MS}ms for voice id=${stale.id} move=${stale.move} C${stale.expectedComplex} face=${stale.face} mode=${stale.mode}`);
+    console.error(`[LATENCY FAIL] no noteon echo within ${LATENCY_MISSING_MS}ms for voice id=${stale.id} move=${stale.move} C${stale.expectedComplex} face=${stale.face} mode=${stale.mode} planFirst=${stale.expectedFirstNoteOnMs}ms planNoteons=${stale.plannedNoteOnCount ?? '?'}`);
   }
 }
 
 setInterval(() => expireVoiceLatencyProbes(Date.now()), 1000);
+
+function publishPhraseAuditResults(results) {
+  if (!Array.isArray(results) || results.length === 0) return;
+  for (const result of results) {
+    const line = phraseAuditSummary(result);
+    if (result.status === 'fail') {
+      console.error(`[PHRASE ECHO FAIL] ${line}`);
+    } else if (result.status === 'stolen') {
+      console.log(`[PHRASE ECHO STOLEN] ${line}`);
+    } else {
+      console.log(`[PHRASE ECHO OK] ${line}`);
+    }
+
+    const payload = JSON.stringify({ type: 'phrase_audit', data: result });
+    wss?.clients?.forEach((client) => {
+      if (client.readyState === WebSocket.OPEN) client.send(payload);
+    });
+  }
+}
+
+setInterval(() => {
+  publishPhraseAuditResults(phraseAuditor.poll(Date.now()));
+}, 250);
 
 function pushVisualSample(q, t) {
   visualSamples.push({ q, t });
@@ -352,7 +430,8 @@ function gyroLoop() {
       oscMax.send(OSC.GYRO,    kf.q.x, kf.q.y, kf.q.z, kf.q.w);
 
       // Expression at 60Hz from Kalman-filtered quat
-      const expr = engine.getExpressionFor([kf.q.x, kf.q.y, kf.q.z, kf.q.w], nowMs);
+      const sceneQ = axisRemapToScene(kf.q);
+      const expr = engine.getExpressionFor([sceneQ.x, sceneQ.y, sceneQ.z, sceneQ.w], nowMs);
       const exprMsgs = expressionToOsc(expr);
       for (const msg of exprMsgs) {
         oscMax.send(msg.address, ...msg.args);
@@ -385,6 +464,7 @@ gyroLoop();
 
 // Forward engine state over OSC on every state change + broadcast to dashboard
 engine.onState((state) => {
+  latestEngineState = state;
   const msgs = stateToOsc(state);
   for (const msg of msgs) {
     oscMax.send(msg.address, ...msg.args);
@@ -409,6 +489,13 @@ engine.onState((state) => {
 
 // Broadcast cube algorithm events
 engine.onAlgorithm((match) => {
+  if (match.algorithm.name === 't-perm') {
+    // Max's current t-perm reaction calls bang(), which resets bridge-side
+    // phrase state. Keep the TS shadow phrase planner aligned with that reset.
+    phrasePlanner.reset();
+    publishPhraseAuditResults(phraseAuditor.reset('panic'));
+  }
+
   // OSC algorithm message to Max
   const algMsg = algorithmToOsc(match);
   oscMax.send(algMsg.address, ...algMsg.args);
@@ -451,8 +538,10 @@ engine.onSolve(() => {
 // Broadcast voice output — and emit /xk/voice over OSC *only here* so it
 // fires on real voice transitions, not on every gyro packet (see D16).
 engine.onVoice((output) => {
-  startVoiceLatencyProbe(output);
-  const voiceMsgs = voiceToOsc(output);
+  const phrasePlans = phrasePlanner.planVoiceOutput(output, latestEngineState);
+  publishPhraseAuditResults(phraseAuditor.startTurn(phrasePlans));
+  startVoiceLatencyProbe(output, phrasePlans);
+  const voiceMsgs = voiceToOsc(output, phrasePlans);
   for (const msg of voiceMsgs) {
     oscMax.send(msg.address, ...msg.args);
   }
@@ -466,6 +555,19 @@ engine.onVoice((output) => {
       client.send(payload);
     }
   });
+
+  const planPayload = JSON.stringify({
+    type: 'phrase_plan',
+    data: {
+      plans: phrasePlans,
+      summary: phrasePlans.map(phrasePlanSummary),
+    },
+  });
+  wss?.clients?.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN) {
+      client.send(planPayload);
+    }
+  });
 });
 
 /** Send /xk/panic to Max (used on WS disconnect). Bridges/synth flush state. */
@@ -473,6 +575,7 @@ function sendPanic() {
   try {
     oscMax.send(OSC.PANIC);
   } catch (e) { /* OSC may be closed; safe to ignore */ }
+  publishPhraseAuditResults(phraseAuditor.reset('panic'));
 }
 
 // === MIDI echo listener (Phase E tier 2) ===
@@ -488,23 +591,32 @@ const midiEchoServer = new OscServer(MIDI_ECHO_PORT, '127.0.0.1', () => {
 
 midiEchoServer.on('message', (msg) => {
   // node-osc delivers [address, ...args]. Map to our WS schema.
-  // 4th atom `complex` (0..8) added 2026-04-24 — old patches that haven't
-  // reloaded the v8 will send 3 atoms; `msg[4]|0` resolves undefined → 0
-  // and the dashboard treats 0 as the neutral colour, so backwards-compat
-  // is implicit during a single reload window.
+  // Newer Max bridges append companion/plan metadata after `complex`; older
+  // reloaded patches leave those atoms undefined, which resolves to 0 and
+  // keeps dashboard rendering backwards-compatible during one reload window.
   const address = msg[0];
   let data = null;
-  if (address === OSC.MIDI_NOTEON)        data = { kind: 'noteon',   voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0, isCompanion: (msg[5]|0) === 1 };
-  else if (address === OSC.MIDI_NOTEOFF)  data = { kind: 'noteoff',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0 };
+  if (address === OSC.MIDI_NOTEON)        data = { kind: 'noteon',   voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0, isCompanion: (msg[5]|0) === 1, planId: msg[6]|0 };
+  else if (address === OSC.MIDI_NOTEOFF)  data = { kind: 'noteoff',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0, planId: msg[6]|0 };
   else if (address === OSC.MIDI_PANIC)    data = { kind: 'panic' };
-  else if (address === OSC.MIDI_BENDSTEP) data = { kind: 'bendstep', voice: msg[1]|0, fromPitch: msg[2]|0, toPitch: msg[3]|0, durMs: msg[4]|0, complex: msg[5]|0 };  // D59
-  else if (address === OSC.MIDI_EXPR)     data = { kind: 'expr',     voice: msg[1]|0, val: msg[2]|0, complex: msg[3]|0 };
+  else if (address === OSC.MIDI_BENDSTEP) data = { kind: 'bendstep', voice: msg[1]|0, fromPitch: msg[2]|0, toPitch: msg[3]|0, durMs: msg[4]|0, complex: msg[5]|0, planId: msg[6]|0 };  // D59
+  else if (address === OSC.MIDI_EXPR)     data = { kind: 'expr',     voice: msg[1]|0, val: msg[2]|0, complex: msg[3]|0, planId: msg[4]|0 };
   else return;
 
   if (data.kind === 'expr') {
     latestExprByVoice.set(data.voice, { val: data.val, complex: data.complex, t: Date.now() });
   }
   completeVoiceLatencyProbe(data);
+  if (data.kind === 'panic') {
+    publishPhraseAuditResults(phraseAuditor.reset('panic'));
+  } else {
+    publishPhraseAuditResults(phraseAuditor.recordEcho({
+      kind: data.kind,
+      planId: data.planId,
+      tMs: Date.now(),
+      isCompanion: data.isCompanion === true,
+    }));
+  }
 
   const payload = JSON.stringify({ type: 'midi_echo', data });
   wss?.clients?.forEach((client) => {
@@ -677,10 +789,30 @@ wss.on('connection', function connection(ws) {
                     else if (data.value.direction === 2) suffix = "2";
                     moveStr = `${face}${suffix}`;
                 }
+                // Canonical-pose face remap: GAN reports moves in factory
+                // sticker frame (R = red, F = green, etc.), but the user holds
+                // red-front white-top. Rotating the labels 180° around U
+                // (R↔L, F↔B) makes the engine see user-pose-frame moves so
+                // every downstream consumer (face-gesture, dashboard
+                // animation, /xk/face OSC, algorithm-buffer HUD) speaks the
+                // user's geometry. The cube-algorithm detector remains
+                // orientation-invariant (24 rotation variants pre-expanded
+                // in cube-algorithm.ts), so Sune-as-user-performs-it still
+                // matches Sune in the book.
+                //
+                // MIRROR: cube-scene.js `CANONICAL_REMAP` and main.js
+                // `CANONICAL_REMAP` MUST track this table. Drift is caught by
+                // `[CUBE REMAP FAIL]` (per-move) and `[CUBE ALIGN FAIL]`
+                // (geometric, on connect).
+                if (moveStr && moveStr.length > 0) {
+                    const remappedFace = MOVE_REMAP[moveStr[0]] || moveStr[0];
+                    moveStr = remappedFace + moveStr.slice(1);
+                }
+
                 console.log(`[MOVE] ${moveStr}`);
                 _bleMoveCount++;
 
-                // Forward raw turn to TD
+                // Forward turn to TD (post-remap so TD sees user-pose moves too)
                 oscTD.send(OSC.GAN_TURN, moveStr);
 
                 // Tag move for dashboard broadcast, then feed engine
@@ -697,16 +829,21 @@ wss.on('connection', function connection(ws) {
                     // kf.q still drives OSC (low-latency audio); the buffer
                     // feeds the lagged-but-smooth dashboard cube.
                     pushVisualSample(quatNorm(q), Date.now());
-                    // Feed calibrated orientation to engine at BLE rate so
-                    // snap cells are centered on the user's zero pose (see
-                    // `engineGyroZeroInv` declaration). Triggers full state
-                    // burst: OSC + WS broadcast.
-                    const cg = quatMul(engineGyroZeroInv, kf.q);
+                    // Feed calibrated, scene-frame orientation to engine at
+                    // BLE rate so snap cells are centered on the user's zero
+                    // pose AND in the same frame as the dashboard's S4 quats
+                    // (see `axisRemapToScene` declaration). Triggers full
+                    // state burst: OSC + WS broadcast.
+                    const cg = quatMul(engineGyroZeroInv, axisRemapToScene(kf.q));
                     engine.onGyro(cg.x, cg.y, cg.z, cg.w);
                 }
             }
             else if (data.type === 'set_gyro_smoothing') {
                 gyroSmoothing = Math.max(0, Math.min(1, parseFloat(data.value) || 0));
+            }
+            else if (data.type === 'set_still_threshold') {
+                const v = parseFloat(data.value);
+                if (Number.isFinite(v)) engine.motion.setThreshold(v);
             }
             else if (data.type === 'get_diagrams') {
                 const diagrams = engine.getDiagrams().map(d => ({
@@ -732,11 +869,22 @@ wss.on('connection', function connection(ws) {
                 const mode = {};
                 if (data.cCube) mode.cCube = data.cCube;
                 if (data.kCube) mode.kCube = data.kCube;
+                if (data.cosmology === 'alpha-cosmo' || data.cosmology === 'beta-cosmo') mode.cosmology = data.cosmology;
                 engine.setMode(mode);
+                if (mode.cosmology) {
+                    phrasePlanner.reset();
+                    sendPanic();
+                }
                 console.log(`[MODE] ${JSON.stringify(mode)}`);
+            }
+            else if (data.type === 'set_tracked_k') {
+                engine.setTrackedK(Number(data.value));
+                console.log(`[TRACKED_K] ${Number(data.value)}`);
             }
             else if (data.type === 'reset') {
                 engine.reset();
+                phrasePlanner.reset();
+                publishPhraseAuditResults(phraseAuditor.reset('panic'));
                 console.log('[RESET] Engine reset');
             }
             else if (data.type === 'cube_solved') {
@@ -747,7 +895,7 @@ wss.on('connection', function connection(ws) {
             else if (data.type === 'zero_gyro') {
                 // Dashboard zeroed its visual frame; mirror that here so the
                 // engine's snap computation re-centers on the same rest pose.
-                engineGyroZeroInv = quatConj(quatNorm(kf.q));
+                engineGyroZeroInv = quatConj(quatNorm(axisRemapToScene(kf.q)));
                 console.log('[ZERO] engine gyro zero captured');
             }
         } catch (e) {

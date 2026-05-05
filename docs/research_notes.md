@@ -25,13 +25,13 @@ Nomos Alpha was the first composition to use group theory (specifically the rota
 | ~~Two paths V1 (loud/short) and V2 (quiet/long)~~ | 218–220 | XenaKube collapses to a single path — V1's character lives implicitly per vertex, V2 retired in favour of dynamic-palette completeness |
 | C_i sound complex types (C1–C8) | 222–224 | `complexes.ts`: 8 timbral categories |
 | α/β/γ cyclic mapping rotation | 222 | `complexes.ts`: ALPHA, BETA, GAMMA arrays, cycle every 3 subs |
-| Second independent cube for C_i | 222–224 | `complexes.ts`: ComplexCube class. Advance law shifted by fixed `C_SHIFT = U` in `engine.ts` so C diverges from K (Xenakis §IV: C_i and K_i traverse *separate* closed graphs, "C_i graph {D Q12}" vs "K_i graph {D Q3}") |
-| Kinematic diagrams (graph paths through S4) | 220–222 | `kinematic.ts`: cyclic subgroups + Hamiltonian path |
+| Second C_i shadow layer | 222-224 | `complexes.ts`: C1-C8 alpha/beta/gamma phase tables remain, but S4 C-walks are non-permuting shadow metadata. `getAssignments()` returns the phase table directly so the ghost/precomposed layer cannot move complex labels around hidden corners. |
+| Kinematic diagrams (graph paths through S4) | 220-222 | `kinematic.ts`: cyclic subgroups + Hamiltonian path retained as shadow paths; diagrams no longer drive K_i vertex permutation. |
 | Sequential (t₀) vs simultaneous (t₁) temporal modes | 220 | `voice-engine.ts`: sequential/polyphonic modes |
 | L(m,n) sieve function for pitch | 230–234 | `sieve.ts`: evaluateSieve, prime residual classes mod 18 |
 | Metabola (sieve mutation via residual class multiplication) | 230–234 | `sieve.ts`: metabola(), advance every 3 substitutions |
 | Tetrahedral orbit classification (even/odd) | 218 | `group.ts`: tetraOrbit(), vertices {0,2,5,7} vs {1,3,4,6} |
-| θ₀ (complexes traverse vertices) / θ₁ (H×X traverses) | 214–217 | Engine modes: direct, diagram, algorithmic, gyro |
+| theta0 / theta1 traversal idea | 214-217 | Retained as research vocabulary only. Live topology is physical corner permutation; direct/diagram/algorithmic/gyro modes are non-permuting shadow metadata. |
 
 ### Added by XenaKube (not in Xenakis)
 
@@ -42,8 +42,8 @@ Nomos Alpha was the first composition to use group theory (specifically the rota
 | Orientation-independent algorithm matching | A cuber's muscle memory is face-relative. Expanding each algorithm to all 24 rotations means a sexy-move pattern works on any face pair. |
 | CFOP-core algorithm book (7 algorithms) | Current vocabulary: 6 CFOP fundamentals (sexy-move, oll-cross, sune, anti-sune, u-perm, t-perm) + Niklas (archetypal commutator). Orientation-independent via 24-rotation expansion. The 4-move sledgehammer was intentionally dropped — too easy to hit accidentally. See `docs/todo.md` Phase B: pivoting to a ~20-entry phrase library where most algorithm matches become composed musical phrases rather than mode-toggles. |
 | Gyro → S4 snap (continuous → discrete) | The cube's physical orientation in 3D maps to the nearest of the 24 S4 rotations via quaternion dot product. This bridges continuous gesture and discrete group math. |
-| Expression parameters (tilt, spin, deviation, scramble) | Continuous gyro-derived values for real-time sound control. Deviation = how far from the nearest S4 snap; scramble = BFS distance from identity. |
-| Scramble factor as meta-parameter | BFS distance from identity in the S4 Cayley graph. Diameter is ≤6 (small group). Normalized 0–1. "How far from solved" as a musical parameter. |
+| Expression parameters (tilt, spin, deviation, scramble) | Continuous gyro-derived values for real-time sound control. Deviation = how far from the nearest S4 snap; scramble = exact visible-corner solve distance. |
+| Scramble factor as meta-parameter | Exact quarter-turn distance over all `8! = 40,320` visible corner permutations. Normalized 0-1. This is robust and small enough to precompute at module load; it ignores edges and corner twist until a full-cube solver layer is introduced. |
 | Browser dashboard as performance HUD | Makes the abstract math legible in real time: 3D cube, vertex parameters, complex assignments, sieve strip, cube-algorithm progress, expression gauges. |
 | Kalman filter gyro upsampling | BLE delivers ~10Hz; synthesis needs 60Hz. Velocity-aware quaternion prediction fills the gaps. |
 
@@ -59,7 +59,7 @@ Nomos Alpha was the first composition to use group theory (specifically the rota
 
 ### Move mapping
 
-Physical Rubik's face turns (18 moves: 6 faces × CW/CCW/180°) map to whole-cube rotations. Opposite-face turns map to the same S4 element (R and L' are the same rotation). The 18 moves collapse to approximately 9 distinct S4 elements.
+Physical Rubik's face turns now drive the visible 8-corner topology directly: each quarter turn applies a local 4-cycle to the affected face in `corner-topology.ts`. S4 remains for orientation expansion, tetra parity, and gyro snap metadata; it no longer walks K_i / C_i vertex assignment.
 
 This is a key design choice: Xenakis used the full S4 group, but a real Rubik's cube is "bigger" than S4 (the Rubik's group has ~4.3×10¹⁹ elements). We project the high-dimensional Rubik's state onto S4 by treating each turn as a whole-cube rotation, ignoring the internal slice structure.
 
@@ -166,7 +166,7 @@ Speedcubers solve the equivalent problem by **chunking** — `R U R' U'` isn't f
 
 2. **Vocabulary, not modes.** Grow the algorithm book from seven mode-toggles into ≈20 short (≤6-move) *musical phrase* algorithms — "rising arco arpeggio," "pizz cluster," "harmonic fanfare," "descending sul pont line." These are the performer's sentences.
 
-3. **Forward-model audibility.** Each individual face-turn should produce a sound the performer can predict before committing to the turn. One way: fix each of the 12 face-moves (L / L' / R / R' / F / F' / B / B' / U / U' / D / D') to its own gesture-type and phrase duration, using the GAN cube's color-fixed face identity (not the hand frame). Then K_i / C_i permutation modulates the *content* inside that known shape, rather than choosing or stretching the shape.
+3. **Forward-model audibility.** Each individual face-turn should produce a sound the performer can predict before committing to the turn. Current rule: fix each of the 12 face-moves (L / L' / R / R' / F / F' / B / B' / U / U' / D / D') to its own gesture-type, register bias, and duration multiplier, using the GAN cube's color-fixed face identity (not the hand frame). K_i still supplies the base duration/density/dynamic material, so the face amplifies the material rather than replacing it.
 
 4. **Dashboard diet.** The full-state HUD is a debug view. Performance mode should surface only what the performer needs to decide their next move: the active vertex's upcoming voice, which algorithms are one move from completing, distance-to-solved. More information at all times, paradoxically, means less comprehension.
 
@@ -178,7 +178,7 @@ Speedcubers solve the equivalent problem by **chunking** — `R U R' U'` isn't f
 
 ### The current split (circa Phase A1)
 
-Engine-side (`src/*`) computes *structural* decisions: which S4 element, which complex, which vertex, which face identity, what density/intensity, and the face-owned duration table. Max-side (`max/xk_swam.js`) computes *phrase-level* note-generation: which pitches inside the `foldToRange` window, how many rebows, stochastic timing, the per-complex phrase contour. Both layers make composition-relevant decisions; only the engine side is reachable from the dashboard.
+Engine-side (`src/*`) computes *structural* decisions: which cosmology is active, which S4 element or physical corner permutation is live, which complex, which vertex, which face identity, what density/intensity/base-duration, and the face duration multiplier. Max-side (`max/xk_swam.js`) computes *phrase-level* note-generation: which pitches inside the `foldToRange` window, how many rebows, stochastic timing, the per-complex phrase contour. Both layers make composition-relevant decisions; only the engine side is reachable from the dashboard.
 
 This worked fine as long as the only consumer of the bridge's output was the cellist's ear. It stops working cleanly the moment we want a second consumer — real-time notation, a recording log, a training tool — because the dashboard can't know what Max is doing without re-implementing the Max RNG and sieve logic in JavaScript.
 
@@ -216,7 +216,7 @@ A typical CFOP speedsolve: ~55 moves in 10–15 seconds (~4–5 turns/sec). Thro
 
 | Outcome | Count in ~55 moves |
 |---------|-------------------|
-| Full vertex cycles (step % 8) | ~7 |
+| Tracked-corner laps / alpha step cycles | ~7 |
 | Sieve metabolae (every 3 turns) | ~18 (full residual class cycle) |
 | α/β/γ phase changes | 6 full cycles |
 | Cube-algorithm detections | Many — a CFOP solve IS a sequence of algorithms |
@@ -250,7 +250,23 @@ A solve starts scrambled (factor ~1.0) and ends solved (factor 0.0). This arc is
 - Algorithms firing during a solve mark structural waypoints: cross done → first plateau, F2L → midpoint, OLL → approaching resolution, PLL → final gesture
 - Each algorithm could leave acoustic residue (reverb tail, pitch memory, sustained harmonic) that accumulates, so the solve builds a harmonic trail even as events fly by
 
-### Engine adaptation (not yet implemented)
+### Current implementation: bounded turn-rate pressure
+
+The current bridge keeps the event-level instrument intact and adds a continuous
+pressure scalar rather than switching synthesis modes:
+
+`turnRatePressure = clamp((turnRate - 0.3) / (3.0 - 0.3), 0, 1)`
+
+That scalar feeds per-complex `RATE_*` gains in `src/swam-mapping.ts`.
+Fast turning can raise density ceilings, note velocity, CC 11 expression peak,
+bow pressure, C8 tremolo steady rate, and C5 bow-pressure accent. The gains are
+bounded and asymmetric by design: C8 density gain is zero because its density is
+SWAM's internal tremolo, C6/C7 density gains stay small to preserve their
+ordered-slide identities, and C5 keeps its hard wild-gliss floor instead of
+letting tempo redefine the complex. The result is a dramatic pressure layer on
+top of K_i, not a replacement for K_i.
+
+### Future engine adaptation
 
 The engine could detect the current regime from inter-turn interval and adapt behavior:
 

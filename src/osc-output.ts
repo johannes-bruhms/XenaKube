@@ -8,6 +8,8 @@
 import type { XenaKubeState } from './types.js';
 import type { ExpressionState } from './expression.js';
 import type { CubeAlgorithmMatch } from './cube-algorithm.js';
+import type { PhrasePlan } from './phrase-plan.js';
+import type { VoiceOutput } from './voice-engine.js';
 import { OSC, vertexAddr, complexAddr } from './osc-schema.js';
 
 /** OSC message: address + args */
@@ -99,12 +101,14 @@ export function solveToOsc(): OscMessage {
  *
  * When `output.face` is null (diagram-driven advance, half-turns, future
  * silent paths), `/xk/face -` resets the bridge's pending face so stale
- * face duration cannot leak into the next voice.
+ * face multiplier cannot leak into the next voice.
  */
-export function voiceToOsc(output: import('./voice-engine.js').VoiceOutput): OscMessage[] {
+export function voiceToOsc(output: VoiceOutput, phrasePlans: PhrasePlan[] = []): OscMessage[] {
   const msgs: OscMessage[] = [];
   msgs.push({ address: OSC.FACE, args: [output.face ?? '-'] });
-  for (const ev of output.active) {
+  output.active.forEach((ev, i) => {
+    const plan = phrasePlans[i];
+    if (plan) msgs.push(phrasePlanToOsc(plan));
     msgs.push({
       address: OSC.VOICE,
       args: [
@@ -115,6 +119,25 @@ export function voiceToOsc(output: import('./voice-engine.js').VoiceOutput): Osc
         ev.params.duration,
       ],
     });
-  }
+  });
   return msgs;
+}
+
+/** Shadow TypeScript phrase plan -> compact OSC summary for Max logging.
+ *  The full event plan is broadcast to the dashboard over WebSocket; this OSC
+ *  summary keeps UDP payloads small while Max remains the legacy renderer. */
+export function phrasePlanToOsc(plan: PhrasePlan): OscMessage {
+  return {
+    address: OSC.PHRASE_PLAN,
+    args: [
+      plan.id,
+      plan.complex,
+      plan.face ?? '-',
+      plan.durationSec,
+      plan.events.length,
+      plan.expected.noteOnCount,
+      plan.expected.bendStepCount,
+      plan.expected.companionNoteOnCount,
+    ],
+  };
 }

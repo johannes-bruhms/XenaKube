@@ -1,90 +1,61 @@
-// === Scramble Distance: BFS distance from identity in S4 Cayley graph ===
+// === Corner Solve Distance ===
 //
-// Precomputes distance from identity for all 24 elements.
-// Used as a continuous meta-parameter (0 = solved, 1 = maximally scrambled).
+// Precomputes exact quarter-turn distance from the solved 8-corner topology
+// to every visible corner permutation. This is intentionally smaller than a
+// full Rubik's-cube solver: XenaKube's current K_i topology only depends on
+// which K-corner sits in which visible corner, not edge cubies or corner twist.
 
-import type { GroupElement } from './types.js';
-import { ELEMENTS, CAYLEY, IDENTITY } from './group.js';
+import type { Permutation8 } from './types.js';
+import {
+  IDENTITY_CORNER_PERM,
+  CORNER_QUARTER_MOVES,
+  applyCornerMove,
+  encodeCornerPermutation,
+} from './corner-topology.js';
 
-// BFS from identity using the 3 generators (R, U, F) + their inverses
-// to find shortest path to each element.
-function computeDistances(): number[] {
-  const dist = new Array(24).fill(-1);
-  dist[IDENTITY] = 0;
-  const queue: number[] = [IDENTITY];
+export const CORNER_STATE_COUNT = 40320;
 
-  // Generator indices: we need to find which elements correspond to our 3 generators + inverses
-  // In the Cayley table, multiplying identity by element i gives element i.
-  // Our generators are elements 1 (R_CW applied to ID), found by BFS order.
-  // Rather than hardcode, use all elements as potential single-step moves in the Cayley graph.
-  // Actually: the Cayley graph with generators {R, U, F} means edges connect
-  // element a to CAYLEY[a][g] for each generator g.
+function computeCornerDistances(): Int8Array {
+  const dist = new Int8Array(CORNER_STATE_COUNT);
+  dist.fill(-1);
 
-  // Find generator elements: they are CAYLEY[0][g] for the first 3 non-identity elements
-  // added during BFS. Since ELEMENTS is BFS-generated from {R,U,F}, elements 1,2,3 are
-  // the direct generator results. But to be safe, collect all neighbors.
+  const queue: Permutation8[] = [IDENTITY_CORNER_PERM];
+  dist[encodeCornerPermutation(IDENTITY_CORNER_PERM)] = 0;
 
-  // Generators in the Cayley graph = the elements that are 1 step from identity.
-  // Since ELEMENTS is BFS from {R_CW, U_CW, F_CW}, elements at distance 1 are indices 1,2,3.
-  // Include their inverses for an undirected distance metric.
-  const generators: GroupElement[] = [];
-  for (let i = 0; i < 24; i++) {
-    // Check: is element i reachable in 1 step from identity via any single generator?
-    // CAYLEY[0][i] = i (identity * x = x), so we need to check if i is a generator.
-    // The BFS in group.ts uses R_CW, U_CW, F_CW — those are elements 1, 2, 3 in BFS order.
-    // Their inverses are INVERSES[1], INVERSES[2], INVERSES[3].
-  }
-  // Simpler: use all 24 as an adjacency definition based on the original 3 generators.
-  // Element a connects to CAYLEY[a][1], CAYLEY[a][2], CAYLEY[a][3] (right-multiply by generators)
-  // and CAYLEY[a][inv(1)], CAYLEY[a][inv(2)], CAYLEY[a][inv(3)] for undirected.
-  const genIndices = [1, 2, 3]; // First 3 elements after identity in BFS = the 3 generators
+  for (let head = 0; head < queue.length; head++) {
+    const current = queue[head];
+    const currentDist = dist[encodeCornerPermutation(current)];
 
-  while (queue.length > 0) {
-    const current = queue.shift()!;
-    for (const g of genIndices) {
-      // Right-multiply by generator
-      const next = CAYLEY[current][g];
-      if (dist[next] === -1) {
-        dist[next] = dist[current] + 1;
-        queue.push(next);
-      }
-      // Right-multiply by generator inverse (for undirected distance)
-      const invG = CAYLEY[current][findInverse(g)];
-      if (dist[invG] === -1) {
-        dist[invG] = dist[current] + 1;
-        queue.push(invG);
-      }
+    for (const move of CORNER_QUARTER_MOVES) {
+      const next = applyCornerMove(current, move)!;
+      const idx = encodeCornerPermutation(next);
+      if (dist[idx] !== -1) continue;
+      dist[idx] = currentDist + 1;
+      queue.push(next);
     }
   }
 
   return dist;
 }
 
-function findInverse(el: GroupElement): GroupElement {
-  for (let i = 0; i < 24; i++) {
-    if (CAYLEY[el][i] === IDENTITY) return i;
-  }
-  return IDENTITY;
+const DISTANCES = computeCornerDistances();
+
+/** Maximum exact quarter-turn distance across the visible 8-corner topology. */
+export const MAX_DISTANCE = Math.max(...Array.from(DISTANCES));
+
+/** Exact quarter-turn distance from this visible corner permutation to solved. */
+export function scrambleDistance(perm: Permutation8): number {
+  return DISTANCES[encodeCornerPermutation(perm)];
 }
 
-/** Precomputed BFS distances from identity */
-const DISTANCES = computeDistances();
-
-/** Maximum distance in the Cayley graph */
-export const MAX_DISTANCE = Math.max(...DISTANCES);
-
-/** BFS distance from identity (0 = solved, MAX_DISTANCE = furthest) */
-export function scrambleDistance(element: GroupElement): number {
-  return DISTANCES[element];
-}
-
-/** Normalized scramble factor: 0 = solved, 1 = maximally scrambled */
-export function scrambleFactor(element: GroupElement): number {
+/** Normalized corner solve distance: 0 = solved, 1 = farthest corner topology. */
+export function scrambleFactor(perm: Permutation8): number {
   if (MAX_DISTANCE === 0) return 0;
-  return DISTANCES[element] / MAX_DISTANCE;
+  return scrambleDistance(perm) / MAX_DISTANCE;
 }
 
-/** Get all distances (for dashboard visualization of the full Cayley graph) */
+/** Get all precomputed corner distances, indexed by Lehmer code. */
 export function getAllDistances(): number[] {
-  return [...DISTANCES];
+  return Array.from(DISTANCES);
 }
+

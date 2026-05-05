@@ -17,7 +17,7 @@ export const OSC = {
   GROUP_C:       '/xk/group/c',         // i:elementIndex (0–23)
 
   // ── vertex / complex (positional addresses) ──────────────────
-  VERTEX:        '/xk/vertex/',         // suffix 1..8 — args: f:density, s:intensity, f:duration
+  VERTEX:        '/xk/vertex/',         // suffix 1..8 - args: f:density, s:intensity, f:durationBase
   COMPLEX:       '/xk/complex/',        // suffix 1..8 — args: i:complexType (1..8)
 
   // ── path / cycle / orbit / sieve ─────────────────────────────
@@ -47,7 +47,8 @@ export const OSC = {
   // ── events ───────────────────────────────────────────────────
   ALGORITHM:     '/xk/algorithm',       // s:algorithmName (Rubik's cube algorithm match)
   FACE:          '/xk/face',            // s:"L"|"L'"|"R"|"R'"|"F"|"F'"|"B"|"B'"|"U"|"U'"|"D"|"D'"
-  VOICE:         '/xk/voice',           // i:vertexIdx, i:complexType, f:density, s:intensity, f:duration
+  VOICE:         '/xk/voice',           // i:vertexIdx, i:complexType, f:density, s:intensity, f:durationBase
+  PHRASE_PLAN:   '/xk/phrase/plan',     // i:planId, i:complexType, s:face|"-", f:durationSec, i:eventCount, i:noteOnCount, i:bendStepCount, i:companionNoteOnCount. Sent immediately before the matching /xk/voice.
   PANIC:         '/xk/panic',           // (no args) — relay WS disconnect
 
   // ── Max-internal helper (not emitted by relay) ───────────────
@@ -60,11 +61,11 @@ export const OSC = {
   //    so the rolling piano-roll can colour by technique and connect
   //    glissando steps in C5/C6/C7). Keyswitches bypass the wrappers
   //    so technique-select toggles don't pollute the score.
-  MIDI_NOTEON:    '/xk/midi/noteon',     // i:voice (1..POOL_SIZE), i:pitch, i:velocity, i:complex (0=unknown, 1..8=Cn)
-  MIDI_NOTEOFF:   '/xk/midi/noteoff',    // i:voice, i:pitch, i:velocity, i:complex
+  MIDI_NOTEON:    '/xk/midi/noteon',     // i:voice (1..POOL_SIZE), i:pitch, i:velocity, i:complex (0=unknown, 1..8=Cn), i:isCompanion, i:planId
+  MIDI_NOTEOFF:   '/xk/midi/noteoff',    // i:voice, i:pitch, i:velocity, i:complex, i:unusedFlag, i:planId
   MIDI_PANIC:     '/xk/midi/panic',      // (no args) — clear pending notes on bang/panic
-  MIDI_BENDSTEP:  '/xk/midi/bendstep',   // i:voice, i:fromPitch, i:toPitch, i:durMs, i:complex — D59 cross-string slide via pitchbend wheel; held source note bends from fromPitch to toPitch over durMs, then noteOff(source)+noteOn(target) fires (echoed via MIDI_NOTEOFF/MIDI_NOTEON as usual). Dashboard interpolates the curve in its segment model and bridges the gap between source-end and target-start visually.
-  MIDI_EXPR:      '/xk/midi/expr',       // i:voice, i:val (0..127), i:complex — emitted from cc()/ccForce() on every CC 11 (Expression) write so the dashboard can size brushes by audible dynamics rather than per-note velocity (which is a poor proxy: SWAM Cello drives ongoing loudness via CC 11 ramps per the D47 phrase-arc invariant). Pure additive telemetry; no synthesis state depends on it.
+  MIDI_BENDSTEP:  '/xk/midi/bendstep',   // i:voice, i:fromPitch, i:toPitch, i:durMs, i:complex, i:planId — D59 cross-string slide via pitchbend wheel; held source note bends from fromPitch to toPitch over durMs, then noteOff(source)+noteOn(target) fires (echoed via MIDI_NOTEOFF/MIDI_NOTEON as usual). Dashboard interpolates the curve in its segment model and bridges the gap between source-end and target-start visually.
+  MIDI_EXPR:      '/xk/midi/expr',       // i:voice, i:val (0..127), i:complex, i:planId — emitted from cc()/ccForce() on every CC 11 (Expression) write so the dashboard can size brushes by audible dynamics rather than per-note velocity (which is a poor proxy: SWAM Cello drives ongoing loudness via CC 11 ramps per the D47 phrase-arc invariant). Pure additive telemetry; no synthesis state depends on it.
 
   // ── raw pass-through to TouchDesigner (port 8000) ────────────
   GAN_TURN:      '/gan/turn',           // s:moveString ("R","U'","F2",...)

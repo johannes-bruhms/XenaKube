@@ -1,14 +1,17 @@
-// === Sound Complexes C1-C8 with α/β/γ Cyclic Mappings (pp. 222-224) ===
+// === Sound Complexes C1-C8 with alpha/beta/gamma Cyclic Mappings ===
 //
 // Xenakis defines 8 macroscopic sound complex TYPES, then 3 different ways
-// (α, β, γ) to assign those types to the 8 vertices of a SECOND cube.
-// The mapping cycles α → β → γ → α every 3 substitutions.
+// to assign those types to the 8 vertices of a second cube. The mapping
+// cycles alpha -> beta -> gamma -> alpha every 3 substitutions in
+// alpha-cosmo (Xenakis-faithful S4 permutation path).
 //
-// The second cube operates independently from the K_i parameter cube,
-// with its own S4 group state.
+// Beta-cosmo locks the cyclic phase to ALPHA and treats the C-cube's
+// groupElement as the gyro-snapped orientation. The alpha mapping rotates
+// with the ghost cube: C-assignments at each slot are ALPHA permuted by
+// `getPermutation(groupElement)`. Phase clock never advances in beta-cosmo.
 
-import { ComplexType, type CyclicPhase, type GroupElement } from './types.js';
-import { getPermutation, multiply, IDENTITY } from './group.js';
+import { ComplexType, type CosmologyMode, type CyclicPhase, type GroupElement } from './types.js';
+import { multiply, IDENTITY, getPermutation } from './group.js';
 
 // === The 8 sound complex descriptions ===
 export const COMPLEX_DESCRIPTIONS: Record<ComplexType, string> = {
@@ -22,46 +25,42 @@ export const COMPLEX_DESCRIPTIONS: Record<ComplexType, string> = {
   [ComplexType.Atom]:                 'atom: quasi-unison interferences',
 };
 
-// === α, β, γ mappings (from primary source pp. 222) ===
-// Each array maps vertex position [0..7] → ComplexType
-// Read from the table: row = sound description, columns = α, β, γ assignment
-
 const C = ComplexType;
 
-/** α mapping: vertex index → complex type */
+/** alpha mapping: vertex index -> complex type */
 const ALPHA: ComplexType[] = [
-  C.AtaxicCloud,           // vertex 0 → C1
-  C.OrderedSlidingFlat,    // vertex 1 → C7
-  C.OrderedCloudFlat,      // vertex 2 → C3
-  C.AtaxicSliding,         // vertex 3 → C5
-  C.OrderedSlidingAscDesc, // vertex 4 → C6
-  C.OrderedCloudAscDesc,   // vertex 5 → C2
-  C.Atom,                  // vertex 6 → C8
-  C.IonizedAtom,           // vertex 7 → C4
+  C.AtaxicCloud,
+  C.OrderedSlidingFlat,
+  C.OrderedCloudFlat,
+  C.AtaxicSliding,
+  C.OrderedSlidingAscDesc,
+  C.OrderedCloudAscDesc,
+  C.Atom,
+  C.IonizedAtom,
 ];
 
-/** β mapping: vertex index → complex type */
+/** beta mapping: vertex index -> complex type */
 const BETA: ComplexType[] = [
-  C.AtaxicCloud,           // vertex 0 → C1
-  C.OrderedCloudAscDesc,   // vertex 1 → C2
-  C.OrderedCloudFlat,      // vertex 2 → C3
-  C.AtaxicSliding,         // vertex 3 → C5
-  C.OrderedSlidingAscDesc, // vertex 4 → C6
-  C.OrderedSlidingFlat,    // vertex 5 → C7
-  C.Atom,                  // vertex 6 → C8
-  C.IonizedAtom,           // vertex 7 → C4
+  C.AtaxicCloud,
+  C.OrderedCloudAscDesc,
+  C.OrderedCloudFlat,
+  C.AtaxicSliding,
+  C.OrderedSlidingAscDesc,
+  C.OrderedSlidingFlat,
+  C.Atom,
+  C.IonizedAtom,
 ];
 
-/** γ mapping: vertex index → complex type */
+/** gamma mapping: vertex index -> complex type */
 const GAMMA: ComplexType[] = [
-  C.AtaxicCloud,             // vertex 0 → C1
-  C.AtaxicSliding,           // vertex 1 → C5
-  C.OrderedSlidingAscDesc,   // vertex 2 → C6
-  C.OrderedCloudAscDesc,     // vertex 3 → C2
-  C.OrderedCloudFlat,        // vertex 4 → C3
-  C.IonizedAtom,             // vertex 5 → C4
-  C.Atom,                    // vertex 6 → C8
-  C.OrderedSlidingFlat,      // vertex 7 → C7
+  C.AtaxicCloud,
+  C.AtaxicSliding,
+  C.OrderedSlidingAscDesc,
+  C.OrderedCloudAscDesc,
+  C.OrderedCloudFlat,
+  C.IonizedAtom,
+  C.Atom,
+  C.OrderedSlidingFlat,
 ];
 
 const PHASE_MAPPINGS: Record<CyclicPhase, ComplexType[]> = {
@@ -72,42 +71,53 @@ const PHASE_MAPPINGS: Record<CyclicPhase, ComplexType[]> = {
 
 const PHASE_ORDER: CyclicPhase[] = ['alpha', 'beta', 'gamma'];
 
-/** State of the C_i (sound complex) cube */
+/** State of the C_i sound-complex cube. */
 export class ComplexCube {
-  /** Current S4 group element for the C_i cube */
-  groupElement: GroupElement = 0;
+  /** S4 element for the C_i cube: live in alpha-cosmo, shadow in beta-cosmo. */
+  groupElement: GroupElement = IDENTITY;
 
-  /** Current cyclic phase */
+  /** Current cyclic phase. */
   phase: CyclicPhase = 'alpha';
 
-  /** Count of substitutions since last phase change */
+  /** Count of substitutions since last phase change. */
   private substitutionCount = 0;
 
-  /** Advance the C_i cube by a group transformation */
+  /** Advance the shadow C_i S4 state and the alpha/beta/gamma phase clock. */
   transform(el: GroupElement): void {
     this.groupElement = multiply(this.groupElement, el);
-    this.substitutionCount++;
+    this.advancePhaseClock();
+  }
 
-    // Cycle α → β → γ every 3 substitutions
+  /** Advance only the alpha/beta/gamma phase clock, with no S4 permutation. */
+  advancePhase(): void {
+    this.advancePhaseClock();
+  }
+
+  /** Get current complex type assignments for the active cosmology. */
+  getAssignments(cosmology: CosmologyMode = 'beta-cosmo'): ComplexType[] {
+    if (cosmology === 'alpha-cosmo') {
+      const base = PHASE_MAPPINGS[this.phase];
+      const perm = getPermutation(this.groupElement);
+      return perm.map(i => base[i]);
+    }
+    // beta-cosmo: ALPHA mapping permanently, rotated by the ghost-snap S4.
+    const perm = getPermutation(this.groupElement);
+    return perm.map(i => ALPHA[i]);
+  }
+
+  /** Reset to initial state. */
+  reset(): void {
+    this.groupElement = IDENTITY;
+    this.phase = 'alpha';
+    this.substitutionCount = 0;
+  }
+
+  private advancePhaseClock(): void {
+    this.substitutionCount++;
     if (this.substitutionCount >= 3) {
       this.substitutionCount = 0;
       const idx = PHASE_ORDER.indexOf(this.phase);
       this.phase = PHASE_ORDER[(idx + 1) % 3];
     }
-  }
-
-  /** Get current complex type assignments after permutation */
-  getAssignments(): ComplexType[] {
-    const baseMapping = PHASE_MAPPINGS[this.phase];
-    const perm = getPermutation(this.groupElement);
-    // Apply permutation: position i gets the complex that was at perm[i]
-    return perm.map(i => baseMapping[i]);
-  }
-
-  /** Reset to initial state */
-  reset(): void {
-    this.groupElement = 0;
-    this.phase = 'alpha';
-    this.substitutionCount = 0;
   }
 }

@@ -68,7 +68,7 @@ setoutletassist(MOVES_OUTLET, "detected: 'face <L|L'|R|R'|...>' on every quarter
 
 // Pulls in all data tables (OSC addresses, SWAM enums, CC band centers,
 // INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE, FACE_MAP,
-// LEGATO_COMPLEX, REGIME_* multipliers) generated from src/osc-schema.ts
+// LEGATO_COMPLEX, REGIME_* multipliers, RATE_* pressure gains) generated from src/osc-schema.ts
 // + src/swam-mapping.ts + src/face-gesture.ts. Regenerate after any TS
 // table edit with `npm run gen:max` and then reload this script (right-
 // click v8 → Reload Script, or edit-and-save to trigger autowatch).
@@ -309,7 +309,7 @@ var COMPLEX = {
 	     register:{ lo:60, hi:81 } }
 };
 
-// REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT, LEGATO_COMPLEX are declared
+// REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT, RATE_* gains, LEGATO_COMPLEX are declared
 // in gen_includes.js (source: src/swam-mapping.ts).
 
 // ================================================================
@@ -364,7 +364,7 @@ var state = {
 	// handleVoice allocation so later face messages don't retroactively
 	// reshape an in-flight phrase.
 	face: null,
-	faceDurationSec: null,
+	faceDurationMult: null,
 	faceTranspose: 0,
 	faceEnvelope: null,
 	faceArticulation: null,
@@ -372,6 +372,7 @@ var state = {
 	faceEnvProfile: null,
 	faceOffVelOverride: null,
 	faceReleaseMult: 1.0,
+	currentPlanId: 0,
 
 	// Cube algorithm / last-voice routing
 	lastAllocatedInstance: 0
@@ -444,13 +445,14 @@ function makeInstance(id) {
 		density: 2.0,
 		duration: 1.0,
 		tetra: 0,
-		faceDurationSec: null,
+		faceDurationMult: null,
 		faceTranspose: 0,
 		faceEnvelope: null,      // 'pluck'|'swell'|'stab'|'hairpin-up'|'hairpin-down'|'fade'|'burst'|null — drives phrase count + expr shape
 		faceMotion: null,        // 'static'|'up'|'down'|'oscillate'|null — drives sieve-walker direction
 		faceEnvProfile: null,
 		faceOffVelOverride: null,
 		faceReleaseMult: 1.0,
+		planId: 0,
 
 		// Expression targets
 		baseExpr: 0,
@@ -617,17 +619,17 @@ function emitMidi(inst, status, byte1, byte2) {
 // emits to the relay as OSC so the dashboard can transcribe exactly what SWAM
 // plays. Keyswitches (which call emitMidi directly, bypassing the noteOn/noteOff
 // wrappers) are intentionally excluded — they're technique-select toggles, not
-// score notes. The 4th arg `complex` is `inst.activeComplex` at echo time
-// (1..8 = Cn, 0 if pre-init); the dashboard piano-roll uses it to colour notes
-// by technique and connect adjacent same-voice C5/C6/C7 notes as glissando
-// curves. Addresses come from gen_includes.js (OSC.MIDI_NOTEON / MIDI_NOTEOFF
-// / MIDI_PANIC).
+// score notes. Echoes carry complex, companion flag, and plan id so the relay
+// can audit planned phrase structure against what this bridge actually emits.
+// Addresses come from gen_includes.js (OSC.MIDI_NOTEON / MIDI_NOTEOFF /
+// MIDI_PANIC).
 function emitEchoNote(address, inst, pitch, vel, extraFlag) {
-	// 5th arg conveys per-noteon metadata (currently only `isCompanion`
-	// for double-stop companion identification — see `maybeDoubleStop`).
-	// noteoff calls don't pass `extraFlag`; `undefined | 0` = 0 so the
-	// OSC payload is consistent (5 args total) for the relay's parser.
-	outlet(ECHO_OUTLET, address, inst.voice, pitch, vel, inst.activeComplex || 0, extraFlag | 0);
+	// `extraFlag` is currently only `isCompanion` for noteon. Noteoff calls
+	// don't pass it; `undefined | 0` = 0 so the OSC payload shape stays
+	// consistent for the relay's parser.
+	outlet(ECHO_OUTLET, address,
+	       inst.voice, pitch, vel, inst.activeComplex || 0,
+	       extraFlag | 0, inst.planId || 0);
 }
 
 function noteOn(inst, pitch, vel, isCompanion) {
@@ -693,7 +695,7 @@ function ccForce(inst, num, val) {
 // No synthesis state depends on this; if the dashboard isn't listening,
 // the messages are simply dropped at the relay.
 function emitEchoExpr(inst, val) {
-	outlet(ECHO_OUTLET, OSC.MIDI_EXPR, inst.voice, val, inst.activeComplex || 0);
+	outlet(ECHO_OUTLET, OSC.MIDI_EXPR, inst.voice, val, inst.activeComplex || 0, inst.planId || 0);
 }
 
 // ================================================================
@@ -1969,7 +1971,7 @@ function bendStep(inst, sourcePitch, targetPitch, glissVel, accent, complex, des
 	// completeBend's noteOn) reference the SAME integer.
 	outlet(ECHO_OUTLET, OSC.MIDI_BENDSTEP, inst.voice,
 	       Math.round(sourcePitch), hpTarget, durMs | 0,
-	       inst.activeComplex || (complex || 0));
+	       inst.activeComplex || (complex || 0), inst.planId || 0);
 
 	// Optional accent: spike CC 18 just before target's noteOn fires.
 	// BPA_RESET_MS is typically ≥ 100ms; for bends durMs is now ≤ 150ms
@@ -2292,14 +2294,63 @@ function maybeDoubleStop(inst, mainPitch, vel, p) {
 }
 
 // ================================================================
+// TURN-RATE PRESSURE
+// ================================================================
+// K_i remains the baseline identity. Turn rate adds bounded urgency:
+// density/event saturation, attack velocity, expression peak, bow pressure,
+// C8 tremolo speed, and C5 per-gliss Bow Pressure Accent. Gains are
+// generated from src/swam-mapping.ts into gen_includes.js.
+function turnRatePressure() {
+	var start = RATE_PRESSURE_START_TPS || 0.3;
+	var full  = RATE_PRESSURE_FULL_TPS  || 3.0;
+	var rate = state.turnRate || 0;
+	return clamp((rate - start) / (full - start), 0, 1);
+}
+
+function rateMultiplier(table, complexType) {
+	var gain = table && table[complexType] != null ? table[complexType] : 0;
+	return 1 + gain * turnRatePressure();
+}
+
+function rateDensityMultiplier(complexType) {
+	return rateMultiplier(RATE_DENSITY_GAIN_BY_COMPLEX, complexType);
+}
+
+function rateVelocityMultiplier(complexType) {
+	return rateMultiplier(RATE_VELOCITY_GAIN_BY_COMPLEX, complexType);
+}
+
+function rateExpressionMultiplier(complexType) {
+	return rateMultiplier(RATE_EXPR_GAIN_BY_COMPLEX, complexType);
+}
+
+function rateBowPressureMultiplier(complexType) {
+	return rateMultiplier(RATE_BOW_GAIN_BY_COMPLEX, complexType);
+}
+
+function rateTremoloMultiplier(complexType) {
+	return rateMultiplier(RATE_TREMOLO_GAIN_BY_COMPLEX, complexType);
+}
+
+function rateAccentValue(baseValue, complexType) {
+	return clamp(Math.round(baseValue * rateMultiplier(RATE_ACCENT_GAIN_BY_COMPLEX, complexType)), 0, 127);
+}
+
+function durationFloorForComplex(complexType) {
+	var table = (typeof COMPLEX_DURATION_FLOOR_SEC !== "undefined") ? COMPLEX_DURATION_FLOOR_SEC : null;
+	return table && table[complexType] != null ? table[complexType] : 0;
+}
+
+// ================================================================
 // PHRASE HELPERS
 // ================================================================
 function phraseCount(inst, baseLo, baseHi) {
 	var intMap = INTENSITY_MAP[inst.intensity] || INTENSITY_MAP["mf"];
 	var iMult = intMap.density;
 	var dMult = clamp(0.6 + inst.density * 0.25, 0.6, 1.8);
+	var rMult = rateDensityMultiplier(inst.activeComplex);
 	var lo = Math.max(1, Math.round(baseLo * iMult));
-	var hi = Math.max(lo, Math.round(baseHi * iMult * dMult));
+	var hi = Math.max(lo, Math.round(baseHi * iMult * dMult * rMult));
 	return rrand(lo, hi);
 }
 
@@ -2389,7 +2440,7 @@ function phraseC1(inst, vel, dur) {
 	// Now: rate-driven count (5/sec ≈ dense pizz cloud) with even-ish
 	// spacing + jitter, plus 25% chance of 2-3 pluck cluster for the
 	// "burst / polyphonic" character.
-	var rate = 5.0;
+	var rate = 5.0 * rateDensityMultiplier(inst.activeComplex);
 	var count = Math.max(2, Math.round(dur * rate));
 	var spacing = (dur * 1000) / count;
 	for (var i = 0; i < count; i++) {
@@ -2483,7 +2534,7 @@ function phraseC4(inst, vel, dur) {
 	// (~2.5/sec for a sparse "stream" of harmonics) with even-ish spacing
 	// + jitter, plus 20% chance of 2-pitch simultaneous attack (polyphonic
 	// harmonic doublestop) for the "cloud" character.
-	var rate = 2.5;
+	var rate = 2.5 * rateDensityMultiplier(inst.activeComplex);
 	var count = Math.max(2, Math.round(dur * rate));
 	var spacing = (dur * 1000) / count;
 	// Per-note duration scales with the spacing so each harmonic occupies
@@ -2541,9 +2592,9 @@ function phraseC4(inst, vel, dur) {
 // on a stab face produced a single anchor → slide pair, audibly "1 glissando"
 // which by user definition is not wild. Wildness is the complex's identity;
 // the face's envelope can shape how the salvo sits in time (pluck = short
-// percussive salvo, hairpin/fade = longer sustained salvo via durationSec) but cannot
+// percussive salvo, hairpin/fade = longer sustained salvo via K-duration × face multiplier) but cannot
 // reduce the count below what reads as wild. The face's expressive shape
-// still applies via durationSec / velCurve / releaseMult.
+// still applies via duration multiplier / velCurve / releaseMult.
 // D72.4 — pre-pitchbend-port phraseC5 preserved for regression. Used
 // glissNote (Mono Poly Release portamento) for same-string slides and
 // bendStep for cross-string only. To regress: comment out the new
@@ -2556,6 +2607,7 @@ function phraseC5(inst, vel, dur) {
 	var requestedCount = Math.max(WILD_MIN_COUNT, faceShapedCount(inst, 4, 9, true));
 	var MIN_LEAP = 8;
 	var lastPitchRef = { p: pickPitch(5, inst) };
+	var wildAccent = rateAccentValue(WILD_GLISS_BPA, inst.activeComplex);
 
 	var durMs = dur * 1000;
 	var tailEnd = Math.max(FIRST_GLISS_MS + 200, durMs * 0.92);
@@ -2647,7 +2699,7 @@ function phraseC5(inst, vel, dur) {
 				var p = pickPitch(5, inst);
 				var attempts = 0;
 				while (Math.abs(p - lastPitchRef.p) < MIN_LEAP && attempts < 12) { p = pickPitch(5, inst); attempts++; }
-				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP, WILD_GLISS_VEL, WILD_GLISS_BPA, bd);
+				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP, WILD_GLISS_VEL, wildAccent, bd);
 				// Per-rebow 50% companion at the new slide target. Fresh
 				// pitch each rebow (doubleStopCompanion's interval table
 				// is randomized).
@@ -2753,6 +2805,9 @@ function phraseC7(inst, vel, dur) {
 	if (!isSingle && inst.faceEnvProfile && inst.faceEnvProfile.countMult > 1.0) {
 		driftCount = Math.min(6, Math.round(driftCount * inst.faceEnvProfile.countMult));
 	}
+	if (!isSingle) {
+		driftCount = Math.min(6, Math.max(1, Math.round(driftCount * rateDensityMultiplier(inst.activeComplex))));
+	}
 	var motionDir = (inst.faceMotion === 'up') ? 1 : (inst.faceMotion === 'down') ? -1 : 0;
 	var durMs = dur * 1000;
 	// D53 — C7 first drift fires at FIRST_GLISS_MS_C7 (= 30 ms) so the slide
@@ -2843,7 +2898,7 @@ function handleFace(face) {
 	var sig = FACE_MAP[face];
 	if (!sig) {
 		state.face = null;
-		state.faceDurationSec = null;
+		state.faceDurationMult = null;
 		state.faceTranspose = 0;
 		state.faceEnvelope = null;
 		state.faceArticulation = null;
@@ -2854,9 +2909,9 @@ function handleFace(face) {
 		return;
 	}
 	state.face = face;
-	state.faceDurationSec = (sig.durationSec > 0) ? sig.durationSec : null;
-	if (state.faceDurationSec == null) {
-		log("FACE DURATION FAIL face=" + face + " missing durationSec in FACE_MAP");
+	state.faceDurationMult = (sig.durationMult > 0) ? sig.durationMult : null;
+	if (state.faceDurationMult == null) {
+		log("FACE DURATION MULT FAIL face=" + face + " missing durationMult in FACE_MAP");
 	}
 	state.faceEnvelope = sig.envelope;
 	state.faceArticulation = sig.articulation;
@@ -2882,29 +2937,36 @@ function handleFace(face) {
 // runs the phrase generator inside that instance.
 // ================================================================
 function handleVoice(vtxIdx, complexType, density, intensity, duration) {
+	var pendingPlanId = state.currentPlanId | 0;
+	state.currentPlanId = 0;  // consume once so manual /xk/voice cannot inherit a stale audit id
 	if (state.frozen) return;
 
-	// Face moves own phrase duration; the incoming vertex duration is now a
-	// neutral fallback for non-face / future triggers.
-	// D74: Max resolves face duration absolutely; no K-duration multiply remains.
+	// K_i owns the base material duration. Face moves reshape it with a
+	// multiplier; complex floors protect identity-bearing gestures from being
+	// compressed into unreadable fragments.
 	var incomingDuration = duration;
 	var durationSource = "vertex";
 	if (state.face !== null) {
-		if (state.faceDurationSec != null && state.faceDurationSec > 0) {
-			duration = state.faceDurationSec;
-			durationSource = "face";
+		if (state.faceDurationMult != null && state.faceDurationMult > 0) {
+			duration = incomingDuration * state.faceDurationMult;
+			durationSource = "vertex*face";
 		} else {
-			log("FACE DURATION FAIL face=" + state.face +
-			    " has no absolute duration; falling back to vertexDur=" +
+			log("FACE DURATION MULT FAIL face=" + state.face +
+			    " has no duration multiplier; falling back to vertexDur=" +
 			    Number(incomingDuration).toFixed(2));
 		}
 	}
+	var durationFloor = durationFloorForComplex(complexType);
+	if (duration < durationFloor) {
+		duration = durationFloor;
+		durationSource += "+floor";
+	}
 
-	// Hard ceiling — Xenakis V2 K3/K5 are intrinsically 30 s. Without this,
-	// 30 s × face drone bias (1.8×) stacked with legacy phrase multipliers
-	// could leave voices scheduled to fade out nearly two minutes after the
-	// turn. 30 s is already long enough to be perceived as "sustained."
-	duration = Math.min(duration, 30);
+	// Hard ceiling — K_i long values × face multipliers can produce spans
+	// longer than a performance phrase. 30 s is already enough to read as
+	// sustained, and prevents stale scheduled tasks from accumulating.
+	var maxPhraseDuration = (typeof MAX_PHRASE_DURATION_SEC !== "undefined") ? MAX_PHRASE_DURATION_SEC : 30;
+	duration = Math.min(duration, maxPhraseDuration);
 
 	state.turnCount++;
 	state.density = density;
@@ -2925,13 +2987,14 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	inst.density    = density;
 	inst.duration   = duration;
 	inst.tetra      = state.tetra;
-	inst.faceDurationSec  = state.faceDurationSec;
+	inst.faceDurationMult = state.faceDurationMult;
 	inst.faceTranspose    = state.faceTranspose || 0;
 	inst.faceEnvelope     = state.faceEnvelope;
 	inst.faceMotion       = state.faceMotion;
 	inst.faceEnvProfile   = state.faceEnvProfile;
 	inst.faceOffVelOverride = state.faceOffVelOverride;
 	inst.faceReleaseMult    = state.faceReleaseMult;
+	inst.planId = pendingPlanId;
 
 	// Preserve tail note for SWAM portamento when the incoming complex
 	// uses legato phrases. Only meaningful if we stole a PLAYING/RELEASING
@@ -3005,19 +3068,20 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 
 	var intMap = INTENSITY_MAP[intensity] || INTENSITY_MAP["mf"];
 	inst.baseExpr = intMap.expr;
-	var baseVel = intMap.vel;
+	var rateP = turnRatePressure();
+	var baseVel = clamp(Math.round(intMap.vel * rateVelocityMultiplier(complexType)), 1, 127);
 
 	var envPeakMult = (inst.faceEnvProfile && inst.faceEnvProfile.peakMult) || 1.0;
-	inst.peakExpr = clamp(intMap.expr * envPeakMult, 0, 127);
+	inst.peakExpr = clamp(intMap.expr * envPeakMult * rateExpressionMultiplier(complexType), 0, 127);
 
-	var bowBase = clamp(cmx.bowPressure * intMap.bowMult, 0, 127);
+	var bowBase = clamp(cmx.bowPressure * intMap.bowMult * rateBowPressureMultiplier(complexType), 0, 127);
 	ccForce(inst, CC.BOW_PRESSURE, Math.round(bowBase));
 
 	// D39 — per-phrase stochastic tremolo-rate envelope (only when tremolo on)
 	if (cmx.tremoloRate != null && cmx.tremolo !== TREMOLO.OFF && HAS_TREMOLO_RATE) {
 		cancelCCRamp(inst, CC.TREMOLO_RATE);
 		var phraseMs = Math.max(duration * 1000, 250);
-		var steadyBase = clamp(Math.round(cmx.tremoloRate * intMap.tremRateMult), 0, 127);
+		var steadyBase = clamp(Math.round(cmx.tremoloRate * intMap.tremRateMult * rateTremoloMultiplier(complexType)), 0, 127);
 		var SLOW = 20;
 		var FAST = 118;
 		var roll = Math.random();
@@ -3062,7 +3126,10 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	    "/" + (state.faceMotion || "-") +
 	    " dur=" + duration.toFixed(2) + "s(" + durationSource + ")" +
 	    " porta=" + (cmx.portamento.on ? "on" : "off") +
-	    " time=" + cmx.portamento.time + " bow=" + Math.round(bowBase) + " int=" + intensity);
+	    " time=" + cmx.portamento.time +
+	    " bow=" + Math.round(bowBase) +
+	    " int=" + intensity +
+	    " rateP=" + rateP.toFixed(2));
 
 	var envForPhrase = cmx.exprEnv;
 	if (inst.faceEnvProfile) {
@@ -3290,6 +3357,7 @@ function handleSieve() {
 // extra cellos on top of the 2-voice cap.
 function allocateAlgorithmPing() {
 	var p = allocateInstance();
+	p.planId = 0;
 	p.status = 'PLAYING';
 	p.lastVoiceTime = Date.now();
 	return p;
@@ -3390,7 +3458,22 @@ function handleAlgorithm(name) {
 }
 
 // ================================================================
-// PANIC — flush every instance
+// PHRASE PLAN - relay shadow-plan audit stamp
+// ================================================================
+function handlePhrasePlan(planId, complexType, face, durationSec, eventCount, noteOnCount, bendStepCount, companionNoteOnCount) {
+	state.currentPlanId = planId | 0;
+	log("phrasePlan P" + planId +
+	    " C" + complexType +
+	    " face=" + face +
+	    " dur=" + Number(durationSec).toFixed(2) + "s" +
+	    " events=" + eventCount +
+	    " noteons=" + noteOnCount +
+	    " bends=" + bendStepCount +
+	    " companions=" + companionNoteOnCount);
+}
+
+// ================================================================
+// PANIC - flush every instance
 // ================================================================
 function handlePanic() {
 	log("PANIC — flushing all instances");
@@ -3461,6 +3544,7 @@ function anything() {
 	else if (addr === OSC.RATE)          { handleRate(args[0]); }
 	else if (addr === OSC.SIEVE)         { handleSieve.apply(this, args); }
 	else if (addr === OSC.ALGORITHM)     { handleAlgorithm(args[0]); }
+	else if (addr === OSC.PHRASE_PLAN)   { handlePhrasePlan(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]); }
 	else if (addr === OSC.SCRAMBLE)      { handleExprScramble(args[0]); }
 	else if (addr === OSC.PANIC)         { handlePanic(); }
 	else if (addr === OSC.TREM_LEARN)    { handleTremLearn(args[0]); }
@@ -3496,7 +3580,7 @@ function resetInstance(inst) {
 	inst.density = 2.0;
 	inst.duration = 1.0;
 	inst.tetra = 0;
-	inst.faceDurationSec = null;
+	inst.faceDurationMult = null;
 	inst.faceTranspose = 0;
 	inst.faceEnvelope = null;
 	inst.faceMotion = null;
@@ -3528,6 +3612,7 @@ function resetInstance(inst) {
 	inst.status = 'IDLE';
 	inst.allocatedAt = 0;
 	inst.lastVoiceTime = 0;
+	inst.planId = 0;
 
 	// Initial CC baseline (silent). setupComplex later overrides.
 	ccForce(inst, CC.EXPRESSION, 0);
@@ -3589,7 +3674,7 @@ function bang() {
 	state.turnRate = 0;
 	state.noteOffVel = 64;
 	state.face = null;
-	state.faceDurationSec = null;
+	state.faceDurationMult = null;
 	state.faceTranspose = 0;
 	state.faceEnvelope = null;
 	state.faceArticulation = null;
@@ -3597,6 +3682,7 @@ function bang() {
 	state.faceEnvProfile = null;
 	state.faceOffVelOverride = null;
 	state.faceReleaseMult = 1.0;
+	state.currentPlanId = 0;
 	state.lastAllocatedInstance = 0;
 
 	for (var i = 0; i < POOL_SIZE; i++) resetInstance(instances[i]);

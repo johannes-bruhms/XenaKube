@@ -12,7 +12,7 @@
 // — everything that used to live in the inline <script> block has moved
 // into one of the modules below.
 
-import { connectGanCube } from 'https://cdn.jsdelivr.net/npm/gan-web-bluetooth@latest/+esm';
+import { connectGanCube } from 'https://cdn.jsdelivr.net/npm/gan-web-bluetooth@3.0.2/+esm';
 
 import {
   connect as transportConnect,
@@ -99,6 +99,8 @@ transportOn('close', () => {
 transportOn('state', (data, move) => {
   cubeScene.update(data);
   stateUi.update(data, move);
+  updateMotionHUD(data.motion);
+  if (move) verifyMoveRemap(move);
 });
 transportOn('gyroState', (data) => {
   // BLE-rate full state burst — rAF-throttled so we don't repaint at
@@ -109,6 +111,7 @@ transportOn('gyroState', (data) => {
       if (pendingGyroState) {
         cubeScene.update(pendingGyroState);
         stateUi.update(pendingGyroState, null);
+        updateMotionHUD(pendingGyroState.motion);
         pendingGyroState = null;
       }
       gyroThrottleFrame = null;
@@ -122,6 +125,8 @@ transportOn('gyroTick', (data, dev) => {
 transportOn('diagrams',     populateDiagramSelect);
 transportOn('algorithm',    stateUi.handleAlgorithmEvent);
 transportOn('algorithmBook', stateUi.setAlgorithmBook);
+transportOn('phrasePlan',   stateUi.handlePhrasePlan);
+transportOn('phraseAudit',  stateUi.handlePhraseAudit);
 transportOn('solve',        () => stateUi.setSolvedBadge(true, true));
 transportOn('midiEcho',     handleMidiEcho);
 
@@ -259,8 +264,9 @@ document.getElementById('zeroBtn').addEventListener('click', () => {
 
 // XENAKUBE title doubles as a UI-collapse toggle. CSS `body.ui-hidden` hides
 // every chrome panel (state, mode pills, conn row, gizmo cluster, sliders,
-// move buffer, algorithm toasts); active K/C cards + sieve + rolling-score +
-// cube remain. Persisted across reloads.
+// move buffer, algorithm toasts, active K/C cards); sieve + rolling-score +
+// cube remain. Title stays as a faint outline so the toggle target is still
+// hittable. Persisted across reloads.
 const uiToggle = document.getElementById('ui-toggle');
 function setUiHidden(hidden) {
   document.body.classList.toggle('ui-hidden', hidden);
@@ -304,6 +310,28 @@ gyroSmoothSlider.addEventListener('input', () => {
   gyroSmoothVal.textContent = val.toFixed(2);
   wsSend({ type: 'set_gyro_smoothing', value: val });
 });
+
+const stillThresholdSlider = document.getElementById('stillThreshold');
+const stillThresholdVal = document.getElementById('stillThresholdVal');
+stillThresholdSlider.addEventListener('input', () => {
+  const val = parseFloat(stillThresholdSlider.value);
+  stillThresholdVal.textContent = val.toFixed(2);
+  wsSend({ type: 'set_still_threshold', value: val });
+});
+
+const motionStillEl = document.getElementById('motionStill');
+const motionDwellEl = document.getElementById('motionDwell');
+function updateMotionHUD(motion) {
+  if (!motion) return;
+  if (motion.isStill) {
+    motionStillEl.textContent = '●';
+    motionStillEl.classList.add('still');
+  } else {
+    motionStillEl.textContent = '·';
+    motionStillEl.classList.remove('still');
+  }
+  motionDwellEl.textContent = `${motion.dwellMs | 0} ms`;
+}
 
 const scoreSpeedSlider = document.getElementById('scoreSpeed');
 const scoreSpeedValEl  = document.getElementById('scoreSpeedVal');
@@ -393,6 +421,50 @@ const SOLVED_FACELETS = 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB'
 let activeCube = null;
 let lastSolvedReport = true;
 
+// ---- Move-remap verifier --------------------------------------------------
+//
+// Companion to cube-scene.js's `assertCubeAlignment` (geometric chain check).
+// This one observes the actual relay round-trip: the GAN letter we sent
+// vs the engine letter we got back in the next state broadcast. Catches
+// the failure mode where the relay's MOVE_REMAP is missing or drifts —
+// the geometric assertion can't see that because it only inspects the
+// dashboard's mirror table.
+//
+// MIRROR: `CANONICAL_REMAP` MUST track relay.js MOVE_REMAP and cube-scene.js
+// CANONICAL_REMAP. Drift is exactly what `[CUBE REMAP FAIL]` catches.
+const CANONICAL_REMAP = { R: 'L', L: 'R', F: 'B', B: 'F', U: 'U', D: 'D' };
+
+let _lastSentGanMove = null;     // 'R', "L'", 'F2', etc. (face + suffix)
+let _lastSentGanTimeMs = 0;
+let _moveRemapVerifierArmed = false;  // fires once per connect
+
+function recordSentMove(move) {
+  _lastSentGanMove = move;
+  _lastSentGanTimeMs = performance.now();
+}
+function armMoveRemapVerifier() {
+  _moveRemapVerifierArmed = true;
+}
+function verifyMoveRemap(engineMove) {
+  if (!_moveRemapVerifierArmed || _lastSentGanMove === null) return;
+  // Stale guard: if the GAN move is older than 1 s, the state.move likely
+  // refers to a different (bookkeeping) update — skip rather than false-fire.
+  if (performance.now() - _lastSentGanTimeMs > 1000) return;
+  const ganFace = _lastSentGanMove[0];
+  const ganSuffix = _lastSentGanMove.slice(1);
+  const expectedEngine = (CANONICAL_REMAP[ganFace] || ganFace) + ganSuffix;
+  _moveRemapVerifierArmed = false;
+  if (engineMove !== expectedEngine) {
+    console.error(
+      `[CUBE REMAP FAIL] relay MOVE_REMAP not applied: ` +
+      `gan='${_lastSentGanMove}' expected engine='${expectedEngine}' got='${engineMove}'. ` +
+      `Check relay.js MOVE_REMAP table (canonical pose red-front white-top).`
+    );
+  } else {
+    console.log(`[CUBE REMAP OK] gan='${_lastSentGanMove}' → engine='${engineMove}'`);
+  }
+}
+
 if (localStorage.getItem('ganMacAddress')) {
   macInput.value = localStorage.getItem('ganMacAddress');
 }
@@ -421,9 +493,11 @@ connectBtn.addEventListener('click', async () => {
     connectBtn.classList.add('connected');
     connectBtn.disabled = true;
     cubeScene.applyConnectView();
+    armMoveRemapVerifier();
 
     cube.events$.subscribe((event) => {
       if (event.type === 'MOVE') {
+        recordSentMove(event.move);
         wsSend({ type: 'move', value: event.move });
       } else if (event.type === 'FACELETS') {
         const solved = event.facelets === SOLVED_FACELETS;

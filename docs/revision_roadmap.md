@@ -438,13 +438,13 @@ So C4's "harmonics on" wrote Tremolo Mode (no audible change because Tremolo its
 
 **Verification**: land on any non-gliss complex → overlapping turns audibly sustain as a two-string texture rather than each note cutting the previous. Land on C5 / C6 / C7 → gliss phrases still slide (D34 prerequisite preserved via `MONO_POLY_RELEASE` which keeps the single monophonic line the portamento engine needs). The Bow Polyphony selector in the SWAM GUI should visibly jump between option 3 (Double/Hold) and option 1 (Mono Poly Release) as complexes change.
 
-### D74 — Face-owned duration for learnable Temporal Identity *(RESOLVED 2026-05-04)*
+### D74 — Material duration with face multiplier *(RESOLVED 2026-05-05; supersedes face-owned duration)*
 
-**Defect**: face gestures were intended to be recognizable through changing K/C state, but K_i still carried 2/3/4/5 second durations and Max multiplied those by the face duration bias. The same face could therefore read short or long because of an unrelated vertex permutation, masking the face identity and making the cube feel stochastic rather than learnable.
+**Defect**: the first D74 fix overcorrected. Absolute face-owned phrase time made every face gesture recognizable, but it erased one of alpha-cosmo's strongest features: K_i's varied 2/3/4/5 second material spans. Beta-cosmo then felt flattened because the face chose too much of the phrase's length and character.
 
-**Fix**: move phrase time onto `FACE_SIGNATURES[face].durationSec` as an absolute per-face value. K_i vertex duration is now neutral (`1`) and remains in the OSC payload only as a fallback for non-face/future triggers. `max/xk_swam.js` resolves normal face moves from generated `FACE_MAP.durationSec`, logs `dur=Ns(face)` on every voice, and emits `FACE DURATION FAIL` if a face lacks an absolute duration. `voiceToOsc` now sends `/xk/face -` for null-face triggers so stale face duration cannot leak into a following voice.
+**Fix**: restore K_i V1 duration as the base material (`2/5/5/2/3/4/4/3` seconds). Replace `FACE_SIGNATURES[face].durationSec` with `durationMult`; Max and the TS phrase planner both resolve phrase time as `K duration × face multiplier`, then apply `COMPLEX_DURATION_FLOOR_SEC` and `MAX_PHRASE_DURATION_SEC`. `voiceToOsc` still sends `/xk/face -` for null-face triggers so stale face multipliers cannot leak into a following voice.
 
-**Invariant audit**: D42/D45 gliss guarantees still hold; short face durations may clip dense C5 schedules through `glissSchedule`, but C5/C6/C7 still emit at least one gliss event. D47 arcs now run over face-owned duration, which is the desired performer-facing shape. Latency telemetry is unchanged because onset timing is independent of phrase duration.
+**Invariant audit**: D42/D45 gliss guarantees still hold. C5/C6/C7 have per-complex duration floors before scheduling, so attack faces cannot compress gliss identity into an unreadable single sustain. D47 arcs now run over the resolved material duration, preserving long-line contrast while keeping the face's envelope and register identity audible. Latency telemetry is unchanged because onset timing is independent of phrase duration.
 
 ### D72 — C6 same-string slides via pitchbend (port from CC 5 portamento to bendStep dispatch) *(RESOLVED 2026-05-02)*
 
@@ -608,9 +608,9 @@ User reported "this is the best it's ever been" after D64 landed. CLAUDE.md Brid
 
 So C5 paired with one of the 6 isSingle faces → `requestedCount = max(1, 1) = 1` → anchor + 1 glissStep = 2 audible notes = 1 audible glissando. The user's observation `D=1.5 → many gliss / D=2.5 → 2 gliss` mapped onto face envelope, not D — face was the dominant variable. K-vertex density was being overridden by the isSingle face collapse.
 
-**Why this is wrong**: wildness is C5's *complex identity*, not something the face can soften. Pluck/stab/drone face envelopes are about *articulation shape* (short percussive vs sustained) and they already apply `durationBias` (short for pluck/stab, long for drone) and `releaseMult` (drone gets long release). They should not also collapse the salvo down to a single event — that's a different musical decision (timbre/articulation vs density) and reduces wild gliss to non-wild for half the cube.
+**Why this is wrong**: wildness is C5's *complex identity*, not something the face can soften. Pluck/stab/drone face envelopes are about *articulation shape* (short percussive vs sustained) and they already apply a duration multiplier and `releaseMult`. They should not also collapse the salvo down to a single event — that's a different musical decision (timbre/articulation vs density) and reduces wild gliss to non-wild for half the cube.
 
-**Fix**: new `WILD_MIN_COUNT` constant (initial value 4, bumped through 6 → 8 → 12 across listening sessions on 2026-04-26 and 2026-04-27 — each step still felt under-dense, settling at 12 after D52 BPA accents made every slide audibly articulated); `phraseC5` uses `Math.max(WILD_MIN_COUNT, faceShapedCount(inst, 4, 9, true))`. Current value is **12**. Wildness now defies the isSingle collapse and any low-intensity floor. Pluck face on C5 = a short percussive *salvo* of glissandi (12+ events packed into a short durationBias-shrunk window) instead of a single isolated slide. Drone face on C5 = a long sustained salvo (12+ events spread across a durationBias-stretched window). The face still shapes the salvo's *envelope* via velCurve and durationBias; it just can't reduce its event count below wild.
+**Fix**: new `WILD_MIN_COUNT` constant (initial value 4, bumped through 6 → 8 → 12 across listening sessions on 2026-04-26 and 2026-04-27 — each step still felt under-dense, settling at 12 after D52 BPA accents made every slide audibly articulated); `phraseC5` uses `Math.max(WILD_MIN_COUNT, faceShapedCount(inst, 4, 9, true))`. Current value is **12**. Wildness now defies the isSingle collapse and any low-intensity floor. Pluck face on C5 = a shorter percussive *salvo* of glissandi, not a single isolated slide. Long K-duration and expanding face multipliers spread the same wild identity over a larger span. The face still shapes the salvo's *envelope* via velCurve and duration multiplier; it just can't reduce its event count below wild.
 
 For non-isSingle faces, the floor only kicks in when intensity + K-D would otherwise produce <8 events (e.g., `p` intensity + low D). High-D + high-intensity wild gliss is unaffected — `phraseCount` returns rrand(4–11ish) which routinely exceeds the floor at high intensity, and the burst face countMult (1.8) pushes it higher.
 
@@ -889,7 +889,7 @@ The audible signature was distinctive: a quieter "second note" near in pitch to 
     - Technique selectors (previously on `state`): `activeComplex`, `playMode`, `harmonics`, `tremolo`, `bowPoly`, `gestureMode`, `altFing`, `keepBowDir`.
     - CC machinery: `ccCache`, `ccRampTasks`, `ksPending`, `ksForceCount`, `forceKS`.
     - Scheduling: `activeNotes` (note list for `allNotesOff`), `phraseTasks` (cancellable phrase Tasks), `releaseTask`.
-    - Voice-shot snapshot (captured from globals at `handleVoice` time, frozen for the phrase lifetime): `intensity`, `density`, `duration`, `path`, `transpose`, `tetra`, `faceDurationBias`, `faceTranspose`, `faceEnvProfile`, `faceOffVelOverride`, `faceReleaseMult`.
+    - Voice-shot snapshot (captured from globals at `handleVoice` time, frozen for the phrase lifetime): `intensity`, `density`, `duration`, `path`, `transpose`, `tetra`, `faceDurationMult`, `faceTranspose`, `faceEnvProfile`, `faceOffVelOverride`, `faceReleaseMult`.
     - Expression state: `baseExpr`, `peakExpr`, `bowPressureBase`.
 
     The `instances` array is built once at module load; nothing ever adds/removes records.

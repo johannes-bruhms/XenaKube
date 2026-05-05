@@ -141,6 +141,50 @@ export function setAlgorithmBook(book) {
   algorithmBook = book;
 }
 
+/** Show the relay-side shadow phrase plan for the latest voice event. */
+export function handlePhrasePlan(data) {
+  const el = document.getElementById('s-phrase-plan');
+  if (!el) return;
+
+  const summary = Array.isArray(data?.summary) ? data.summary : [];
+  const plans = Array.isArray(data?.plans) ? data.plans : [];
+  if (summary.length === 0) {
+    el.textContent = '--';
+    el.title = 'no phrase plan received';
+    el.className = 'state-val';
+    return;
+  }
+
+  const warningPlans = plans.filter(p => Array.isArray(p?.warnings) && p.warnings.length > 0);
+  el.textContent = summary[0];
+  el.title = summary.join('\n');
+  el.className = warningPlans.length > 0 ? 'state-val warm' : 'state-val accent';
+  if (warningPlans.length > 0) {
+    el.title += '\nWARN: ' + warningPlans.map(p => p.warnings.join('; ')).join(' | ');
+  }
+}
+
+/** Show whether Max's MIDI echoes matched the latest relay-side phrase plan. */
+export function handlePhraseAudit(data) {
+  const el = document.getElementById('s-phrase-audit');
+  if (!el || !data) return;
+
+  const summary = typeof data.summary === 'string'
+    ? data.summary
+    : `P${data.planId ?? '?'} ${String(data.status ?? 'unknown').toUpperCase()}`;
+  el.textContent = summary;
+  el.title = [
+    summary,
+    ...(Array.isArray(data.failures) && data.failures.length ? ['FAIL: ' + data.failures.join('; ')] : []),
+    ...(Array.isArray(data.warnings) && data.warnings.length ? ['WARN: ' + data.warnings.join('; ')] : []),
+  ].join('\n');
+  el.className = data.status === 'fail'
+    ? 'state-val warm'
+    : data.status === 'stolen'
+      ? 'state-val gold'
+      : 'state-val accent';
+}
+
 // ---- update(state, move) ---------------------------------------------------
 
 /**

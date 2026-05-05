@@ -3,12 +3,12 @@
 // Phase 2.5 — Three.js cube scene module. Owns:
 //   • the live K-cube (edges, tetra wireframes, vertex spheres + labels,
 //     active-vertex glow ring)
-//   • the ghost C-cube (faint cyan wireframe + per-C dots/labels at
-//     the gyro's currently-snapped S4 element)
+//   • the ghost C-cube (faint cyan wireframe + per-C dots/labels at a
+//     fixed orientation; rotatable independently via the gizmo)
 //   • the K↔C 3D connection line that joins the active K-vertex to its
 //     geometrically nearest C-vertex
-//   • all per-frame animations (gyro live rotation, ghost SLERP,
-//     active-step LERP, vertex/ghost-vertex perm-change LERPs)
+//   • all per-frame animations (gyro live rotation,
+//     active-step LERP, K-vertex perm-change LERPs)
 //   • the rotation gizmo (cam/live/ghost rotate target + axis rings)
 //   • the auto-fit camera and resize handling
 //
@@ -24,7 +24,7 @@
 //
 // State kept private to this module: every Three.js object, every
 // animation-state Float32Array / Quaternion, gyroZeroInv,
-// autoZeroPending, currentGyro / currentSnap / hasGyro / hasSnap.
+// autoZeroPending, currentGyro / hasGyro / hasSnap.
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
@@ -127,7 +127,12 @@ renderer.setPixelRatio(window.devicePixelRatio);
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
-camera.position.set(4, 3, 4);
+// Initial cube view sits ~12.8 units from origin (vs the prior 6.4) so the
+// performer doesn't have to scroll-zoom out on every connect. applyConnectView
+// only rotates around the target, so this distance survives the connect-time
+// orbit and the revertConnectView restore. fitCameraToAspect's min-distance
+// (~5.4 at typical aspect) is well under this, so it won't pull us back in.
+camera.position.set(8, 6, 8);
 camera.lookAt(0, 0, 0);
 
 // On cube connect, orbit the camera by this azimuth (around world Y) so the
@@ -239,12 +244,14 @@ cubeGroup.add(edgeLines, tetraALines, tetraBLines, activeRing);
 vertexMeshes.forEach(m => cubeGroup.add(m));
 vertexLabels.forEach(l => cubeGroup.add(l.sprite));
 
-// Ghost cube — shows the S4 element the gyro is currently snapping to.
+// Ghost cube — fixed-orientation C-cube showing the canonical complex
+// assignment. Independent of gyro / S4 snap; the gizmo can rotate it
+// (`ghostViewOffset`) but the cube does not track the live cube.
 const ghostGroup = new THREE.Group();
 ghostGroup.visible = false;
 scene.add(ghostGroup);
 
-const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.35 });
+const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.7 });
 const ghostEdges = new THREE.LineSegments(edgeGeo.clone(), ghostEdgeMat);
 ghostGroup.add(ghostEdges);
 ghostGroup.add(ghostActiveRing);
@@ -254,7 +261,7 @@ const ghostVertMeshes = [];
 const ghostLabels = [];
 for (let i = 0; i < 8; i++) {
   const mat = new THREE.MeshBasicMaterial({
-    color: GHOST_VERT_COLORS[i], transparent: true, opacity: 0.55,
+    color: GHOST_VERT_COLORS[i], transparent: true, opacity: 0.8,
   });
   const m = new THREE.Mesh(ghostVertGeo.clone(), mat);
   m.position.copy(CUBE_VERTS[i]);
@@ -501,18 +508,17 @@ gizmoCanvas.style.pointerEvents = 'none';
 
 let idleAngle = 0;
 const currentGyro = new THREE.Quaternion(0, 0, 0, 1);
-const currentSnap = new THREE.Quaternion(0, 0, 0, 1);
 let hasGyro = false;
 let hasSnap = false;
 let currentActiveVertex = 0;
 
-const ghostFrom = new THREE.Quaternion(0, 0, 0, 1);
-const ghostTarget = new THREE.Quaternion(0, 0, 0, 1);
-const ghostAnimated = new THREE.Quaternion(0, 0, 0, 1);
-let ghostAnimStart = 0;
-let ghostAnimReady = false;
-let lastSnapElement = -1;
-const GHOST_SNAP_MS = 100;
+// Beta-cosmo ghost SLERP-snap. Ghost glides toward the engine's snapQuat
+// (the discrete S4-snapped orientation). Live cube stays on raw gyro; the
+// visible angle between live and ghost shows how close to the next snap cell.
+const snapTarget = new THREE.Quaternion(0, 0, 0, 1);
+const ghostQuatTarget = new THREE.Quaternion();
+let hasSnapTarget = false;
+const GHOST_SLERP_RATE = 0.18;  // per-frame; ~3 frames to noticeable arrival
 
 const ACTIVE_STEP_MS = 100;
 const sphereScaleFrom = new Float32Array(8).fill(1.0);
@@ -524,10 +530,11 @@ let currentActiveK = 0;
 
 // Mirror of the K active-vertex animation state for the ghost cube. The
 // active complex is `state.cAssignments[activeIdx] - 1` (0-indexed C
-// type); its mesh is `ghostVertMeshes[activeC]` whose position is
-// driven by `ghostVertPosAnimated[activeC]` when ghost permutation
-// changes. Scale target is 2.0 (vs 2.5 for K) because ghost spheres
-// are smaller and slightly translucent — 2.5 reads too aggressive.
+// type); the corresponding `ghostVertMeshes[activeC]` is pinned to
+// `CUBE_VERTS[activeC]` (fixed corner — ghost vertices do not migrate)
+// and gets scale-pulsed + a ring. Scale target is 2.0 (vs 2.5 for K)
+// because ghost spheres are smaller and slightly translucent — 2.5
+// reads too aggressive.
 const cSphereScaleFrom = new Float32Array(8).fill(1.0);
 const ghostActiveRingFrom = new THREE.Vector3();
 const ghostActiveRingAnimated = new THREE.Vector3();
@@ -543,15 +550,6 @@ const vertexPosAnimated = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clon
 let vertexAnimStart = 0;
 let vertexAnimReady = false;
 let lastPermKey = '';
-
-const GHOST_VERT_STEP_MS = 100;
-const GHOST_LABEL_OFFSET_FACTOR = 1 + 0.45 / Math.sqrt(3);
-const ghostVertPosFrom     = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
-const ghostVertPosTarget   = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
-const ghostVertPosAnimated = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
-let ghostVertAnimStart = 0;
-let ghostVertAnimReady = false;
-let lastCAssignKey = '';
 
 // Gyro zero calibration
 const gyroZeroInv = new THREE.Quaternion(0, 0, 0, 1);
@@ -611,10 +609,18 @@ function animateCube() {
 
   if (hasSnap) {
     ghostGroup.visible = true;
-    const elapsed = performance.now() - ghostAnimStart;
-    const t = elapsed >= GHOST_SNAP_MS ? 1 : elapsed / GHOST_SNAP_MS;
-    ghostAnimated.copy(ghostFrom).slerp(ghostTarget, t);
-    ghostGroup.quaternion.copy(ghostViewOffset).multiply(ghostAnimated);
+    // Beta-cosmo restoration: ghost cube SLERPs toward the gyro-snapped S4
+    // orientation (state.snapQuat from the engine). The locked alpha-mapping
+    // C-assignments rotate WITH the ghost — different snap cells expose
+    // different complexes at each slot. The live cube continues to render
+    // raw gyro (no snap), so the visible deviation between live and ghost
+    // is the gyroDeviation expression source.
+    if (hasSnapTarget) {
+      ghostQuatTarget.copy(ghostViewOffset).multiply(snapTarget);
+      ghostGroup.quaternion.slerp(ghostQuatTarget, GHOST_SLERP_RATE);
+    } else {
+      ghostGroup.quaternion.copy(ghostViewOffset);
+    }
   } else {
     ghostGroup.visible = false;
   }
@@ -642,19 +648,9 @@ function animateCube() {
     }
   }
 
-  if (ghostVertAnimReady) {
-    const elapsed = performance.now() - ghostVertAnimStart;
-    const t = elapsed >= GHOST_VERT_STEP_MS ? 1 : elapsed / GHOST_VERT_STEP_MS;
-    for (let k = 0; k < 8; k++) {
-      ghostVertPosAnimated[k].copy(ghostVertPosFrom[k]).lerp(ghostVertPosTarget[k], t);
-      ghostVertMeshes[k].position.copy(ghostVertPosAnimated[k]);
-      ghostLabels[k].sprite.position.copy(ghostVertPosAnimated[k]).multiplyScalar(GHOST_LABEL_OFFSET_FACTOR);
-    }
-  }
-
   // Ghost active vertex scale + ring (mirror of the K active-vertex
-  // animation block above). Runs after `ghostVertAnimReady` so the ring
-  // tracks the post-permutation animated position.
+  // animation block above). Ring lerps to the active C's fixed corner
+  // (`CUBE_VERTS[currentActiveC]`); ghost vertex meshes never migrate.
   if (cActiveAnimReady) {
     const elapsed = performance.now() - cActiveAnimStart;
     const t = elapsed >= ACTIVE_STEP_MS ? 1 : elapsed / ACTIVE_STEP_MS;
@@ -663,7 +659,7 @@ function animateCube() {
       const s = cSphereScaleFrom[c] + (target - cSphereScaleFrom[c]) * t;
       ghostVertMeshes[c].scale.setScalar(s);
     }
-    ghostActiveRingAnimated.copy(ghostActiveRingFrom).lerp(ghostVertPosAnimated[currentActiveC], t);
+    ghostActiveRingAnimated.copy(ghostActiveRingFrom).lerp(CUBE_VERTS[currentActiveC], t);
     ghostActiveRing.position.copy(ghostActiveRingAnimated);
     ghostActiveRing.lookAt(camera.position);
   }
@@ -742,8 +738,8 @@ function paintActiveGhostVertex(activeC) {
       cSphereScaleFrom[c] = s;
       ghostVertMeshes[c].scale.setScalar(s);
     }
-    ghostActiveRingFrom.copy(ghostVertPosAnimated[activeC]);
-    ghostActiveRingAnimated.copy(ghostVertPosAnimated[activeC]);
+    ghostActiveRingFrom.copy(CUBE_VERTS[activeC]);
+    ghostActiveRingAnimated.copy(CUBE_VERTS[activeC]);
     cActiveAnimStart = performance.now() - ACTIVE_STEP_MS;
     cActiveAnimReady = true;
     ghostActiveRing.visible = true;
@@ -809,14 +805,6 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
   }
 }
 
-function paintSnapOverlay(snapElement, deviation) {
-  if (snapElement == null) return;
-  const ghostOpacity = 0.15 + 0.55 * (1 - deviation);
-  ghostEdgeMat.opacity = ghostOpacity;
-  ghostVertMeshes.forEach(m => { m.material.opacity = ghostOpacity + 0.1; });
-  ghostLabels.forEach(l => { l.sprite.material.opacity = ghostOpacity + 0.2; });
-}
-
 // ---- Public API ------------------------------------------------------------
 
 /**
@@ -843,6 +831,78 @@ export function applyConnectView() {
   controls.update();
   _cubeViewApplied = true;
   autoZeroPending = true;
+  assertCubeAlignment();
+}
+
+// CUBE ALIGN invariant — the canonical-pose assumption baked in here is
+// "user holds the cube with red-front, white-top at connect time." If a
+// different pose ever becomes canonical, change the GAN-letter column in
+// `expected[]` AND the corresponding GAN→engine remap in `relay.js`.
+//
+// MIRROR: `CANONICAL_REMAP` MUST track `relay.js` MOVE_REMAP. Drift between
+// the two is exactly what `[CUBE ALIGN FAIL]` is designed to catch.
+const CANONICAL_REMAP = { R: 'L', L: 'R', F: 'B', B: 'F', U: 'U', D: 'D' };
+
+/**
+ * Geometric assertion: the chain
+ *   physical face twist → GAN factory letter → CANONICAL_REMAP →
+ *   engine letter → CUBE_VERTS face → camera projection
+ * lands each engine perm-face on the screen side the user expects.
+ * Run once at end of applyConnectView (camera at post-orbit pose,
+ * cube_group identity at calibration). FAILs loudly if any link drifts.
+ */
+function assertCubeAlignment() {
+  camera.updateMatrixWorld();
+  const camRight = new THREE.Vector3(1, 0, 0).applyQuaternion(camera.quaternion);
+  const camUp    = new THREE.Vector3(0, 1, 0).applyQuaternion(camera.quaternion);
+  const camBack  = new THREE.Vector3(0, 0, 1).applyQuaternion(camera.quaternion);
+
+  // What GAN reports per Test B (empirically confirmed) for each user-physical
+  // face twist in canonical pose, plus the screen direction the user expects
+  // to see animate.
+  const expected = [
+    { phys: 'right (blue)',  gan: 'B', axis: camRight, sign: +1, name: 'screen-right' },
+    { phys: 'left (green)',  gan: 'F', axis: camRight, sign: -1, name: 'screen-left'  },
+    { phys: 'top (white)',   gan: 'U', axis: camUp,    sign: +1, name: 'screen-top'   },
+    { phys: 'bot (yellow)',  gan: 'D', axis: camUp,    sign: -1, name: 'screen-bot'   },
+    { phys: 'front (red)',   gan: 'R', axis: camBack,  sign: +1, name: 'screen-front (camera-near)' },
+    { phys: 'back (orange)', gan: 'L', axis: camBack,  sign: -1, name: 'screen-back (camera-far)'   },
+  ];
+
+  // Engine letter → CUBE_VERTS face predicate. Mirrors corner-topology.ts
+  // CORNER_MOVE_PERMS convention (R = +X, U = +Y, F = +Z).
+  const enginePred = {
+    R: v => v.x > 0, L: v => v.x < 0,
+    U: v => v.y > 0, D: v => v.y < 0,
+    F: v => v.z > 0, B: v => v.z < 0,
+  };
+
+  const fails = [];
+  for (const e of expected) {
+    const eng = CANONICAL_REMAP[e.gan];
+    const pred = enginePred[eng];
+    const c = new THREE.Vector3(0, 0, 0);
+    let n = 0;
+    for (const v of CUBE_VERTS) {
+      if (pred(v)) { c.add(v); n++; }
+    }
+    c.divideScalar(n);
+    const proj = c.dot(e.axis);
+    const wantSign = e.sign > 0 ? '+' : '-';
+    if (proj * e.sign <= 0.3) {
+      fails.push(`physical ${e.phys} → GAN '${e.gan}' → engine '${eng}' → centroid·axis=${proj.toFixed(2)} (expected ${wantSign} for ${e.name})`);
+    }
+  }
+
+  if (fails.length > 0) {
+    console.error(
+      '[CUBE ALIGN FAIL] face-turn animations land on wrong screen sides ' +
+      '(canonical pose red-front white-top assumed; check relay MOVE_REMAP and cube-scene CANONICAL_REMAP):\n  ' +
+      fails.join('\n  ')
+    );
+  } else {
+    console.log('[CUBE ALIGN OK] all 6 face turns animate the user-expected screen face');
+  }
 }
 
 /** Revert the cube-connect orbit (called on BLE disconnect). */
@@ -884,11 +944,12 @@ export function setCubeQuat(quat) {
 /**
  * Apply a full state update from the engine. Reads:
  *   state.activeVertex, state.kPermutation, state.kVertices,
- *   state.cAssignments, state.snapQuat, state.snapElement,
- *   state.gyroDeviation, state.tetraIndex
- * Drives every piece of cube/ghost geometry, labels, animations, and
- * tetra-line opacity. Idempotent for unchanged perms (lastPermKey /
- * lastCAssignKey).
+ *   state.cAssignments, state.snapElement, state.tetraIndex
+ * Drives K-cube geometry / labels / animations, ghost active highlight
+ * (which C is ringed), and tetra-line opacity. The ghost cube itself
+ * is fixed — `cAssignments` only drives label coloring + which C is
+ * highlighted, never ghost-vertex position. Idempotent for unchanged
+ * K-perms (lastPermKey).
  */
 export function update(state) {
   const activeIdx = state.activeVertex ?? 0;
@@ -924,32 +985,6 @@ export function update(state) {
     }
   }
 
-  if (state.cAssignments) {
-    const cKey = state.cAssignments.join(',');
-    if (cKey !== lastCAssignKey) {
-      const slotOfC = new Array(8);
-      for (let slot = 0; slot < 8; slot++) {
-        slotOfC[state.cAssignments[slot] - 1] = slot;
-      }
-      if (!ghostVertAnimReady) {
-        for (let k = 0; k < 8; k++) {
-          ghostVertPosFrom[k].copy(CUBE_VERTS[slotOfC[k]]);
-          ghostVertPosTarget[k].copy(CUBE_VERTS[slotOfC[k]]);
-          ghostVertPosAnimated[k].copy(CUBE_VERTS[slotOfC[k]]);
-        }
-        ghostVertAnimStart = performance.now() - GHOST_VERT_STEP_MS;
-        ghostVertAnimReady = true;
-      } else {
-        for (let k = 0; k < 8; k++) {
-          ghostVertPosFrom[k].copy(ghostVertPosAnimated[k]);
-          ghostVertPosTarget[k].copy(CUBE_VERTS[slotOfC[k]]);
-        }
-        ghostVertAnimStart = performance.now();
-      }
-      lastCAssignKey = cKey;
-    }
-  }
-
   paintVertexLabels(
     state.kPermutation,
     state.kVertices || null,
@@ -958,10 +993,10 @@ export function update(state) {
   );
   paintActiveVertex(activeIdx, activeKIdx);
 
-  // Ghost active highlight — mirrors the K active treatment for the
-  // ghost cube. Active C type is the complex assigned to the active
-  // slot; the corresponding ghostVertMeshes[activeC] gets scaled up
-  // and a pulsing ring anchored to its current animated position.
+  // Ghost active highlight — mirrors the K active treatment. Active C
+  // type is the complex assigned to the active slot;
+  // ghostVertMeshes[activeC] gets scale-pulsed and the ring lands on
+  // the fixed CUBE_VERTS[activeC] corner.
   if (state.cAssignments) {
     const activeCType = (state.cAssignments[activeIdx] | 0) - 1;
     if (activeCType >= 0 && activeCType < 8) {
@@ -970,23 +1005,18 @@ export function update(state) {
     }
   }
 
-  if (state.snapQuat) {
-    const [sx, sy, sz, sw] = state.snapQuat;
-    const snapEl = state.snapElement;
-    currentSnap.set(-sx, sz, sy, sw);
-    ghostTarget.copy(currentSnap);
-    if (!ghostAnimReady) {
-      ghostFrom.copy(currentSnap);
-      ghostAnimated.copy(currentSnap);
-      ghostAnimStart = performance.now() - GHOST_SNAP_MS;
-      ghostAnimReady = true;
-    } else if (snapEl !== lastSnapElement) {
-      ghostFrom.copy(ghostAnimated);
-      ghostAnimStart = performance.now();
-    }
-    lastSnapElement = snapEl;
+  if (state.snapElement != null) {
     hasSnap = true;
-    paintSnapOverlay(state.snapElement, state.gyroDeviation ?? 0);
+  }
+  // Ghost cube tracks state.cQuat (= getQuaternion(complexCube.groupElement)),
+  // NOT state.snapQuat (raw gyro snap). cQuat is locked during phrase voice
+  // playback, so the ghost freezes alongside the read-head — the user sees
+  // (K, C) committed together while the phrase plays. snapQuat continues
+  // to live-track raw gyro for any consumer that wants pre-lock orientation.
+  const ghostQuat = state.cQuat || state.snapQuat;
+  if (ghostQuat && ghostQuat.length === 4) {
+    snapTarget.set(ghostQuat[0], ghostQuat[1], ghostQuat[2], ghostQuat[3]);
+    hasSnapTarget = true;
   }
 }
 
