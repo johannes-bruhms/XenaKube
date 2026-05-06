@@ -26,7 +26,7 @@ const {
    GAN Cube Live Performance Bridge - macOS FIXED (v2)
    Uses official customMacAddressProvider (no spoofing needed)
    Library now ignores device.id and uses this method
-   Prefilled with your real MAC (AB:12:34:5E:83:F7)
+   Dashboard asks for the cube MAC at connect time; do not hardcode or persist it.
 */
 
 // === Canonical-pose GAN→engine face-letter remap ===

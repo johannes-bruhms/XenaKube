@@ -16,14 +16,13 @@ Phrase audit note: `/xk/phrase/plan` is sent immediately before its matching `/x
 | `/xk/group/c` | int (0-23) | C_i S4 element: live assignment walk in alpha-cosmo, shadow in beta-cosmo |
 | `/xk/vertex/[1-8]` | float, string, float | density, intensity, K_i base duration |
 | `/xk/complex/[1-8]` | int (1-8) | ComplexType enum |
-| `/xk/path` | string | "V1" or "V2" |
 | `/xk/cycle` | string | "alpha"/"beta"/"gamma" |
 | `/xk/tetra` | int | orbit (0=even, 1=odd) |
 | `/xk/sieve` | int... | pitch semitone offsets (variable length) |
 | `/xk/gyro` | float×4 | x y z w quaternion |
 | `/xk/perm` | int x8 | current K assignment: S4 walk in alpha-cosmo, physical corner topology in beta-cosmo |
 | `/xk/step` | int | transformation count |
-| `/xk/active` | int (0-7) | active vertex index; beta-cosmo follows tracked K through physical topology |
+| `/xk/active` | int (0-7) | active vertex index; beta-cosmo selects the turned face's head-on top-right corner relative to the current top face |
 | `/xk/snap/element` | int (0-23) | S4 element gyro snaps to |
 | `/xk/snap/quat` | float×4 | quaternion of snap target |
 | `/xk/snap/dev` | float (0-1) | gyro deviation; 0=locked, 1=boundary |

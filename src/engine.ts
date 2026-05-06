@@ -138,7 +138,7 @@ export class XenaKubeEngine {
     }
   }
 
-  /** In beta-cosmo, choose which K corner the read-head physically follows. */
+  /** Choose the fallback K corner used before the first face turn. */
   setTrackedK(k: number): void {
     if (!Number.isInteger(k) || k < 0 || k > 7) {
       throw new RangeError(`tracked K corner must be an integer 0..7, got ${k}`);
@@ -192,8 +192,15 @@ export class XenaKubeEngine {
       const cStep = cDiagramStep ?? multiply(C_SHIFT, el);
       this.complexCube.transform(cStep);
     }
-    // Beta-cosmo: phase clock is locked, complexCube.groupElement is driven
-    // by gyro-snap (set in onGyro). Diagrams remain non-permuting shadows.
+    if (this.mode.cosmology === 'beta-cosmo') {
+      const snapped = snapToNearest(this.gyro);
+      this.orientationGroup = snapped;
+      this.kGroup = snapped;
+      this.complexCube.groupElement = snapped;
+    }
+    // Beta-cosmo: phase clock is locked; diagrams remain non-permuting
+    // shadows. A new turn commits the latest gyro snap before the voice is
+    // emitted so an interrupt starts from the current C assignment.
 
     const face = parseFace(move);
     if (face !== null) this.lastTurnedFace = face[0] as Face;
@@ -373,9 +380,10 @@ export class XenaKubeEngine {
 
   private nextActiveVertexAfterStep(step: number): number {
     if (this.mode.cosmology === 'alpha-cosmo') return step % 8;
-    // Beta-cosmo Design C: read-head is the top-right corner of the
-    // last-turned face under current gyro orientation. Until the first turn,
-    // fall back to the tracked-K position for a deterministic initial state.
+    // Beta-cosmo Design C: gyro chooses the current top face, then the
+    // last-turned face chooses its head-on top-right corner along that top
+    // face when the faces touch. Until the first turn, fall back to the
+    // tracked-K position for a deterministic initial state.
     if (this.lastTurnedFace !== null) {
       return topRightCorner(this.lastTurnedFace, this.gyro);
     }

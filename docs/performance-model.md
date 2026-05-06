@@ -9,10 +9,10 @@ Each physical cube turn:
 1. Move -> **cube-algorithm detector** (168 rotation variants of 7 canonical algorithms).
 2. If algorithm matched -> **mode manager** records the event. Effect handlers are currently stubs.
 3. Cosmology advances:
-   - `beta-cosmo`: visible K_i topology advances by the **physical corner permutation** for that face turn. A position `i` contains K corner `kPermutation[i]`, and the sounding read-head follows `trackedK` through that permutation.
+   - `beta-cosmo`: visible K_i topology advances by the **physical corner permutation** for that face turn. A position `i` contains K corner `kPermutation[i]`, and the sounding read-head is the turned face's head-on top-right corner; the calibrated gyro pose only decides which face is currently top.
    - `alpha-cosmo`: K_i and C_i use the historical S4 walks; K/C assignments are derived from their S4 group elements.
 4. Kinematic diagrams drive alpha-cosmo walks and remain shadow metadata in beta-cosmo.
-5. C_i advances its alpha/beta/gamma phase clock every substitution; beta-cosmo ignores C S4 for assignment order, alpha-cosmo applies it.
+5. C_i assignment advances only in alpha-cosmo. Beta-cosmo keeps C1..C8 fixed to local slots (`slot i -> C{i+1}`) and treats C S4 as shadow metadata.
 6. If the move is one of the 12 face-moves -> emit `/xk/face` before voice dispatch.
 7. **Voice engine** emits active voices (1 in sequential, 8 in polyphonic); each voice carries its `face`.
 8. **Phrase planner** computes a TypeScript shadow plan for C1-C8: intended note-ons, note-offs, bend steps, release, K-duration × face-multiplier span, first-onset timing, and companion counts.
@@ -24,7 +24,7 @@ Current migration boundary: Max still renders live audio with the legacy `phrase
 
 ## Voice Modes
 
-- **Sequential**: one active vertex at a time. In beta-cosmo this is the current position of `trackedK`; in alpha-cosmo it uses the historical step walk.
+- **Sequential**: one active vertex at a time. In beta-cosmo this is the head-on top-right corner of the last turned face relative to the current top face; in alpha-cosmo it uses the historical step walk.
 - **Polyphonic**: all 8 vertices sound simultaneously; each turn morphs the ensemble.
 
 ## Engine Modes
@@ -32,7 +32,7 @@ Current migration boundary: Max still renders live audio with the legacy `phrase
 - **Cosmology**: `beta-cosmo` is the performer-visible corner instrument; `alpha-cosmo` restores the historical Nomos Alpha S4 walk.
 - **Switching cosmology**: `setMode({ cosmology })` resets structural state so beta physical topology and alpha S4 walks cannot leak into each other.
 - **K_i diagram**: drives K_i in alpha-cosmo; remains a visible/shadow path only in beta-cosmo.
-- **C_i algorithmic/gyro**: drives C_i assignment permutation in alpha-cosmo; remains shadow S4 metadata in beta-cosmo.
+- **C_i algorithmic/gyro**: drives C_i assignment permutation in alpha-cosmo; remains shadow S4 metadata in beta-cosmo, where local C slots stay fixed.
 - **Freeze**: turns are still detected and algorithms still log, but K_i / C_i / sieve / step do not advance.
 
 The vertices have a single `(D, G, U)` table spanning the full ppp..fff dynamic palette (one unique level per vertex) and the V1 duration contour. Xenakis's V1/V2 path-toggle is retired. `D` values are inherited from V1's per-vertex distribution; `G` expanded from V1's 4-level alphabet to the full 8-step western-notation set; `U` restores the old 2/3/4/5 s material spans. Face signatures multiply `U` instead of replacing it. K_i permutation shuffles which visible corner holds which density/intensity/duration bundle.
@@ -70,10 +70,10 @@ Turn rate is not a gyro expression parameter, but it is part of the same live co
 
 ## Key Math
 
-- **Visible corner topology**: `src/corner-topology.ts` tracks which of the 8 K corners occupies each visible cube corner. Face turns are local 4-cycles on the affected face. This is beta-cosmo's live K_i permutation source and makes the active read-head physically followable.
+- **Visible corner topology**: `src/corner-topology.ts` tracks which of the 8 K corners occupies each visible cube corner. Face turns are local 4-cycles on the affected face. `src/orientation.ts` first chooses the current top face, then selects the right-hand endpoint of the turned face's shared top-face edge when the faces touch. Shallow gyro tilt does not slide the selector between corners until the top face changes.
 - **Corner solve distance**: `src/scramble.ts` precomputes exact quarter-turn distance for all `8! = 40,320` visible corner permutations. This is the current `/xk/scramble` and expression-scramble source. It ignores edge cubies and corner twist.
-- **S4 alpha/beta boundary**: `group.ts` provides the 24 hexahedral rotations, Cayley table, tetra-orbit math, algorithm orientation expansion, and gyro snap targets. In alpha-cosmo, K/C group elements drive the old walk assignments. In beta-cosmo, gyro updates `kGroup` as orientation metadata and K/C diagrams remain non-permuting shadows.
-- **C_i alpha/beta/gamma cycle**: C assignments rotate phase every 3 substitutions. Alpha-cosmo then permutes the phase table by `cGroup`; beta-cosmo leaves the phase table order fixed.
+- **S4 alpha/beta boundary**: `group.ts` provides the 24 hexahedral rotations, Cayley table, tetra-orbit math, algorithm orientation expansion, and gyro snap targets. In alpha-cosmo, K/C group elements drive the old walk assignments. In beta-cosmo, gyro updates `kGroup` as orientation metadata, `cGroup` is shadow metadata, and K/C diagrams remain non-permuting shadows.
+- **C_i alpha/beta/gamma cycle**: C assignments rotate phase every 3 substitutions only in alpha-cosmo, which then permutes the phase table by `cGroup`. Beta-cosmo keeps C identities fixed to local slots so an active K corner phrases with the visible C label in the same corner.
 - **Sieve L(m,n)**: pitch sets from prime residual classes mod 18; metabola every 3 substitutions.
 - **Tetra orbits**: 12 even (preserve tetrahedra) + 12 odd (swap). Tetra comes from the gyro-snapped orientation shadow.
 - **Turn-rate pressure**: `turnRatePressure = clamp((turnRate - 0.3) / (3.0 - 0.3), 0, 1)`. Per-complex gains in `src/swam-mapping.ts` bend density, velocity, expression, bow pressure, C8 tremolo rate, and C5 accent above the K_i baseline.

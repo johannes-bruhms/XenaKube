@@ -2,6 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { XenaKubeEngine } from '../src/engine.js';
 import { getBaseVertices } from '../src/vertices.js';
 import { getPermutation, parseMoveToElement } from '../src/group.js';
+import { ComplexType } from '../src/types.js';
+import type { VoiceOutput } from '../src/voice-engine.js';
 
 describe('XenaKubeEngine', () => {
   it('starts at identity with correct initial state', () => {
@@ -12,6 +14,16 @@ describe('XenaKubeEngine', () => {
     expect(state.cosmology).toBe('beta-cosmo');
     expect(state.kPermutation).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
     expect(state.cGroup).toBe(0);
+    expect(state.cAssignments).toEqual([
+      ComplexType.AtaxicCloud,
+      ComplexType.OrderedCloudAscDesc,
+      ComplexType.OrderedCloudFlat,
+      ComplexType.IonizedAtom,
+      ComplexType.AtaxicSliding,
+      ComplexType.OrderedSlidingAscDesc,
+      ComplexType.OrderedSlidingFlat,
+      ComplexType.Atom,
+    ]);
     expect(state.step).toBe(0);
     expect(state.cyclicPhase).toBe('alpha');
     expect(state.kVertices).toHaveLength(8);
@@ -63,11 +75,11 @@ describe('XenaKubeEngine', () => {
     expect([...new Set(movedDurations)].sort()).toEqual([2, 3, 4, 5]);
   });
 
-  it('beta-cosmo read-head = top-right corner of last-turned face under gyro', () => {
+  it('beta-cosmo read-head = top-face anchored top-right of last-turned face', () => {
     const engine = new XenaKubeEngine();
 
     let state = engine.onTurn('R')!;
-    // R-twist canonical home = vertex 3 (BTR per orientation.ts FACE_TARGET).
+    // R-twist canonical head-on top-right = vertex 3 (BTR).
     expect(state.lastTurnedFace).toBe('R');
     expect(state.activeVertex).toBe(3);
 
@@ -77,9 +89,27 @@ describe('XenaKubeEngine', () => {
     expect(state.activeVertex).toBe(0);
 
     state = engine.onTurn('U')!;
-    // U-twist canonical home = vertex 3 (BTR — collides with R, by design).
+    // U-twist canonical home = vertex 3 (BTR), colliding with R by design.
     expect(state.lastTurnedFace).toBe('U');
     expect(state.activeVertex).toBe(3);
+  });
+
+  it('beta-cosmo pairs the active K corner with the fixed local C identity', () => {
+    const engine = new XenaKubeEngine();
+    let emitted: VoiceOutput | null = null;
+    engine.onVoice(output => { emitted = output; });
+
+    const state = engine.onTurn('R')!;
+
+    // User-visible R home slot is vertex 3: the ghost label there is C4.
+    // This must sound C4, not the historical alpha-table C5 entry.
+    expect(state.activeVertex).toBe(3);
+    expect(state.activeK).toBe(0);
+    expect(state.cAssignments[state.activeVertex]).toBe(ComplexType.IonizedAtom);
+    expect(emitted?.active[0]).toMatchObject({
+      vertexIndex: 3,
+      complex: ComplexType.IonizedAtom,
+    });
   });
 
   it('keeps C_i S4 state non-permuting in algorithmic mode', () => {
@@ -192,6 +222,25 @@ describe('XenaKubeEngine', () => {
       engine.onTurn('R');
       expect(engine.getState().cyclicPhase).toBe('alpha');
     }
+  });
+
+  it('beta-cosmo interrupt commits the latest C snap before the new voice', () => {
+    const engine = new XenaKubeEngine();
+
+    const first = engine.onTurn('R')!;
+    const lockedCGroup = first.cGroup;
+    expect(first.cAssignments[first.activeVertex]).toBe(first.activeVertex + 1);
+
+    let state = engine.onGyro(0, Math.SQRT1_2, 0, Math.SQRT1_2)!;
+    expect(state.cGroup).toBe(lockedCGroup);
+    expect(state.cAssignments[state.activeVertex]).toBe(state.activeVertex + 1);
+    expect(state.snapElement).not.toBe(lockedCGroup);
+
+    state = engine.onTurn('B')!;
+    expect(state.lastTurnedFace).toBe('B');
+    expect(state.cGroup).toBe(state.snapElement);
+    expect(state.cAssignments[state.activeVertex]).toBe(state.activeVertex + 1);
+    expect(state.cGroup).not.toBe(lockedCGroup);
   });
 
   it('advances sieve every 3 substitutions', () => {

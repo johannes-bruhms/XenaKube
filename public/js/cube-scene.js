@@ -3,12 +3,13 @@
 // Phase 2.5 — Three.js cube scene module. Owns:
 //   • the live K-cube (edges, tetra wireframes, vertex spheres + labels,
 //     active-vertex glow ring)
-//   • the ghost C-cube (faint cyan wireframe + per-C dots/labels at a
-//     fixed orientation; rotatable independently via the gizmo)
+//   • the ghost C-cube (faint cyan wireframe + per-C dots/labels that
+//     snap-rotate with state.snapQuat; C identities stay fixed to local
+//     slots in beta-cosmo, but walk across slots in alpha-cosmo)
 //   • the K↔C 3D connection line that joins the active K-vertex to its
 //     geometrically nearest C-vertex
-//   • all per-frame animations (gyro live rotation,
-//     active-step LERP, K-vertex perm-change LERPs)
+//   • all per-frame animations (gyro live rotation, ghost snap rotation,
+//     active-step LERP, K vertex assignment LERPs, active highlights)
 //   • the rotation gizmo (cam/live/ghost rotate target + axis rings)
 //   • the auto-fit camera and resize handling
 //
@@ -28,6 +29,7 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { FACES, FACE_NORMAL as FACE_GLYPH_NORMAL, paintFaceGlyph } from './face-glyph.js';
 
 // ---- Geometry constants (internal) -----------------------------------------
 
@@ -42,6 +44,15 @@ const CUBE_VERTS = [
   new THREE.Vector3(-1, -1, -1),  // 6 BBL
   new THREE.Vector3( 1, -1, -1),  // 7 BBR
 ];
+
+const FACE_CORNERS = {
+  R: [0, 3, 4, 7],
+  L: [1, 2, 5, 6],
+  U: [0, 1, 2, 3],
+  D: [4, 5, 6, 7],
+  F: [0, 1, 4, 5],
+  B: [2, 3, 6, 7],
+};
 
 const CUBE_EDGES = [
   [0,1],[1,2],[2,3],[3,0],
@@ -192,6 +203,9 @@ const activeRingMat = new THREE.MeshBasicMaterial({
 const activeRing = new THREE.Mesh(activeRingGeo, activeRingMat);
 activeRing.visible = false;
 
+const topMarkerGeo = new THREE.SphereGeometry(0.035, 8, 8);
+const liveTopMarkers = [];
+
 // Ghost active vertex ring — mirrors activeRing but lives in ghostGroup so
 // it follows the snap target's rotation. Slightly smaller radius because
 // ghost vertex spheres are 0.05 (vs live's 0.06). Pulses out of phase
@@ -206,6 +220,7 @@ const ghostActiveRingMat = new THREE.MeshBasicMaterial({
 });
 const ghostActiveRing = new THREE.Mesh(ghostActiveRingGeo, ghostActiveRingMat);
 ghostActiveRing.visible = false;
+const ghostTopMarkers = [];
 
 function makeLabel(text, color) {
   const c = document.createElement('canvas');
@@ -241,12 +256,28 @@ for (let i = 0; i < 8; i++) {
 const cubeGroup = new THREE.Group();
 scene.add(cubeGroup);
 cubeGroup.add(edgeLines, tetraALines, tetraBLines, activeRing);
+for (let i = 0; i < 8; i++) {
+  const marker = new THREE.Mesh(
+    topMarkerGeo.clone(),
+    new THREE.MeshBasicMaterial({
+      color: 0xffcc00,
+      transparent: true,
+      opacity: 0,
+      depthTest: false,
+    })
+  );
+  marker.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.11);
+  marker.renderOrder = 2;
+  cubeGroup.add(marker);
+  liveTopMarkers.push(marker);
+}
 vertexMeshes.forEach(m => cubeGroup.add(m));
 vertexLabels.forEach(l => cubeGroup.add(l.sprite));
 
-// Ghost cube — fixed-orientation C-cube showing the canonical complex
-// assignment. Independent of gyro / S4 snap; the gizmo can rotate it
-// (`ghostViewOffset`) but the cube does not track the live cube.
+// Ghost cube — snapped S4 C-cube. It tracks state.snapQuat independently
+// of phrase material locks. C identities are fixed to local slots in beta-cosmo
+// for performer readability, but in alpha-cosmo they move to their reassigned
+// slots as `state.cAssignments` advances.
 const ghostGroup = new THREE.Group();
 ghostGroup.visible = false;
 scene.add(ghostGroup);
@@ -255,6 +286,21 @@ const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent:
 const ghostEdges = new THREE.LineSegments(edgeGeo.clone(), ghostEdgeMat);
 ghostGroup.add(ghostEdges);
 ghostGroup.add(ghostActiveRing);
+for (let i = 0; i < 8; i++) {
+  const marker = new THREE.Mesh(
+    topMarkerGeo.clone(),
+    new THREE.MeshBasicMaterial({
+      color: 0xffcc00,
+      transparent: true,
+      opacity: 0,
+      depthTest: false,
+    })
+  );
+  marker.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.09);
+  marker.renderOrder = 2;
+  ghostGroup.add(marker);
+  ghostTopMarkers.push(marker);
+}
 
 const ghostVertGeo = new THREE.SphereGeometry(0.05, 6, 6);
 const ghostVertMeshes = [];
@@ -284,6 +330,73 @@ for (let i = 0; i < 8; i++) {
   label.sprite.scale.set(0.7, 0.44, 1);
   ghostGroup.add(label.sprite);
   ghostLabels.push(label);
+}
+
+// Face-signature glyph decals — one PlaneGeometry mesh pasted on each cube
+// face (6 total), parented to ghostGroup so they rotate rigidly with the
+// snapped ghost orientation. NOT billboarded: the glyph lies in the face's
+// plane, sharing its outward normal. DoubleSide rendering means the same
+// painted texture is visible from both sides of the cube — viewed from
+// outside it reads correctly; viewed from the cube interior (i.e., looking
+// at the opposite face's glyph through this face's transparent plane) it
+// appears horizontally mirrored, which is the natural single-sided-texture-
+// seen-from-behind effect. depthWrite is off so each plane's transparent
+// pixels don't depth-occlude the others — all six glyphs render and alpha-
+// composite, with back-of-cube glyphs visible through the alpha holes of
+// front-of-cube ones.
+//
+// Per-face Euler rotation orients PlaneGeometry's default +Z surface normal
+// to each face's outward normal:
+//   F (+Z): identity
+//   B (-Z): 180° around Y
+//   R (+X): +90° around Y    L (-X): -90° around Y
+//   U (+Y): -90° around X    D (-Y): +90° around X
+// Canvas-up maps to world +Y for F/B/L/R and to world -Z for U/D (no world
+// up/down on the top/bottom faces, so "back of cube" is the chosen
+// convention so the glyph reads consistently from a typical orbit camera).
+const FACE_GLYPH_SIZE = 256;          // canvas resolution (high-DPR friendly)
+const FACE_GLYPH_PLANE = 0.6;         // plane edge length (cube face is 2×2; tiny decal centered on face)
+const FACE_PLANE_EULER = {
+  F: new THREE.Euler(0,            0,             0),
+  B: new THREE.Euler(0,            Math.PI,       0),
+  R: new THREE.Euler(0,            Math.PI / 2,   0),
+  L: new THREE.Euler(0,           -Math.PI / 2,   0),
+  U: new THREE.Euler(-Math.PI / 2, 0,             0),
+  D: new THREE.Euler( Math.PI / 2, 0,             0),
+};
+const ghostFaceGlyphs = [];           // [{ face, mesh, mat, tex, canvas, ctx }]
+const _faceGlyphGeo = new THREE.PlaneGeometry(FACE_GLYPH_PLANE, FACE_GLYPH_PLANE);
+const _faceGlyphAxis = new THREE.Vector3(0, 0, 1);
+const _faceTurnStates = {};          // face -> { turns: number, base: THREE.Quaternion, twist: THREE.Quaternion, mesh }
+for (const face of FACES) {
+  const c = document.createElement('canvas');
+  c.width = FACE_GLYPH_SIZE;
+  c.height = FACE_GLYPH_SIZE;
+  const ctx = c.getContext('2d');
+  paintFaceGlyph(ctx, face, { color: '#e0f4ff' });
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  const mat = new THREE.MeshBasicMaterial({
+    map: tex,
+    transparent: true,
+    side: THREE.DoubleSide,
+    depthWrite: false,
+    opacity: 1.0,
+  });
+  const mesh = new THREE.Mesh(_faceGlyphGeo, mat);
+  const n = FACE_GLYPH_NORMAL[face];
+  mesh.position.set(n[0], n[1], n[2]);
+  const baseRot = new THREE.Quaternion().setFromEuler(FACE_PLANE_EULER[face]);
+  mesh.quaternion.copy(baseRot);
+  _faceTurnStates[face] = {
+    turns: 0,
+    base: baseRot,
+    twist: new THREE.Quaternion(),
+    mesh,
+  };
+  mesh.renderOrder = 3;
+  ghostGroup.add(mesh);
+  ghostFaceGlyphs.push({ face, mesh, mat, tex, canvas: c, ctx });
 }
 
 // K↔C connection line.
@@ -528,13 +641,11 @@ let activeAnimStart = 0;
 let activeAnimReady = false;
 let currentActiveK = 0;
 
-// Mirror of the K active-vertex animation state for the ghost cube. The
-// active complex is `state.cAssignments[activeIdx] - 1` (0-indexed C
-// type); the corresponding `ghostVertMeshes[activeC]` is pinned to
-// `CUBE_VERTS[activeC]` (fixed corner — ghost vertices do not migrate)
-// and gets scale-pulsed + a ring. Scale target is 2.0 (vs 2.5 for K)
-// because ghost spheres are smaller and slightly translucent — 2.5
-// reads too aggressive.
+// Mirror of the K active-vertex animation state for the ghost cube. In
+// beta-cosmo, the active C is the fixed local slot under the active K corner;
+// alpha-cosmo can still highlight whichever C type the S4 assignment table
+// places there. Scale target is 2.0 (vs 2.5 for K) because ghost spheres are
+// smaller and slightly translucent.
 const cSphereScaleFrom = new Float32Array(8).fill(1.0);
 const ghostActiveRingFrom = new THREE.Vector3();
 const ghostActiveRingAnimated = new THREE.Vector3();
@@ -550,6 +661,16 @@ const vertexPosAnimated = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clon
 let vertexAnimStart = 0;
 let vertexAnimReady = false;
 let lastPermKey = '';
+
+const GHOST_LABEL_OFFSET_FACTOR = 1 + 0.45 / Math.sqrt(3);
+const GHOST_VERT_STEP_MS = 100;
+const ghostVertPosFrom     = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const ghostVertPosTarget   = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+const ghostVertPosAnimated = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
+let ghostVertAnimStart = 0;
+let ghostVertAnimReady = false;
+let lastCAssignKey = '__init__';
+let lastCAssignCosmology = 'beta-cosmo';
 
 // Gyro zero calibration
 const gyroZeroInv = new THREE.Quaternion(0, 0, 0, 1);
@@ -609,12 +730,12 @@ function animateCube() {
 
   if (hasSnap) {
     ghostGroup.visible = true;
-    // Beta-cosmo restoration: ghost cube SLERPs toward the gyro-snapped S4
-    // orientation (state.snapQuat from the engine). The locked alpha-mapping
-    // C-assignments rotate WITH the ghost — different snap cells expose
-    // different complexes at each slot. The live cube continues to render
-    // raw gyro (no snap), so the visible deviation between live and ghost
-    // is the gyroDeviation expression source.
+    // Ghost cube SLERPs toward the gyro-snapped S4 orientation
+    // (state.snapQuat from the engine). C identities stay fixed in the
+    // ghost's local slots, so a face turn cannot create a second ghost
+    // rotation after the live pose has already snapped. The live cube
+    // continues to render raw gyro (no snap), so the visible deviation
+    // between live and ghost is the gyroDeviation expression source.
     if (hasSnapTarget) {
       ghostQuatTarget.copy(ghostViewOffset).multiply(snapTarget);
       ghostGroup.quaternion.slerp(ghostQuatTarget, GHOST_SLERP_RATE);
@@ -648,9 +769,22 @@ function animateCube() {
     }
   }
 
+  // C identity geometry can move in alpha-cosmo (so the C identities
+  // perform the S4 walk), but stays fixed by local slot in beta.
+  if (ghostVertAnimReady) {
+    const elapsed = performance.now() - ghostVertAnimStart;
+    const t = elapsed >= GHOST_VERT_STEP_MS ? 1 : elapsed / GHOST_VERT_STEP_MS;
+    for (let c = 0; c < 8; c++) {
+      ghostVertPosAnimated[c].copy(ghostVertPosFrom[c]).lerp(ghostVertPosTarget[c], t);
+      ghostVertMeshes[c].position.copy(ghostVertPosAnimated[c]);
+      ghostLabels[c].sprite.position.copy(ghostVertPosAnimated[c]).multiplyScalar(GHOST_LABEL_OFFSET_FACTOR);
+    }
+  }
+
   // Ghost active vertex scale + ring (mirror of the K active-vertex
-  // animation block above). Ring lerps to the active C's fixed corner
-  // (`CUBE_VERTS[currentActiveC]`); ghost vertex meshes never migrate.
+  // animation block above). Ring tracks the assigned active C identity, so
+  // phrase selection can highlight it even when C identities move in
+  // alpha-cosmo.
   if (cActiveAnimReady) {
     const elapsed = performance.now() - cActiveAnimStart;
     const t = elapsed >= ACTIVE_STEP_MS ? 1 : elapsed / ACTIVE_STEP_MS;
@@ -659,7 +793,8 @@ function animateCube() {
       const s = cSphereScaleFrom[c] + (target - cSphereScaleFrom[c]) * t;
       ghostVertMeshes[c].scale.setScalar(s);
     }
-    ghostActiveRingAnimated.copy(ghostActiveRingFrom).lerp(CUBE_VERTS[currentActiveC], t);
+    const targetPos = ghostVertPosTarget[currentActiveC] || CUBE_VERTS[currentActiveC];
+    ghostActiveRingAnimated.copy(ghostActiveRingFrom).lerp(targetPos, t);
     ghostActiveRing.position.copy(ghostActiveRingAnimated);
     ghostActiveRing.lookAt(camera.position);
   }
@@ -706,6 +841,22 @@ animateCube();
 
 // ---- Internal label paint helpers ------------------------------------------
 
+function applyFaceTurnGlyphRotation(move) {
+  if (typeof move !== 'string' || move.length < 1) return;
+  const face = move[0];
+  const state = _faceTurnStates[face];
+  if (!state) return;
+
+  const isPrime = move.includes("'");
+  const isHalf = move.includes('2');
+  let turns = isHalf ? 2 : 1;
+  if (isPrime) turns = -turns;
+  state.turns = (state.turns + turns) % 4;
+  if (state.turns < 0) state.turns += 4;
+  state.twist.setFromAxisAngle(_faceGlyphAxis, state.turns * Math.PI * 0.5);
+  state.mesh.quaternion.copy(state.base).multiply(state.twist);
+}
+
 function paintActiveVertex(slot, activeK) {
   if (!activeAnimReady) {
     for (let k = 0; k < 8; k++) {
@@ -732,14 +883,15 @@ function paintActiveVertex(slot, activeK) {
 }
 
 function paintActiveGhostVertex(activeC) {
+  const activePos = ghostVertPosTarget[activeC] || CUBE_VERTS[activeC];
   if (!cActiveAnimReady) {
     for (let c = 0; c < 8; c++) {
       const s = (c === activeC) ? 2.0 : 1.0;
       cSphereScaleFrom[c] = s;
       ghostVertMeshes[c].scale.setScalar(s);
     }
-    ghostActiveRingFrom.copy(CUBE_VERTS[activeC]);
-    ghostActiveRingAnimated.copy(CUBE_VERTS[activeC]);
+    ghostActiveRingFrom.copy(activePos);
+    ghostActiveRingAnimated.copy(activePos);
     cActiveAnimStart = performance.now() - ACTIVE_STEP_MS;
     cActiveAnimReady = true;
     ghostActiveRing.visible = true;
@@ -751,6 +903,23 @@ function paintActiveGhostVertex(activeC) {
     ghostActiveRingFrom.copy(ghostActiveRingAnimated);
     cActiveAnimStart = performance.now();
     currentActiveC = activeC;
+  }
+}
+
+function paintTopMarkers(upFaceName, activeSlot) {
+  const topSlots = new Set(FACE_CORNERS[upFaceName] || []);
+  for (let i = 0; i < 8; i++) {
+    const isTop = topSlots.has(i);
+    const isActive = i === activeSlot;
+    const liveMarker = liveTopMarkers[i];
+    liveMarker.visible = isTop;
+    liveMarker.material.opacity = isTop ? (isActive ? 0.85 : 0.32) : 0;
+    liveMarker.scale.setScalar(isTop && isActive ? 1.6 : 1.0);
+
+    const ghostMarker = ghostTopMarkers[i];
+    ghostMarker.visible = isTop;
+    ghostMarker.material.opacity = isTop ? 0.32 : 0;
+    ghostMarker.scale.setScalar(1.0);
   }
 }
 
@@ -772,6 +941,60 @@ function paintGhostVertexLabels(activeC) {
     ctx.fillText(COMPLEX_ABBR[c + 1] || '', 64, 22);
     label.tex.needsUpdate = true;
   }
+}
+
+function applyGhostCAssignmentMove(cAssignments, cosmology) {
+  const nextKey = cosmology === 'alpha-cosmo' ? cAssignments.join(',') : '__beta__';
+  if (lastCAssignKey === nextKey && lastCAssignCosmology === cosmology) return;
+
+  if (cosmology !== 'alpha-cosmo') {
+    for (let c = 0; c < 8; c++) {
+      ghostVertPosFrom[c].copy(CUBE_VERTS[c]);
+      ghostVertPosTarget[c].copy(CUBE_VERTS[c]);
+      ghostVertPosAnimated[c].copy(CUBE_VERTS[c]);
+      ghostLabels[c].sprite.position.copy(CUBE_VERTS[c]).multiplyScalar(GHOST_LABEL_OFFSET_FACTOR);
+      ghostVertMeshes[c].position.copy(CUBE_VERTS[c]);
+    }
+    ghostVertAnimStart = performance.now() - GHOST_VERT_STEP_MS;
+    ghostVertAnimReady = true;
+    lastCAssignKey = nextKey;
+    lastCAssignCosmology = cosmology;
+    return;
+  }
+
+  const slotOfC = new Array(8);
+  for (let slot = 0; slot < 8; slot++) {
+    const cIdx = cAssignments[slot];
+    if (typeof cIdx === 'number' && cIdx >= 1 && cIdx <= 8) {
+      slotOfC[cIdx - 1] = slot;
+    }
+  }
+
+  if (!ghostVertAnimReady) {
+    for (let c = 0; c < 8; c++) {
+      const slot = slotOfC[c];
+      const target = slot === undefined ? CUBE_VERTS[c] : CUBE_VERTS[slot];
+      ghostVertPosFrom[c].copy(target);
+      ghostVertPosTarget[c].copy(target);
+      ghostVertPosAnimated[c].copy(target);
+      ghostVertMeshes[c].position.copy(target);
+      ghostLabels[c].sprite.position.copy(target).multiplyScalar(GHOST_LABEL_OFFSET_FACTOR);
+    }
+    ghostVertAnimStart = performance.now() - GHOST_VERT_STEP_MS;
+    ghostVertAnimReady = true;
+  } else {
+    for (let c = 0; c < 8; c++) {
+      const slot = slotOfC[c];
+      const target = slot === undefined ? CUBE_VERTS[c] : CUBE_VERTS[slot];
+      ghostVertPosFrom[c].copy(ghostVertPosAnimated[c]);
+      ghostVertPosTarget[c].copy(target);
+    }
+    ghostVertAnimStart = performance.now();
+    ghostVertAnimReady = true;
+  }
+
+  lastCAssignKey = nextKey;
+  lastCAssignCosmology = cosmology;
 }
 
 function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
@@ -944,16 +1167,18 @@ export function setCubeQuat(quat) {
 /**
  * Apply a full state update from the engine. Reads:
  *   state.activeVertex, state.kPermutation, state.kVertices,
- *   state.cAssignments, state.snapElement, state.tetraIndex
- * Drives K-cube geometry / labels / animations, ghost active highlight
- * (which C is ringed), and tetra-line opacity. The ghost cube itself
- * is fixed — `cAssignments` only drives label coloring + which C is
- * highlighted, never ghost-vertex position. Idempotent for unchanged
- * K-perms (lastPermKey).
+ *   state.cAssignments, state.snapElement, state.snapQuat, state.upFace,
+ *   state.tetraIndex
+ * Drives K-cube geometry / labels / animations, ghost active highlight,
+ * top-face markers, and tetra-line opacity. In beta-cosmo ghost C geometry
+ * is fixed in local slots; in alpha-cosmo C identities walk to new slots
+ * whenever `state.cAssignments` changes.
  */
-export function update(state) {
+export function update(state, move) {
   const activeIdx = state.activeVertex ?? 0;
   const activeKIdx = state.kPermutation ? state.kPermutation[activeIdx] : activeIdx;
+
+  applyFaceTurnGlyphRotation(move);
 
   if (typeof state.tetraIndex === 'number') {
     tetraALines.material.opacity = state.tetraIndex === 0 ? 0.6 : 0.15;
@@ -992,31 +1217,79 @@ export function update(state) {
     activeIdx
   );
   paintActiveVertex(activeIdx, activeKIdx);
+  paintTopMarkers(state.upFace, activeIdx);
 
-  // Ghost active highlight — mirrors the K active treatment. Active C
-  // type is the complex assigned to the active slot;
-  // ghostVertMeshes[activeC] gets scale-pulsed and the ring lands on
-  // the fixed CUBE_VERTS[activeC] corner.
+  // C assignment drives alpha-cosmo walk visuals; beta-cosmo keeps local
+  // identity-label coupling to avoid face-turn mismatch with the active K label.
   if (state.cAssignments) {
-    const activeCType = (state.cAssignments[activeIdx] | 0) - 1;
+    const activeCType = resolveActiveGhostC(state, activeIdx);
     if (activeCType >= 0 && activeCType < 8) {
       paintActiveGhostVertex(activeCType);
       paintGhostVertexLabels(activeCType);
+    }
+    applyGhostCAssignmentMove(state.cAssignments, state.cosmology);
+    if (state.cosmology === 'beta-cosmo') {
+      assertGhostStaticLocalGeometry();
     }
   }
 
   if (state.snapElement != null) {
     hasSnap = true;
   }
-  // Ghost cube tracks state.cQuat (= getQuaternion(complexCube.groupElement)),
-  // NOT state.snapQuat (raw gyro snap). cQuat is locked during phrase voice
-  // playback, so the ghost freezes alongside the read-head — the user sees
-  // (K, C) committed together while the phrase plays. snapQuat continues
-  // to live-track raw gyro for any consumer that wants pre-lock orientation.
-  const ghostQuat = state.cQuat || state.snapQuat;
-  if (ghostQuat && ghostQuat.length === 4) {
-    snapTarget.set(ghostQuat[0], ghostQuat[1], ghostQuat[2], ghostQuat[3]);
+  // Ghost orientation is always the live snap target, never cQuat. cQuat can
+  // be phrase-locked so material selection remains stable while notes draw;
+  // using it here would visually freeze the ghost during the phrase.
+  if (state.snapQuat && state.snapQuat.length === 4) {
+    snapTarget.set(state.snapQuat[0], state.snapQuat[1], state.snapQuat[2], state.snapQuat[3]);
     hasSnapTarget = true;
+    assertGhostSnapSource(state);
+  }
+}
+
+function resolveActiveGhostC(state, activeIdx) {
+  const assigned = state.cAssignments ? ((state.cAssignments[activeIdx] | 0) - 1) : activeIdx;
+  if (state.cosmology === 'beta-cosmo') {
+    if (assigned >= 0 && assigned < 8 && assigned !== activeIdx) {
+      console.error(
+        `[GHOST ACTIVE SLOT FAIL] beta-cosmo active C assignment C${assigned + 1} ` +
+        `does not match active local slot C${activeIdx + 1}; ` +
+        'fixed ghost labels, active card, and voice complex must share the same corner'
+      );
+    }
+    return activeIdx;
+  }
+  return assigned;
+}
+
+function assertGhostSnapSource(state) {
+  const q = state.snapQuat;
+  const dot = Math.abs(
+    snapTarget.x * q[0] +
+    snapTarget.y * q[1] +
+    snapTarget.z * q[2] +
+    snapTarget.w * q[3]
+  );
+  const drift = 1 - Math.min(1, dot);
+  if (drift > 1e-6) {
+    console.error(
+      '[GHOST SNAP FAIL] ghost target is not state.snapQuat; ' +
+      'check cube-scene.js update() for accidental cQuat/phrase-lock coupling'
+    );
+  }
+}
+
+function assertGhostStaticLocalGeometry() {
+  for (let c = 0; c < 8; c++) {
+    const meshDrift = ghostVertMeshes[c].position.distanceToSquared(CUBE_VERTS[c]);
+    const labelTarget = CUBE_VERTS[c].clone().multiplyScalar(GHOST_LABEL_OFFSET_FACTOR);
+    const labelDrift = ghostLabels[c].sprite.position.distanceToSquared(labelTarget);
+    if (meshDrift > 1e-8 || labelDrift > 1e-8) {
+      console.error(
+        '[GHOST TURN LEAK FAIL] ghost C geometry changed during state update; ' +
+        'face turns must not move ghost vertices or labels'
+      );
+      return;
+    }
   }
 }
 

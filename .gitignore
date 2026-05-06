@@ -18,5 +18,9 @@ backups/
 docs/*.png
 docs/temp-screenshots/
 
+# Local interruption-layer footage (use generated placeholders in committed code)
+media/
+public/interruption/media/
+
 # Local Ableton project — not part of the committed repo
 ableton/

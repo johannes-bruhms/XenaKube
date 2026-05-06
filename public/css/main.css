@@ -594,6 +594,19 @@
   .ovl-tl .vertex-grid, .ovl-tl .complex-grid { display: block !important; }
   .active-cards { display: flex; flex-direction: column; gap: 6px; }
 
+  /* Last-turned face-signature glyph slot. Single canvas painted by
+     state-ui.js on every face move via paintFaceGlyph() (face-glyph.js).
+     CSS render size is independent of the canvas attribute resolution
+     (256×256) — high-DPR sampling stays crisp. */
+  .active-face-glyph {
+    width: 88px;
+    height: 88px;
+    align-self: flex-start;
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    background: rgba(10, 10, 15, 0.55);
+  }
+
   .move-log {
     font-size: 12px;
     max-height: 150px;
@@ -727,6 +740,29 @@
     letter-spacing: 0.5px;
     text-transform: uppercase;
     background: transparent;
+  }
+  button.mode-badge {
+    appearance: none;
+    font-family: inherit;
+    cursor: pointer;
+  }
+  button.mode-badge:focus-visible {
+    outline: 1px solid var(--text);
+    outline-offset: 2px;
+  }
+  .mode-badge.mode-toggle:hover {
+    color: var(--text);
+    border-color: var(--text);
+  }
+  .mode-badge.cosmology-beta {
+    background: rgba(0, 255, 136, 0.10);
+    border: 1px solid var(--accent);
+    color: var(--accent);
+  }
+  .mode-badge.cosmology-alpha {
+    background: rgba(0, 204, 255, 0.12);
+    border: 1px solid var(--accent2);
+    color: var(--accent2);
   }
   .mode-badge.voice-seq {
     background: rgba(0, 255, 136, 0.12);

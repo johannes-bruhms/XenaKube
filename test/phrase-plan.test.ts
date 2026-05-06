@@ -91,12 +91,17 @@ describe('PhrasePlanner', () => {
     expect(plan.expected.companionNoteOnCount).toBe(0);
   });
 
-  it('C5 plans wild gliss bends and deterministic companions', () => {
+  it('C5 plans wild gliss bends and anchor-only deterministic companions', () => {
     const planner = new PhrasePlanner({ rng: () => 0, now: () => 1000 });
     const plan = planner.planVoiceOutput(voice(ComplexType.AtaxicSliding, 'R'), state())[0];
+    const companionNoteOns = plan.events.filter(e => e.kind === 'noteOn' && e.isCompanion === true);
+    const companionNoteOffs = plan.events.filter(e => e.kind === 'noteOff' && e.isCompanion === true);
 
     expect(plan.expected.bendStepCount).toBeGreaterThanOrEqual(1);
-    expect(plan.expected.companionNoteOnCount).toBeGreaterThanOrEqual(1);
+    expect(companionNoteOns).toHaveLength(1);
+    expect(companionNoteOns[0].tMs).toBe(0);
+    expect(companionNoteOffs.some(e => e.tMs === 150)).toBe(true);
+    expect(plan.expected.companionNoteOnCount).toBe(1);
   });
 
   it('turn-rate pressure increases planned density and expression without changing complex identity', () => {

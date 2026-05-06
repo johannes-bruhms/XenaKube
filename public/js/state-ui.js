@@ -24,6 +24,7 @@
 //   • #s-path click           → init({ onPathToggle }) callback
 
 import { setActive as setActiveSieve } from './sieve.js';
+import { FACE_SIG, paintFaceGlyph, paintEmptyGlyph } from './face-glyph.js';
 
 // ---- Constants (internal) --------------------------------------------------
 
@@ -40,24 +41,10 @@ const COMPLEX_SHORT = {
 
 const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.75, 'fff': 0.92 };
 
-// Phase A1 — mirror of FACE_SIGNATURES (envelope/articulation/motion +
-// registerBias for notation). Source of truth lives in src/face-gesture.ts;
-// this is for HUD + tier-1 notation. Half-turns (L2/R2/...) and non-face
-// moves return null.
-const FACE_SIG = {
-  'U':  { envelope: 'pluck', articulation: 'attack',    motion: 'up',        registerBias:  0.8 },
-  "U'": { envelope: 'fade',  articulation: 'release',   motion: 'down',      registerBias:  0.8 },
-  'D':  { envelope: 'stab',  articulation: 'attack',    motion: 'down',      registerBias: -0.8 },
-  "D'": { envelope: 'hairpin-up',   articulation: 'sustained', motion: 'static',    registerBias: -0.8 },
-  'L':  { envelope: 'swell', articulation: 'sustained', motion: 'up',        registerBias:  0.0 },
-  "L'": { envelope: 'fade',  articulation: 'release',   motion: 'down',      registerBias:  0.0 },
-  'R':  { envelope: 'stab',  articulation: 'attack',    motion: 'static',    registerBias:  0.0 },
-  "R'": { envelope: 'burst', articulation: 'iterative', motion: 'oscillate', registerBias:  0.0 },
-  'F':  { envelope: 'swell', articulation: 'sustained', motion: 'up',        registerBias:  0.3 },
-  "F'": { envelope: 'swell', articulation: 'sustained', motion: 'down',      registerBias:  0.3 },
-  'B':  { envelope: 'pluck', articulation: 'attack',    motion: 'static',    registerBias: -0.3 },
-  "B'": { envelope: 'hairpin-down', articulation: 'sustained', motion: 'oscillate', registerBias: -0.3 },
-};
+// FACE_SIG canonical mirror lives in `./face-glyph.js` (shared with
+// cube-scene's ghost-face glyph sprites). Source of truth is
+// src/face-gesture.ts; the JS mirror exists because the browser bundle
+// can't import the engine's TS module directly.
 
 // Move log — dashboard-side FIFO of the last RECENT_MOVES_MAX moves the
 // performer has executed (independent of the engine's `state.algorithmBuffer`,
@@ -76,6 +63,8 @@ const vertexCards = [];
 const complexCards = [];
 const seqPips = [];
 const permSlots = [];
+let activeFaceGlyphCanvas = null;
+let activeFaceGlyphCtx = null;
 
 // ---- Local-expression state (gyro-derived) --------------------------------
 
@@ -134,11 +123,32 @@ export function init() {
     permSlots.push(slot);
   }
 
+  // Last-turned face glyph slot — single canvas in .active-cards. Painted
+  // by `update()` on every state broadcast that carries a face move; idle
+  // before the first face turn (paintEmptyGlyph). Companion to the 6
+  // predictive ghost-cube face glyphs: this one is retrospective.
+  activeFaceGlyphCanvas = document.getElementById('active-face-glyph');
+  if (activeFaceGlyphCanvas) {
+    activeFaceGlyphCtx = activeFaceGlyphCanvas.getContext('2d');
+    paintEmptyGlyph(activeFaceGlyphCtx);
+  }
 }
 
 /** Cache the algorithm book locally if any caller wants to read it later. */
 export function setAlgorithmBook(book) {
   algorithmBook = book;
+}
+
+export function setCosmologyBadge(cosmology) {
+  const badge = document.getElementById('mode-cosmology');
+  if (!badge) return;
+  const isAlpha = cosmology === 'alpha-cosmo';
+  badge.textContent = isAlpha ? 'ALPHA-COSMO' : 'BETA-COSMO';
+  badge.className = `mode-badge mode-toggle ${isAlpha ? 'cosmology-alpha' : 'cosmology-beta'}`;
+  badge.setAttribute('aria-pressed', isAlpha ? 'true' : 'false');
+  badge.title = isAlpha
+    ? 'Switch to beta-cosmo physical corner topology'
+    : 'Switch to alpha-cosmo S4 K/C walks';
 }
 
 /** Show the relay-side shadow phrase plan for the latest voice event. */
@@ -200,6 +210,10 @@ export function handlePhraseAudit(data) {
 export function update(state, move) {
   const activeIdx = state.activeVertex ?? 0;
 
+  if (state.cosmology) {
+    setCosmologyBadge(state.cosmology);
+  }
+
   document.getElementById('s-step').textContent  = state.step;
 
   document.getElementById('s-k-group').textContent = state.kGroup;
@@ -223,6 +237,19 @@ export function update(state, move) {
         faceEl.textContent = `${move} · —`;
         faceEl.title = 'half-turn or non-face move — no face signature';
         faceEl.className = 'state-val';
+      }
+    }
+
+    // K/C-area face-signature glyph slot. Glyph shows the paired CW+CCW
+    // gesture archetype for the just-turned face; the apostrophe row lights
+    // when the move was primed (already encoded in the paint, not a state
+    // here). Half-turns / non-face moves reset to the empty placeholder.
+    if (activeFaceGlyphCtx) {
+      const face = move[0];  // 'U' / 'L' / 'R' / 'F' / 'B' / 'D'
+      if (FACE_SIG[face] || FACE_SIG[face + "'"]) {
+        paintFaceGlyph(activeFaceGlyphCtx, face, { faceLetter: true });
+      } else {
+        paintEmptyGlyph(activeFaceGlyphCtx);
       }
     }
   }

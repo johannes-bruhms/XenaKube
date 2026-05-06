@@ -537,7 +537,7 @@ function emitPitchbend(inst, value14) {
   value14 = clamp(value14 | 0, 0, 16383);
   var lsb = value14 & 0x7F;
   var msb = (value14 >> 7) & 0x7F;
-  emitMidi(inst, 0xE0 + MIDI_CH, lsb, msb);
+  emitMidi(inst, statusPitchbend(MIDI_CH), lsb, msb);
   inst.pitchbend = value14;
 }
 
@@ -691,3 +691,5 @@ The design above shipped, then needed five sub-iterations to reach a state the u
 **D64 (the silent killer)** — bridge `PITCHBEND_RANGE_SEMI` MUST match SWAM preset's Pitchbend Range exactly. MIDI pitchbend is a 14-bit wheel with no semitone information; the preset value does the conversion. Mismatch silently produces audible-bend ≠ visual-bend → "leaping" perception even though the bridge is bending correctly. The user had multiple sessions where they'd changed the preset and forgotten to save, leaving SWAM at default ±2 while bridge was at ±48 → 24× weaker bends. Fix: `bang()` logs the bridge's `PITCHBEND_RANGE_SEMI` on every reload to `[print xk_swam]` so a mismatch is visibly enforced. Pitchbend ramp tick lowered from 15 → 5 ms (D64.3) for finer pitch wheel updates — smoother audible slide. Range itself lowered to 24 in this iteration to match the user's preset; tunable.
 
 **The headline lesson**: pitchbend with a stateful physical-modeling VST has half a dozen subtle invariants that all have to be right simultaneously — pitch encoding (bridge↔preset agreement), timing (no overrun, no overrun even under jitter), state coherence (noteOff hits the held pitch, not a re-humanised one), and dashboard mirroring (chain segments authored by bend events, grace consumed exactly once). Telemetry-first per the Recurring-Bug Discipline was vindicated: every iteration's loud failure mode (`BEND FAIL`, `BEND CLIP`, `bend race-fix`, the startup pitchbend log) is what made the next bug findable.
+
+**D76 C5-specific lesson (2026-05-05)**: when all other gliss complexes work but C5 wild gliss plays straight, inspect the phrase-local scheduled closure before the shared bend engine. Active `phraseC5` must define its own `wildAccent`; a definition inside the preserved legacy comment block is not live code. Also, pitchbend companions must be held before the ramp starts. A fresh companion noteOn during `bendPending` is a straight attack in the same channel-wide pitchbend field and can dominate the soft `WILD_GLISS_VEL` source bend. Current rule: C5 may have an anchor companion, but it is cleared before the first bend; per-rebow target companions are suppressed by `maybeDoubleStop` with `BEND COMPANION FAIL`.

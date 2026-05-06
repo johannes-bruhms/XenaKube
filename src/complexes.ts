@@ -5,10 +5,10 @@
 // cycles alpha -> beta -> gamma -> alpha every 3 substitutions in
 // alpha-cosmo (Xenakis-faithful S4 permutation path).
 //
-// Beta-cosmo locks the cyclic phase to ALPHA and treats the C-cube's
-// groupElement as the gyro-snapped orientation. The alpha mapping rotates
-// with the ghost cube: C-assignments at each slot are ALPHA permuted by
-// `getPermutation(groupElement)`. Phase clock never advances in beta-cosmo.
+// Beta-cosmo keeps C1..C8 fixed to the dashboard ghost cube's local corner
+// labels. Its groupElement is shadow orientation metadata only; it must not
+// rotate or remap the active complex under a visible slot. Phase clock never
+// advances in beta-cosmo.
 
 import { ComplexType, type CosmologyMode, type CyclicPhase, type GroupElement } from './types.js';
 import { multiply, IDENTITY, getPermutation } from './group.js';
@@ -26,6 +26,18 @@ export const COMPLEX_DESCRIPTIONS: Record<ComplexType, string> = {
 };
 
 const C = ComplexType;
+
+/** beta-cosmo local-slot mapping: slot i is visibly and sonically C{i+1}. */
+const FIXED_LOCAL: ComplexType[] = [
+  C.AtaxicCloud,
+  C.OrderedCloudAscDesc,
+  C.OrderedCloudFlat,
+  C.IonizedAtom,
+  C.AtaxicSliding,
+  C.OrderedSlidingAscDesc,
+  C.OrderedSlidingFlat,
+  C.Atom,
+];
 
 /** alpha mapping: vertex index -> complex type */
 const ALPHA: ComplexType[] = [
@@ -100,9 +112,8 @@ export class ComplexCube {
       const perm = getPermutation(this.groupElement);
       return perm.map(i => base[i]);
     }
-    // beta-cosmo: ALPHA mapping permanently, rotated by the ghost-snap S4.
-    const perm = getPermutation(this.groupElement);
-    return perm.map(i => ALPHA[i]);
+    // beta-cosmo: fixed local C identities, independent of C shadow S4.
+    return [...FIXED_LOCAL];
   }
 
   /** Reset to initial state. */

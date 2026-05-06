@@ -606,6 +606,21 @@ function stealInstance(inst, now) {
 function statusNoteOn(ch)  { return 0x90 + (ch - 1); }
 function statusNoteOff(ch) { return 0x80 + (ch - 1); }
 function statusCC(ch)      { return 0xB0 + (ch - 1); }
+function statusPitchbend(ch) { return 0xE0 + (ch - 1); }
+
+var pitchbendChannelFailLogged = false;
+function assertPitchbendChannel(status) {
+	var expected = statusPitchbend(MIDI_CH);
+	if (status === expected) return;
+	if (!pitchbendChannelFailLogged) {
+		log("PITCHBEND CHANNEL FAIL status=" + status +
+		    " expected=" + expected +
+		    " MIDI_CH=" + MIDI_CH +
+		    " noteOnStatus=" + statusNoteOn(MIDI_CH) +
+		    " ccStatus=" + statusCC(MIDI_CH));
+		pitchbendChannelFailLogged = true;
+	}
+}
 
 // Emit a midievent directly out MIDI_OUTLET. No poly~ / target routing —
 // the v8 now feeds a single downstream [vst~ SWAM Cello] (or [midiout])
@@ -751,7 +766,9 @@ function emitPitchbend(inst, value14) {
 	value14 = clamp(value14 | 0, 0, 16383);
 	var lsb = value14 & 0x7F;
 	var msb = (value14 >> 7) & 0x7F;
-	emitMidi(inst, 0xE0 + MIDI_CH, lsb, msb);
+	var status = statusPitchbend(MIDI_CH);
+	assertPitchbendChannel(status);
+	emitMidi(inst, status, lsb, msb);
 	inst.pitchbend = value14;
 }
 
@@ -2260,11 +2277,12 @@ function doubleStopCompanion(mainPitch) {
 // inst.activeNotes so the next legato overlap / release / steal / panic
 // cleans it up the same way as any main pitch.
 //
-// Used by C2 / C3 plus C5 / C6 gliss companions. C4 and C8 create their
-// extra notes through local phrase logic instead of this helper. For C5/C6, the
-// companion bends *in parallel* with the source during each bendStep —
-// MIDI pitchbend is per-channel so all sustained notes shift together.
-// At each `completeBend` the wheel resets to center, briefly snapping
+// Used by C2 / C3 plus C5-anchor / C6 gliss companions. C4 and C8 create their
+// extra notes through local phrase logic instead of this helper. For gliss
+// phrases, the companion bends *in parallel* with the source during each
+// bendStep only if it was already held before the bend started. MIDI
+// pitchbend is per-channel so all sustained notes shift together.
+// For C6, at each `completeBend` the wheel resets to center, briefly snapping
 // the companion back to its written pitch before the source's atomic
 // noteOff/noteOn transition. The user accepts this parallel-motion +
 // snapback artifact as the gliss double-stop character (real cellists
@@ -2273,12 +2291,18 @@ function doubleStopCompanion(mainPitch) {
 // never calls `maybeDoubleStop`, even though its COMPLEX entry is prepared for
 // future companions.
 // Returns the companion pitch if a companion was added, else null.
-// phraseC5 uses the return value to track and noteOff prior companions
-// before adding fresh ones (per-rebow companions accumulate otherwise
-// because bendStep's completeBend only noteoffs the slide source, not
-// any held companion). Other callers ignore the return value.
+// phraseC5 uses the return value to track and clear the optional anchor
+// companion before the first bend. Other callers ignore the return value.
 function maybeDoubleStop(inst, mainPitch, vel, p) {
 	if (Math.random() >= p) return null;
+	if (inst.bendPending) {
+		log("BEND COMPANION FAIL inst " + inst.id + " C" + inst.activeComplex +
+		    " mainPitch=" + mainPitch +
+		    " pendingSource=" + inst.bendPending.hpSource +
+		    " pendingTarget=" + inst.bendPending.hpTarget +
+		    " - suppressed companion noteOn during pitchbend ramp");
+		return null;
+	}
 	var companion = doubleStopCompanion(mainPitch);
 	if (companion == null) return null;
 	// `isCompanion=true` flags the noteon echo so dashboard renders the
@@ -2646,12 +2670,16 @@ function phraseC5(inst, vel, dur) {
 	var requestedCount = Math.max(WILD_MIN_COUNT, faceShapedCount(inst, 4, 9, true));
 	var MIN_LEAP = 8;
 	var lastPitchRef = { p: pickPitch(5, inst) };
-	// Track the most-recently-added double-stop companion so the next
-	// rebow can noteOff it before maybeDoubleStop tries to add a fresh
-	// one. bendStep's completeBend only noteoffs the slide source, not
-	// any held companion — without this tracking, companions accumulate
-	// across slides (~50% × N rebows = potentially many concurrent voices
-	// by phrase end, blowing past SWAM's polyphony limits).
+	var wildAccent = rateAccentValue(WILD_GLISS_BPA, inst.activeComplex);
+	if (!isFinite(wildAccent)) {
+		log("C5 WILD ACCENT FAIL inst " + inst.id +
+		    " accent=" + wildAccent + " - falling back to " + WILD_GLISS_BPA);
+		wildAccent = WILD_GLISS_BPA;
+	}
+	// Track the optional anchor double-stop companion so the first bend
+	// clears it before the pitchbend ramp starts. Fresh companions during
+	// a bend are suppressed by maybeDoubleStop because they land as straight
+	// noteOns while the source is sliding.
 	var companionRef = { p: null };
 	function clearCompanion() {
 		if (companionRef.p == null) return;
@@ -2677,10 +2705,9 @@ function phraseC5(inst, vel, dur) {
 	// bendStep's heldSource lookup matches in inst.activeNotes.
 	var anchorVel = humanVel(vel * stepVelScale(velCurve, 0, count + 1));
 	legatoNote(inst, lastPitchRef.p, anchorVel);
-	// D72.5 — wild gliss: 50% companion chance INCLUDING the anchor (per
-	// user directive). Companion bends in parallel with the source via
-	// per-channel pitchbend — same parallel-motion + snap-back character
-	// as C6.
+	// Wild gliss keeps a 50% anchor companion, then clears it before the
+	// first bend. Per-rebow companions are suppressed during bends because
+	// their straight noteOn attacks can mask the actual pitchbend slide.
 	companionRef.p = maybeDoubleStop(inst, lastPitchRef.p, anchorVel, 0.50);
 
 	var phraseEndMs = durMs - 100;
@@ -2688,25 +2715,17 @@ function phraseC5(inst, vel, dur) {
 		var nextEventMs = (i + 1 < count) ? times[i + 1] : phraseEndMs;
 		var gapMs = nextEventMs - times[i];
 		var bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
-		(function(tMs, bd, idx, stepCount) {
+		(function(tMs, bd) {
 			scheduleAt(inst, tMs, function() {
-				// Drop any companion held from the previous rebow before
-				// this slide's bendStep — keeps polyphony bounded at ≤ 2
-				// (source + at-most-one companion). Without this, every
-				// rebow's maybeDoubleStop would stack a new companion atop
-				// the old.
+				// Drop the anchor companion before the slide starts so the
+				// pitchbend ramp is not masked by a straight companion attack.
 				clearCompanion();
 				var p = pickPitch(5, inst);
 				var attempts = 0;
 				while (Math.abs(p - lastPitchRef.p) < MIN_LEAP && attempts < 12) { p = pickPitch(5, inst); attempts++; }
 				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p, MIN_LEAP, WILD_GLISS_VEL, wildAccent, bd);
-				// Per-rebow 50% companion at the new slide target. Fresh
-				// pitch each rebow (doubleStopCompanion's interval table
-				// is randomized).
-				var slideVel = humanVel(vel * stepVelScale(velCurve, idx + 1, stepCount + 1));
-				companionRef.p = maybeDoubleStop(inst, lastPitchRef.p, slideVel, 0.50);
 			});
-		})(times[i], bendDur, i, count);
+		})(times[i], bendDur);
 	}
 	scheduleRelease(inst, dur);
 }

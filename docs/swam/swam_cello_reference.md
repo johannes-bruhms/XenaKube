@@ -150,7 +150,7 @@ KS D in v3.10 is **Gesture Mode**, not the v3.8 "Bow Change". At Bipolar/Bowing,
 
 `Master Tuning → Pitchbend Range` (per-direction, up + down) controls how SWAM converts the 14-bit MIDI pitchbend wheel position to a semitone shift. **This is a paired tunable with the bridge's `PITCHBEND_RANGE_SEMI` constant in `max/xk_swam.js`** (D64).
 
-MIDI pitchbend carries no semitone information — only a wheel position 0..16383 with center 8192. SWAM applies its preset Pitchbend Range to convert position to pitch. If the bridge expects ±N but the preset is set to ±M, the audible bend is `M / N ×` what the bridge intended. With the bridge at ±48 and the preset reverted to default ±2, audible bends are 24× weaker than intended → the cross-string slide barely moves and then `noteOff(source) + noteOn(target)` at the end of bend fires the discrete jump audibly → "leaping" perception.
+MIDI pitchbend carries no semitone information — only a wheel position 0..16383 with center 8192. SWAM applies its preset Pitchbend Range to convert position to pitch. If the bridge expects ±N but the preset is set to ±M, the audible bend is `M / N ×` what the bridge intended. With the bridge at ±24 and the preset reverted to default ±2, audible bends are 12× weaker than intended → the cross-string slide barely moves and then `noteOff(source) + noteOn(target)` at the end of bend fires the discrete jump audibly → "leaping" perception.
 
 **Always**:
 1. Set Master Tuning → Pitch Bend Range UP and DOWN to the same value.
@@ -158,7 +158,7 @@ MIDI pitchbend carries no semitone information — only a wheel position 0..1638
 3. Confirm `PITCHBEND_RANGE_SEMI` in `xk_swam.js` matches.
 4. Reload the v8 in Max — `bang()` logs `=== BRIDGE PITCHBEND_RANGE_SEMI = ±N — verify this matches SWAM preset's Pitchbend Range ===`. Cross-check.
 
-Recommended: **±24** is enough range for most cross-string slides (cello playable range is 53 semis; intervals > 24 are rare and fall through to `leapStep` cleanly). Wider ranges (±36/±48) cover all intervals but SWAM's pitch model on a single string can sound non-natural at extreme bends. Narrower ranges (±12) preserve the cleanest SWAM response but produce more leaps.
+Recommended: **±24** is enough range for most cross-string slides (cello playable range is 53 semis; intervals > 24 are rare and fall through to `leapStep` cleanly). Wider ranges (±36) cover all intervals but SWAM's pitch model on a single string can sound non-natural at extreme bends. Narrower ranges (±12) preserve the cleanest SWAM response but produce more leaps.
 
 ---
 
@@ -412,7 +412,7 @@ KS B   (MIDI 35) Page Modifier       hold for B+x combos (advanced)
 
 ### Pre-flight checklist (in SWAM, save as preset)
 - KS page: KS Octave = **C0**, KS Channel noted, Pizz Polyphony = **Poly**, all KS enabled
-- **Play Modes → Left Hand: Bow Polyphony selector → MIDI Learn → CC 81** (D35/D72). The bridge currently drives Double/Hold for every complex. C5/C6/C7 use `slideViaBend` pitchbend slides instead of SWAM Mono Poly Release portamento, so Double/Hold is required for gliss companions to sound correctly. Auto is not part of the bridge contract; if the preset lands on Auto, reduce Auto Poly Detect Time or re-learn/reassert CC 81 before latency testing.
+- **Play Modes → Left Hand: Bow Polyphony selector → MIDI Learn → CC 81** (D35/D72). The bridge currently drives Double/Hold for every complex. C5/C6/C7 use `slideViaBend` pitchbend slides instead of SWAM Mono Poly Release portamento, so Double/Hold is required for C5 anchor and C6 held companions to sound correctly. Auto is not part of the bridge contract; if the preset lands on Auto, reduce Auto Poly Detect Time or re-learn/reassert CC 81 before latency testing.
 - Expressivity page: Vibrato Fade-In = 250 ms; right-click Vibrato Rate → MIDI Learn → CC 19
 - Bow page: right-click each of Bow Position / Bow Pressure / Bow Pressure Accent / Bow Speed / Attack Ramp / Attack Control → MIDI Learn → CCs 16 / 17 / 18 / 20 / 73 / 75
 - **Harmonics + Tremolo selectors (D31)**: right-click each on the main page → MIDI Learn → CC 78 (Harmonics) / CC 79 (Tremolo). Required because KS F#/G# are 2-band with no Off band — the bridge routes these through CC to reach every state cleanly.

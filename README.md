@@ -45,7 +45,7 @@ A performer physically turns a Bluetooth-enabled Rubik's cube. Each turn is a mu
 
 Following Xenakis' method as source material, XenaKube now exposes two cosmologies:
 
-- **beta-cosmo** -- maps 8 physical corners to (Density x Intensity x Duration). Face turns are the only topology-changing actions, and the active read-head follows a tracked K corner through the permutation.
+- **beta-cosmo** -- maps 8 physical corners to (Density x Intensity x Duration). Face turns are the only topology-changing actions, and the active read-head is the turned face's head-on top-right corner; the calibrated gyro pose chooses the current top face.
 - **alpha-cosmo** -- restores the historical Nomos Alpha-style S4 K/C walks: K_i and C_i assignments both permute through group state.
 - **C_i phase layer** -- maps 8 vertices to sound complex types (C1-C8) through alpha/beta/gamma tables; beta keeps S4 as shadow metadata, alpha applies it.
 
@@ -71,7 +71,7 @@ Each cube turn triggers a **musical phrase**, not a single MIDI note. Phrase sha
 
 ### Voice Modes
 
-- **Sequential** -- one voice at a time; beta follows the tracked K corner, alpha uses the historical walk index
+- **Sequential** -- one voice at a time; beta uses the top-face-anchored top-right turned-face selector, alpha uses the historical walk index
 - **Polyphonic** -- all 8 voices sounding simultaneously, each turn morphs the ensemble
 
 ### Expression

@@ -4,6 +4,18 @@ All notable changes to XenaKube are documented here.
 
 **Entry format**: dated section per release/working-day; under it, `### Added / Changed / Fixed` headers; under each header, **terse bullets** — one or two sentences naming the user-visible change and the file(s) touched. Long rationale, root-cause analyses, and D-coded design narratives belong in `docs/revision_roadmap.md` (bridge / SWAM) or `docs/research_notes.md` (engine / dashboard). When in doubt, link rather than copy. Older entries below predate this discipline and are kept as-is.
 
+## 2026-05-06
+
+### Added
+- Added optional interruption dashboard overlay behind `?intrusions=1`. `public/interruption/` owns the pressure state machine, generated placeholder clip playback, separate targeting canvas, debug keys, and scoped DOM/CSS; `public/js/main.js` is the only wiring point and keeps the layer detachable.
+- Added canonical-top CCW-quadruple zero-gyro shortcut. With the cube held white-up, turning U counterclockwise four times within 1500 ms fires the same Zero Gyro action as the dashboard button. Detector lives in `public/js/main.js` (`checkTopFaceZeroGesture`); gated on `move === "U'"` AND `state.upFace === 'U'` so it cannot trigger in non-canonical holds.
+- Added a visible dashboard alpha/beta cosmology toggle. `public/dashboard.html` exposes a `mode-cosmology` badge, `public/js/main.js` posts `set_mode.cosmology`, and `public/js/state-ui.js` mirrors the engine-reported mode.
+
+### Fixed
+- Fixed Max-side relay launcher port conflicts. `max/relay-controller.js` now keeps `script start` as a persistent controller only, starts `relay.js` via `relay` / `start relay`, and accepts `kill process` / `kill_process` messages that run the port-3000 PowerShell kill from Max. Added a static guard in `test/max-bridge.test.ts`.
+- Fixed beta-cosmo active-C slot drift. `src/complexes.ts` now emits fixed local C1..C8 assignments in beta-cosmo, so an active K in the C4 corner sounds C4 instead of the historical alpha-table C5; `public/js/cube-scene.js` also resolves beta active highlighting from the active local slot and logs `[GHOST ACTIVE SLOT FAIL]` if a rotated beta assignment leaks back in. Added targeted coverage in `test/engine.test.ts` and `test/dashboard-ghost.test.ts`.
+- Fixed ghost-cube face-turn leakage in `public/js/cube-scene.js`. Ghost C dots/labels now stay pinned to fixed local slots and rotate only via `state.snapQuat`; alpha-cosmo can still update active material highlighting without moving ghost geometry. Added `[GHOST TURN LEAK FAIL]` telemetry and `test/dashboard-ghost.test.ts` to guard against assignment-slot LERPs returning.
+
 ## 2026-05-05
 
 ### Added
@@ -12,18 +24,22 @@ All notable changes to XenaKube are documented here.
 - Added bounded turn-rate pressure as a shared SWAM mapping layer. `src/swam-mapping.ts` now owns per-complex `RATE_*` gains and pure helpers, `src/phrase-plan.ts` mirrors the pressure in TS phrase plans, `max/xk_swam.js` applies it to density/dynamics/C8 tremolo/C5 accent, and `max/gen_includes.js` is regenerated from the shared tables.
 - Added canonical-pose face-letter remap (`MOVE_REMAP = {R↔L, F↔B, U/D unchanged}`) at the relay's WS `move` handler. Assumes performer holds cube red-front, white-top at connect; realigns engine, `/xk/face` OSC, dashboard animation, and algorithm-buffer to user-pose face geometry. Algorithm detection stays orientation-invariant via `cube-algorithm.ts`'s 24 pre-expanded rotation variants.
 - Added two paired invariants for the remap (per "Recurring-Bug Discipline"): `assertCubeAlignment()` in `public/js/cube-scene.js` (geometric chain check at end of `applyConnectView`, logs `[CUBE ALIGN FAIL]` if CUBE_VERTS / camera / dashboard CANONICAL_REMAP drifts) and `verifyMoveRemap` in `public/js/main.js` (per-connect first-move audit, logs `[CUBE REMAP FAIL]` if relay's MOVE_REMAP drifts from the dashboard mirrors).
-- Added Design C beta-cosmo selector: `src/orientation.ts` exposes `upFace(quat)` and `topRightCorner(face, quat)` with target-based gyro-anchored homes (5 distinct cubies; R/U intentionally collide on BTR). `engine.ts` records `lastTurnedFace` per turn and recomputes `activeVertex = topRightCorner(lastTurnedFace, gyro)` on every face turn AND every gyro tick. Phrase parameters commit at noteOn — gyro tilt mid-phrase only affects the *next* turn. Supersedes the earlier tracked-K read-head approach.
+- Added Design C beta-cosmo selector: `src/orientation.ts` exposes `upFace(quat)` and `topRightCorner(face, quat)` with top-face anchored, face-head-on selection. `engine.ts` records `lastTurnedFace` per turn and recomputes `activeVertex = topRightCorner(lastTurnedFace, gyro)` on every face turn and unlocked gyro tick. Phrase parameters commit at noteOn; gyro tilt mid-phrase previews the next unlocked/interrupting selection. Supersedes the earlier tracked-K read-head approach.
 - Added `src/motion.ts MotionTracker` (still-state and dwell tracking). Threshold 0.1 rad/s, exposed via `state.motion = { accelMag, isStill, dwellMs }`. Foundation for dwell-driven auto-zero and bridge motion-aware phrase modulation.
 - Added `state.lastTurnedFace` and `state.upFace` to `XenaKubeState` for downstream use.
 
 ### Changed
 - Restored K_i V1 duration as material phrase time. `src/vertices.ts` again carries the 2/5/5/2/3/4/4/3 second contour; `FACE_SIGNATURES` now exposes `durationMult`; TS phrase planning and Max resolve duration as K base × face multiplier with complex floors and a 30 s cap.
 - Updated bridge/performance/operator docs to state the new control contract: turn rate raises pressure above K_i baselines without replacing K_i density/intensity or collapsing complex identity.
-- Locked beta-cosmo cyclic phase to ALPHA permanently. Phase clock no longer advances in beta-cosmo (per user intent: stationary complexes that K_i rotates *into*); phase clock + S4 walks remain in alpha-cosmo. Beta-cosmo C-assignments now derive from the ALPHA mapping permuted by `complexCube.groupElement`, which is set to `snapToNearest(gyro)` on every gyro update — so the locked map *rotates with the ghost cube*. User tilts directly drive C-assignment variety.
-- Restored alpha-style ghost-cube SLERP-snap rendering in `public/js/cube-scene.js`. Ghost glides toward `state.snapQuat`; live cube continues raw-gyro rendering. Visible angle between live and ghost is the existing `gyroDeviation` source, now meaningful again.
+- Locked beta-cosmo cyclic phase to ALPHA permanently. Phase clock no longer advances in beta-cosmo (per user intent: stationary complexes that K_i rotates *into*); phase clock + S4 walks remain in alpha-cosmo. Beta-cosmo C-assignments derive from the ALPHA mapping permuted by `complexCube.groupElement`; phrase locks keep the selected material stable while `snapQuat` continues to track orientation.
+- Restored alpha-style ghost-cube SLERP-snap rendering in `public/js/cube-scene.js`. Ghost glides toward `state.snapQuat`; live cube continues raw-gyro rendering. Visible angle between live and ghost is the existing `gyroDeviation` source, now meaningful again. C identities again move to their assignment slots, with top-face markers showing current selector candidates.
 
 ### Fixed
 - Flipped R/L/F/B perm direction in `src/corner-topology.ts` to match standard WCA convention (CW from outside the face). Previous perms encoded CCW for R/L/F/B (inconsistent — U/D were already CW), which left dashboard face-turn animations rotating opposite to the user's physical action even after the canonical-pose remap landed the right face. Algorithm matching unaffected (string-based). Added `quarter turns rotate CW from outside` test in `test/corner-topology.test.ts` to pin the convention.
+- Fixed the ghost cube freezing during in-progress phrases. `public/js/cube-scene.js` now sources ghost orientation only from `state.snapQuat`, restores C-assignment slot LERPs, adds top-face markers, and logs `[GHOST SNAP FAIL]` if future edits couple the ghost back to phrase-lockable `cQuat`. Added `test/orientation.test.ts` coverage for interrupting an R phrase after a 90° yaw with a B turn, which must select B's current top-right slot rather than the old R slot.
+
+- Fixed C5 wild-gliss pitchbend going to the wrong MIDI channel. `max/xk_swam.js` now emits pitchbend through `statusPitchbend(MIDI_CH)` using the same one-based channel convention as note/CC messages, logs `PITCHBEND CHANNEL FAIL` on status drift, and `test/max-bridge.test.ts` rejects the old off-by-one pattern.
+- Fixed C5 wild-gliss phrase-local bend failures. Active `phraseC5` now defines and guards `wildAccent`, C5 companions are anchor-only and cleared before the first bend, `maybeDoubleStop` suppresses/logs companion noteOns during pending bends, and the TS phrase planner/tests mirror the corrected C5 companion count.
 
 ## 2026-05-04
 

@@ -20,11 +20,11 @@ Per-turn loop (from `engine.ts`):
 
 1. Cube reports a 90° click.
 2. **Algorithm detector** sees the move, checks if the rolling buffer matches any of the 7 named cube algorithms (in 24 rotation variants). Logs match. Effects are currently **stubs** — no mode change wired (`mode-manager.ts:45-54`).
-3. **Cosmology** advances. In `beta-cosmo`, K_i advances by the physical corner permutation for that face turn and the read-head follows a tracked K corner. In `alpha-cosmo`, K_i and C_i use the historical S4 walks.
-4. **C_i** advances its alpha/beta/gamma phase clock. Beta-cosmo keeps C S4 as shadow metadata; alpha-cosmo applies C S4 to assignment order.
+3. **Cosmology** advances. In `beta-cosmo`, K_i advances by the physical corner permutation for that face turn; gyro chooses the current top face, and the read-head selects the turned face's head-on top-right corner along that top face when the faces touch. In `alpha-cosmo`, K_i and C_i use the historical S4 walks.
+4. **C_i** advances only in alpha-cosmo. Beta-cosmo keeps C S4 as shadow metadata and holds C1..C8 fixed to local visible slots.
 5. **Sieve** advances every 3 substitutions (metabola of the L(m,n) prime-residual pitch set).
 6. If the move is one of the 12 face-moves, `/xk/face <face>` fires to Max (sets duration multiplier, envelope, articulation, motion, register bias for the imminent voice).
-7. **Voice engine** picks the active vertex (tracked K position in beta-cosmo; historical step walk in alpha-cosmo) and emits `/xk/voice` with `(vertexIdx, complexType, density, intensity, duration)`. In sequential mode 1 vertex; in polyphonic mode all 8.
+7. **Voice engine** picks the active vertex (top-face-anchored top-right turned-face selector in beta-cosmo; historical step walk in alpha-cosmo) and emits `/xk/voice` with `(vertexIdx, complexType, density, intensity, duration)`. In sequential mode 1 vertex; in polyphonic mode all 8.
 8. Max's `handleVoice` allocates the SWAM voice, snapshots face state onto it, and runs the matching `phraseC1..phraseC8` generator inside that instance.
 9. Continuous gyro readings (60 Hz Kalman-filtered) drive bow position (CC 16) and S4 deviation telemetry; turn-rate tracking supplies regime plus continuous pressure. These shape the *current* note in real time — they don't trigger anything.
 
@@ -101,7 +101,7 @@ Xenakis' original 8 sound-complex types (`complexes.ts:14-23`), as actually rend
 
 **C4 — Ionized atom: harmonics with pizz interferences.** `phraseC4`, `xk_swam.js:2472`. SWAM Harmonics CC 78 is enabled per voice (selected by tetra parity: even tetra → OCTAVE harmonic; odd tetra → OCTAVE+5TH — see `harmonicsForC4` in `swam-mapping.ts:246-248`). `2.5 attacks/sec × dur` before turn-rate pressure, **50 % chance** of a simultaneous 2-pitch double-attack at each event, jittered timing. Sparse, glassy, and sounds like a different instrument from the other complexes. The tetra-driven harmonic mode is the only place the tetra index changes timbre directly rather than just inverting motion.
 
-**C5 — Ataxic field of sliding sounds (wild gliss).** `phraseC5`, `xk_swam.js:2592`. Hard floor `WILD_MIN_COUNT` slides regardless of face envelope or intensity (`D49`: a stab face cannot reduce wild gliss to one slide — wildness is the complex's identity). Each slide is a pitchbend ramp of ≥ 8 semitones (`MIN_LEAP=8`) with `bendDur` scaled to the gap to the next event. Turn-rate pressure can raise the requested high count and the bow-pressure accent, but it cannot lower the wild floor. ~50 % companion double-stop on the anchor *and* per-rebow. Companions track the source's pitchbend in parallel, then snap back at `completeBend` — that brief tick is the audible "knot" of C5's character. With `face=R'` (burst, `countMult 1.8`, oscillate) this becomes a punishing dense slide-storm; with `face=D'` (2.5x `<>`) the slides ride the hairpin and sound like a Penderecki cello flourish.
+**C5 — Ataxic field of sliding sounds (wild gliss).** `phraseC5`, `xk_swam.js:2592`. Hard floor `WILD_MIN_COUNT` slides regardless of face envelope or intensity (`D49`: a stab face cannot reduce wild gliss to one slide — wildness is the complex's identity). Each slide is a pitchbend ramp of ≥ 8 semitones (`MIN_LEAP=8`) with `bendDur` scaled to the gap to the next event. Turn-rate pressure can raise the requested high count and the bow-pressure accent, but it cannot lower the wild floor. ~50 % companion double-stop on the anchor only; it is cleared before the first bend so the slide is not masked by a straight companion attack. With `face=R'` (burst, `countMult 1.8`, oscillate) this becomes a punishing dense slide-storm; with `face=D'` (2.5x `<>`) the slides ride the hairpin and sound like a Penderecki cello flourish.
 
 **C6 — Ordered sliding asc/desc (sieve-stepped portamento).** `phraseC6`, `xk_swam.js:2667`. Anchor + sliding chain along the L(m,n) sieve, direction committed to face motion. `MIN_LEAP=1` (tiny intervals welcome), so the slides crawl up the prime-residue pitch ladder. ~50 % companion held alongside the chain — companion bends in parallel with the source via per-channel pitchbend, snaps back at each `completeBend` boundary (tick-tick-tick along the slide). With `face=L` you get the canonical "long bowed slide upward through the sieve". The cleanest, most "sliding" face/complex pair.
 
@@ -133,7 +133,7 @@ tremolo rate, and C5 bow-pressure accent. The gains are intentionally
 different per complex so fast turning reads as pressure without flattening
 K_i's density/intensity identity.
 
-Physical face turns apply local 4-cycles to the 8 visible corners (`corner-topology.ts`). In beta-cosmo the active slot is the current position of the tracked K corner, so you can pick a K row and literally follow it around the cube. In alpha-cosmo the active slot uses the historical step walk.
+Physical face turns apply local 4-cycles to the 8 visible corners (`corner-topology.ts`). In beta-cosmo the active slot is the turned face's head-on top-right corner (`orientation.ts`): gyro first chooses the current top face, then the turned surrounding face chooses the right-hand endpoint of its shared top edge. In alpha-cosmo the active slot uses the historical step walk.
 
 In polyphonic mode all eight K-rows fire simultaneously, each on its own SWAM instance, each with the complex assigned to its current C-cube vertex slot. (Note: the bridge ships with `POOL_SIZE = MAX_ACTIVE = 1` — single SWAM voice, per CLAUDE.md — so polyphonic mode currently steals voices in flight.)
 
@@ -147,9 +147,9 @@ In polyphonic mode all eight K-rows fire simultaneously, each on its own SWAM in
 
 ## 5. The C_i / α-β-γ layer — which complex is on which vertex
 
-The alpha/beta/gamma mappings (`complexes.ts`) each assign C1..C8 to the 8 cube vertices in a different base order. Every 3 substitutions the phase rotates alpha -> beta -> gamma -> alpha. Every 3 substitutions the sieve also metabolises. In beta-cosmo, C diagrams and gyro C mode can update `cGroup`, but `cGroup` does not permute `cAssignments`. In alpha-cosmo, `cGroup` is live and permutes the current phase table.
+The alpha/beta/gamma mappings (`complexes.ts`) each assign C1..C8 to the 8 cube vertices in a different base order. Every 3 substitutions the phase rotates alpha -> beta -> gamma -> alpha in alpha-cosmo, and the sieve metabolises every 3 substitutions. In beta-cosmo, C1..C8 stay fixed to the ghost cube's local visible slots: slot 0 is C1, slot 3 is C4, and so on. The active K phrases with the C label in the same corner. `cGroup` may still follow the gyro snap as shadow metadata, but it does not rotate beta-cosmo complex placement.
 
-Result: even a steady `R R R R...` produces evolving complex assignments and evolving available pitches — the cube state reorganizes the sound palette under your hands without changing which face is bright vs dark.
+Result: in beta-cosmo, repeating one face changes which K material sits under that face's read-head while the local C texture in that corner stays legible. In alpha-cosmo, the older S4/phase mapping still produces evolving complex assignments.
 
 ---
 
@@ -199,19 +199,19 @@ The 60 Hz quaternion goes to OSC (Max + TouchDesigner). The dashboard uses a SLE
 
 **Practical:** while a phrase is sounding, *tilting* the cube is your continuous bow-color control. Bow position (CC 16) is heavily smoothed so static-pose hand jitter doesn't produce 30 Hz bow buzz (`D54 BOW POS FLAP` invariant guards this). Tilt up = brighter (toward bridge); tilt down = warmer (toward fingerboard). Rotation while a phrase plays does not retrigger — the phrase is already in flight. Turn rate shapes the next voice's density/dynamic pressure at onset rather than acting as a 60 Hz gyro modulation.
 
-**Zero Gyro.** The dashboard's Zero Gyro button (and its auto-zero on first connect) captures the current orientation as the rest pose, so the engine's S4 snap cells re-center on whatever hand position you call neutral. Use this if the cube is not aligned with the dashboard's intended axes.
+**Zero Gyro.** The dashboard's Zero Gyro button (and its auto-zero on first connect) captures the current orientation as the rest pose, so the engine's S4 snap cells re-center on whatever hand position you call neutral. Use this if the cube is not aligned with the dashboard's intended axes. Performer shortcut: with the cube held in canonical pose (white face up), turn the white (U) face counterclockwise four times within 1.5 s — the dashboard fires the same Zero Gyro action without you reaching for the button. The gesture is gated on `upFace === 'U'` so it can't trigger accidentally in other holds.
 
 ---
 
 ## 9. Voice / engine modes & meta-controls
 
-**Voice mode** (`voice-engine.ts`): `sequential` (1 voice: tracked K in beta-cosmo, historical step walk in alpha-cosmo) or `polyphonic` (all 8 fire each turn). Currently bridge-side `POOL_SIZE = 1` so polyphonic steals; treat polyphony as an experimental mode until the pool widens.
+**Voice mode** (`voice-engine.ts`): `sequential` (1 voice: top-face-anchored top-right turned-face selector in beta-cosmo, historical step walk in alpha-cosmo) or `polyphonic` (all 8 fire each turn). Currently bridge-side `POOL_SIZE = 1` so polyphonic steals; treat polyphony as an experimental mode until the pool widens.
 
-**Cosmology** (`engine.ts`): `beta-cosmo` is default. It uses physical corner topology and a tracked-K read-head. `alpha-cosmo` restores the historical S4 K/C walks; boot with `XK_COSMO=alpha-cosmo` or send `set_mode.cosmology`. Switching cosmology resets structural state so the two logics do not contaminate each other.
+**Cosmology** (`engine.ts`): `beta-cosmo` is default. It uses physical corner topology and the top-face-anchored, head-on top-right turned-face read-head. `alpha-cosmo` restores the historical S4 K/C walks; boot with `XK_COSMO=alpha-cosmo` or send `set_mode.cosmology`. Switching cosmology resets structural state so the two logics do not contaminate each other.
 
 **K-cube mode** (`engine.ts`): `direct` / `diagram` are legacy UI names. Diagrams drive K_i only in alpha-cosmo; in beta-cosmo they advance as shadow metadata.
 
-**C-cube mode**: `algorithmic` / `gyro` drive C_i assignment only in alpha-cosmo. In beta-cosmo they update C shadow state; complex placement is governed by the current alpha/beta/gamma table.
+**C-cube mode**: `algorithmic` / `gyro` drive C_i assignment only in alpha-cosmo. In beta-cosmo they update C shadow state; complex placement is fixed local C1..C8.
 
 **Freeze** (`mode-manager.toggleFreeze`): turns are still detected (and algorithm matches still fire) but K_i / C_i / sieve / step do not advance. Useful for deliberately repeating the *same* state through several turns to hear a single cube position from multiple gesture angles. Cube algorithm effects are stubs, so freeze is currently only reachable via dashboard / external trigger.
 
@@ -235,7 +235,7 @@ A short tour for the first time you pick the cube up.
    - `R` / `R'` — right-pan percussive pair (short stab, longer burst)
    - `F` / `F'` — front swell pair (rising, falling)
    - `B` / `B'` — back pair (short pluck, hairpin-`><`)
-5. **Repeat one face six times in a row.** The face's gesture identity stays constant. What changes in beta-cosmo: the tracked K row moves physically through the cube, carrying density/intensity/duration with it; after every 3 turns the α/β/γ phase advances and the sieve metabolises. By turn 6 you've heard the same face sit on a different complex twice — the same shape filled with a different texture.
+5. **Repeat one face six times in a row.** The face's gesture identity stays constant. What changes in beta-cosmo: the turned face's head-on top-right selector lands on whichever K row currently occupies that physical corner, carrying density/intensity/duration with it; the C texture is the fixed visible C label in that same corner, and the sieve metabolises every 3 turns. By turn 6 you've heard the same face shape filled by changing K material against a stable local C map.
 6. **Tilt the cube while a long resolved phrase is sounding** (for example, K2/K3/K6/K7 on `D'`, `B'`, or `L`). Tilt up to brighten, tilt down to warm. This is the main mid-flight color control; turn rate affects the pressure of newly triggered voices.
 7. **Try `R U R' U'` four times in a row.** Each `R U R' U'` = one sexy-move algorithm match (logged in dashboard) but currently no extra effect — what you're hearing is four ordinary face voices each time. The point is to feel that the move sequence still produces music even before algorithm effects are wired.
 8. **Try gyro C-cube mode** (dashboard control) as a shadow-state display in beta-cosmo. It updates the C-group readout but should not change which complex is assigned to the active vertex. In alpha-cosmo the same C group is live.
@@ -249,10 +249,10 @@ A few limits worth being honest about:
 - **Algorithm effects are stubs.** Detection works; rebinding to phrase-library is the next big musical milestone (Phase B in `docs/todo.md`).
 - **Polyphony is voice-stealing.** The SWAM bridge ships single-instance. Polyphonic voice-engine mode emits 8 voices but only the last one is audible.
 - **Stereo is reserved.** `panBias` is in the data model but SWAM is mono. Multi-channel routing is a future hookup.
-- **D64 alignment is a recurring trap.** `PITCHBEND_RANGE_SEMI` in the bridge MUST equal the SWAM preset's pitchbend range value. If you change the preset and forget the bridge, slides go silent-weak (24× attenuated at the default ±2 vs the bridge's ±48). Always check `[print xk_swam]` after preset edits.
+- **Pitchbend alignment is a recurring trap.** `PITCHBEND_RANGE_SEMI` in the bridge MUST equal the SWAM preset's pitchbend range value. Pitchbend status must also stay on the same MIDI channel as notes and CCs. If either drifts, dashboard telemetry can show bends while SWAM plays straight notes. Always check `[print xk_swam]` after preset edits or bridge reloads.
 - **Half-turns are CCW-flicked or they don't trigger algorithms.** Speedcube default; muscle-memory it.
 - **Solve trigger is detected but unwired.** Edge detection works; sound-design for the solve event is pending.
 
 ---
 
-That's the manual. The instrument is shaped: 12 face identities × 8 complex textures × K_i density/dynamic/duration material × α/β/γ phase × tetra parity × continuous gyro bow × bounded turn-rate pressure. Algorithms and solve will eventually fold into that grid as additional triggers; until then they're decorations on the dashboard. The face-as-keyboard model plus the tracked K-corner model is the part that's load-bearing — practice that and the rest will start to read.
+That's the manual. The instrument is shaped: 12 face identities × 8 complex textures × K_i density/dynamic/duration material × top-face-anchored top-right face selection × tetra parity × continuous gyro bow × bounded turn-rate pressure. Algorithms and solve will eventually fold into that grid as additional triggers; until then they're decorations on the dashboard. The face-as-keyboard model plus the head-on top-right selector is the part that's load-bearing — practice that and the rest will start to read.

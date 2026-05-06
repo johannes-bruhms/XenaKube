@@ -19,7 +19,7 @@
   <div class="ovl-section">
     <h1 class="title">XENAKUBE</h1>
     <div class="conn-row">
-      <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
+      <input type="text" id="macAddress" placeholder="cube MAC address" autocomplete="off">
       <div class="btn-row">
         <button id="connectBtn">Connect</button>
         <button id="resetBtnVisible" class="ctrl-btn" title="Re-sync cube (tell it 'you are solved') + reset S4 engine state. Use after physically solving.">Reset</button>
@@ -2882,9 +2882,10 @@ const SOLVED_FACELETS = 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB'
 let activeCube = null;
 let lastSolvedReport = true; // assume connect-time cube is solved
 
-if (localStorage.getItem('ganMacAddress')) {
-  macInput.value = localStorage.getItem('ganMacAddress');
-}
+// Privacy/safety: do not persist cube MAC addresses in repo UI state. Earlier
+// dashboard drafts stored `ganMacAddress` in localStorage, which can resurrect
+// stale addresses even after the HTML default is removed.
+localStorage.removeItem('ganMacAddress');
 
 connectBtn.addEventListener('click', async () => {
   const macAddress = macInput.value.trim().toUpperCase();
@@ -2895,7 +2896,6 @@ connectBtn.addEventListener('click', async () => {
     return;
   }
 
-  localStorage.setItem('ganMacAddress', macAddress);
   cubeStatus.textContent = 'select cube in popup...';
   cubeStatus.className = '';
   connectBtn.disabled = true;

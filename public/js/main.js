@@ -24,6 +24,7 @@ import * as cubeScene from './cube-scene.js';
 import * as rollingScore from './rolling-score.js';
 import * as triangle from './triangle.js';
 import * as stateUi from './state-ui.js';
+import { initInterruptionLayer } from '../interruption/index.js';
 import {
   noteOn        as sieveNoteOn,
   noteOff       as sieveNoteOff,
@@ -78,6 +79,16 @@ triangle.init({
 
 stateUi.init();
 
+const intrusionParams = new URLSearchParams(window.location.search);
+const interruptionLayer = initInterruptionLayer({
+  enabled: intrusionParams.get('intrusions') === '1',
+  debug: intrusionParams.get('intrusionDebug') === '1',
+  root: document.body,
+  getCamera: cubeScene.getCamera,
+  getActiveKWorldPos: cubeScene.getActiveKWorldPos,
+  getCWorldPos: cubeScene.getCWorldPos,
+});
+
 // ---- Transport event wiring -----------------------------------------------
 
 // ws status indicators were removed from the UI; stub out the refs so the
@@ -86,6 +97,7 @@ const dot = { classList: { add() {}, remove() {} } };
 const wsStatusEl = { set textContent(_v) {} };
 let gyroThrottleFrame = null;
 let pendingGyroState = null;
+let currentCosmology = 'beta-cosmo';
 
 transportOn('open', () => {
   dot.classList.add('connected');
@@ -95,12 +107,18 @@ transportOn('open', () => {
 transportOn('close', () => {
   dot.classList.remove('connected');
   wsStatusEl.textContent = 'reconnecting...';
+  interruptionLayer.onPanic();
 });
 transportOn('state', (data, move) => {
-  cubeScene.update(data);
+  if (data.cosmology) currentCosmology = data.cosmology;
+  cubeScene.update(data, move);
   stateUi.update(data, move);
   updateMotionHUD(data.motion);
-  if (move) verifyMoveRemap(move);
+  if (move) {
+    verifyMoveRemap(move);
+    checkTopFaceZeroGesture(move, data.upFace);
+  }
+  interruptionLayer.onState(data, move);
 });
 transportOn('gyroState', (data) => {
   // BLE-rate full state burst — rAF-throttled so we don't repaint at
@@ -109,9 +127,11 @@ transportOn('gyroState', (data) => {
   if (!gyroThrottleFrame) {
     gyroThrottleFrame = requestAnimationFrame(() => {
       if (pendingGyroState) {
-        cubeScene.update(pendingGyroState);
+        cubeScene.update(pendingGyroState, null);
         stateUi.update(pendingGyroState, null);
+        if (pendingGyroState.cosmology) currentCosmology = pendingGyroState.cosmology;
         updateMotionHUD(pendingGyroState.motion);
+        interruptionLayer.onState(pendingGyroState, null);
         pendingGyroState = null;
       }
       gyroThrottleFrame = null;
@@ -123,11 +143,17 @@ transportOn('gyroTick', (data, dev) => {
   stateUi.updateExpression(data, dev);
 });
 transportOn('diagrams',     populateDiagramSelect);
-transportOn('algorithm',    stateUi.handleAlgorithmEvent);
+transportOn('algorithm',    (data) => {
+  stateUi.handleAlgorithmEvent(data);
+  interruptionLayer.onAlgorithm(data);
+});
 transportOn('algorithmBook', stateUi.setAlgorithmBook);
 transportOn('phrasePlan',   stateUi.handlePhrasePlan);
 transportOn('phraseAudit',  stateUi.handlePhraseAudit);
-transportOn('solve',        () => stateUi.setSolvedBadge(true, true));
+transportOn('solve',        () => {
+  stateUi.setSolvedBadge(true, true);
+  interruptionLayer.onSolve();
+});
 transportOn('midiEcho',     handleMidiEcho);
 
 transportConnect();
@@ -142,6 +168,7 @@ transportConnect();
 // in CLAUDE.md.
 function handleMidiEcho(data) {
   if (!data || !data.kind) return;
+  interruptionLayer.onMidiEcho(data);
 
   if (data.kind === 'panic') {
     rollingScore.panic();
@@ -253,6 +280,7 @@ cmodeSelect.addEventListener('change', () => {
 
 resetBtn.addEventListener('click', () => {
   wsSend({ type: 'reset' });
+  interruptionLayer.onPanic();
 });
 
 // ---- Visible buttons ------------------------------------------------------
@@ -260,6 +288,14 @@ resetBtn.addEventListener('click', () => {
 document.getElementById('zeroBtn').addEventListener('click', () => {
   cubeScene.zeroGyro();
   wsSend({ type: 'zero_gyro' });
+});
+
+document.getElementById('mode-cosmology')?.addEventListener('click', () => {
+  const next = currentCosmology === 'alpha-cosmo' ? 'beta-cosmo' : 'alpha-cosmo';
+  currentCosmology = next;
+  stateUi.setCosmologyBadge(next);
+  wsSend({ type: 'set_mode', cosmology: next });
+  interruptionLayer.onPanic();
 });
 
 // XENAKUBE title doubles as a UI-collapse toggle. CSS `body.ui-hidden` hides
@@ -299,6 +335,7 @@ document.getElementById('resetBtnVisible')?.addEventListener('click', async () =
     }
   }
   wsSend({ type: 'reset' });
+  interruptionLayer.onPanic();
 });
 
 // ---- Sliders ---------------------------------------------------------------
@@ -465,9 +502,47 @@ function verifyMoveRemap(engineMove) {
   }
 }
 
-if (localStorage.getItem('ganMacAddress')) {
-  macInput.value = localStorage.getItem('ganMacAddress');
+// Canonical-top CCW quadruple — physical zero-gyro shortcut.
+// Mirrors the zeroBtn handler ONLY when the white (canonical U) face is
+// currently up AND the performer turns U counterclockwise four times in
+// a row within ZERO_QUAD_WINDOW_MS. Restricted to U-on-top so the
+// gesture can't fire by accident when the cube is held in some other
+// orientation; engine-frame `U` is the canonical white-top face after
+// relay MOVE_REMAP.
+const ZERO_QUAD_WINDOW_MS = 1500;
+const ZERO_QUAD_COUNT = 4;
+const _zeroQuadHistory = [];
+
+function checkTopFaceZeroGesture(move, upFace) {
+  if (!move) return;
+  // Require canonical white face on top and a CCW quarter-turn of U.
+  if (upFace !== 'U' || move !== "U'") {
+    _zeroQuadHistory.length = 0;
+    return;
+  }
+  const now = performance.now();
+  while (
+    _zeroQuadHistory.length &&
+    now - _zeroQuadHistory[0] > ZERO_QUAD_WINDOW_MS
+  ) {
+    _zeroQuadHistory.shift();
+  }
+  _zeroQuadHistory.push(now);
+  if (_zeroQuadHistory.length >= ZERO_QUAD_COUNT) {
+    const span = Math.round(now - _zeroQuadHistory[0]);
+    _zeroQuadHistory.length = 0;
+    cubeScene.zeroGyro();
+    wsSend({ type: 'zero_gyro' });
+    console.log(
+      `[CUBE ZERO GESTURE] U' x${ZERO_QUAD_COUNT} in ${span}ms — zeroing gyro`,
+    );
+  }
 }
+
+// Privacy/safety: do not persist cube MAC addresses in repo UI state. Earlier
+// dashboard drafts stored `ganMacAddress` in localStorage, which can resurrect
+// stale addresses even after the HTML default is removed.
+localStorage.removeItem('ganMacAddress');
 
 connectBtn.addEventListener('click', async () => {
   const macAddress = macInput.value.trim().toUpperCase();
@@ -478,7 +553,6 @@ connectBtn.addEventListener('click', async () => {
     return;
   }
 
-  localStorage.setItem('ganMacAddress', macAddress);
   cubeStatus.textContent = 'select cube in popup...';
   cubeStatus.className = '';
   connectBtn.disabled = true;
@@ -519,6 +593,7 @@ connectBtn.addEventListener('click', async () => {
         connectBtn.classList.remove('connected');
         connectBtn.disabled = false;
         cubeScene.revertConnectView();
+        interruptionLayer.onPanic();
       }
     });
 

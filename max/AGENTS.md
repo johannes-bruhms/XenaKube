@@ -38,6 +38,18 @@ Prefer editing `xk_swam.js` over growing patch logic. The patch is the host; `xk
 - `xenakube_main.swam`: SWAM preset expected by the patch (loaded by `xenakube_swam.maxpat` on `[loadbang]`).
 - `gen_includes.js`: generated shared data from `src/`.
 - `ks_logger.js`: optional debugging helper for keyswitch/MIDI inspection.
+- `onehot.js`: v8 helper used by the host patch.
+- `relay-controller.js`: Max-side helper for relay control workflows. `script start` launches only the controller; `relay` / `start relay` starts `relay.js` as a child process. It exposes explicit `kill process` / `kill_process` Max messages for killing a stale port-3000 listener; do not auto-start or auto-kill the relay from script start.
+- `package.json` / `package-lock.json`: local Node dependency metadata for Max support helpers.
+- `max_mcp.js`, `max_mcp_node.js`, `max_mcp_v8_add_on.js`: Max MCP bridge support files.
+- `demo.maxpat`, `derivations.maxpat`, `polish.maxpat`: reference/experimental Max patches, not the active performance host.
+- `erosion.gendsp`: supporting Gen patch/reference artifact.
+- `xenakube_2.swam`, `xenakube_main2.swam`: alternate SWAM presets; do not assume they are loaded by `xenakube_swam.maxpat`.
+
+## Tests
+
+- Run `npm test -- --run test/max-bridge.test.ts` for changes to `xk_swam.js` bridge invariants that can be statically guarded.
+- Run the full `npm test` when Max behavior depends on shared TypeScript mapping, phrase planning, OSC schema, or generated include changes.
 
 ## Live patch work
 

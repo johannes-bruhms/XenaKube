@@ -473,8 +473,6 @@ export class PhrasePlanner {
       const gapMs = nextEventMs - t;
       const bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
       lastPitch = this.glissStep(ctx, t, lastPitch, p, minLeap, WILD_GLISS_VEL, wildAccent, bendDur);
-      const slideVel = this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, i + 1, times.length + 1));
-      companion = this.maybeDoubleStop(ctx, t, lastPitch, slideVel, 0.50);
     }
   }
 

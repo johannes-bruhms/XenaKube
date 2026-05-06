@@ -19,7 +19,7 @@
   <div class="ovl-section">
     <h1 class="title" id="ui-toggle" role="button" tabindex="0" aria-pressed="false" title="click to toggle UI panels">XENAKUBE</h1>
     <div class="conn-row">
-      <input type="text" id="macAddress" placeholder="AB:12:34:5E:83:F7" value="AB:12:34:5E:83:F7">
+      <input type="text" id="macAddress" placeholder="cube MAC address" autocomplete="off" value="C8:17:F5:D7:AF:99">
       <div class="btn-row">
         <button id="connectBtn">Connect</button>
         <button id="resetBtnVisible" class="ctrl-btn" title="Re-sync cube (tell it 'you are solved') + reset S4 engine state. Use after physically solving.">Reset</button>
@@ -29,6 +29,12 @@
   </div>
 
   <div class="mode-row">
+    <button
+      type="button"
+      class="mode-badge mode-toggle cosmology-beta"
+      id="mode-cosmology"
+      title="Switch cosmology: beta uses physical corner topology; alpha restores S4 K/C walks"
+      aria-pressed="false">BETA-COSMO</button>
     <span class="mode-badge palette" id="mode-palette">default</span>
     <span class="mode-badge voice-seq" id="mode-voice">SEQUENTIAL</span>
     <span class="mode-badge regime-contemplative" id="mode-regime">CONTEMPLATIVE</span>
@@ -40,6 +46,11 @@
   <div class="active-cards">
     <div class="vertex-grid" id="vertex-grid"></div>
     <div class="complex-grid" id="complex-grid"></div>
+    <canvas
+      id="active-face-glyph"
+      class="active-face-glyph"
+      width="256" height="256"
+      title="last face turn — top: unprimed (CW), bottom: primed (CCW)"></canvas>
   </div>
 </div>
 

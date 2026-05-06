@@ -161,9 +161,9 @@ const EXPR_PRE_FADE_LOOKBACK_MS  = 1000;     // captures pre-fade expr at noteof
 // things drawn many phrases ago glitch on and off." Time-bounded segments
 // fix it: past chains are pinned to whatever companion (if any) overlapped
 // them when they were live, and stay that way as they scroll out. Multiple
-// sequential segments per (voice, complex) are supported (C5 rebow companions
-// accumulate as a chain of short segments with potentially different
-// offsetSemis each rebow).
+// sequential segments per (voice, complex) remain supported for historical or
+// future repeated companions; current C5 is anchor-only and C6 holds one
+// companion through the chain.
 const companionSegments = [];   // Array<{voice, complex, offsetSemis, companionPitch, t0, t1}>
 
 function recordExpr(voice, t, val) {
@@ -192,9 +192,10 @@ function exprAtLookback(voice, refT, lookbackMs, noteOnT) {
 
 // D72.6 — find the current main pitch for a (voice, complex) at the moment a
 // companion noteon arrives. Heuristic in priority order:
-//   1. Most recent bendSegment p1 within 200 ms — covers C5 per-rebow
-//      companions (slide just bent-target'd; the source is still in
-//      activeMidiNotes but the audible/intended main is the bend's destination).
+//   1. Most recent bendSegment p1 within 200 ms — defensive support for any
+//      future companion that arrives just after a bend target; the source is
+//      still in activeMidiNotes but the audible/intended main is the bend's
+//      destination. Current C5 suppresses that path in the bridge.
 //   2. Latest non-companion entry's pitch in activeMidiNotes — covers C6
 //      anchor companion (no bend yet; anchor IS the main).
 // Returns null if no main is found (companion is orphan; offset not stored).
@@ -1628,10 +1629,9 @@ export function noteOn(data) {
       const offset = data.pitch - mainPitch;
       const now = performance.now();
       // D73 — close any prior open segment for the same (voice, complex)
-      // before pushing a fresh one. C5 rebow companions noteoff the prior
-      // companion before adding a fresh one (see phraseC5's `companionRef`
-      // dance), but a defensive close here covers the corner case where
-      // two companion noteons land back-to-back without an intervening
+      // before pushing a fresh one. Current C5 is anchor-only and C6 holds
+      // one companion, but the defensive close covers any future phrase that
+      // sends two companion noteons back-to-back without an intervening
       // noteoff.
       for (let i = 0; i < companionSegments.length; i++) {
         const cs = companionSegments[i];

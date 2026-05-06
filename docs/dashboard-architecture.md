@@ -4,7 +4,7 @@
 
 ## Entry point
 
-`dashboard.html` at `http://localhost:3000`. Full-viewport HUD: `#cube-canvas` fills the window; all UI floats as transparent overlays. Three.js 3D cube with per-vertex K#/D/G/U labels, ghost C-cube at fixed orientation (each C label pinned to one corner; rotatable independently via the gizmo). WS client to relay. Pixel/zoom values live in CSS (L48–60).
+`dashboard.html` at `http://localhost:3000`. Full-viewport HUD: `#cube-canvas` fills the window; all UI floats as transparent overlays. Three.js 3D cube with per-vertex K#/D/G/U labels, a ghost C-cube that snap-rotates from `state.snapQuat`, top-face slot markers, and C identity dots that are fixed to local slots in beta-cosmo but walk across slots in alpha-cosmo. WS client to relay. Pixel/zoom values live in CSS (L48-60).
 
 ## Module layout (Phase 2 complete)
 
@@ -13,27 +13,30 @@
 - `js/constants.js` (Phase 2.1) — shared immutable constants (`ROLL_*` insets / pitch range / brush scale, `GLISS_GAP_MS` / `GLISS_COMPLEXES`, `PORTAMENTO_MS_PER_SEMITONE` / `GLISS_PORTAMENTO_MS_PER_SEMITONE` mirrors of the bridge, `COMPLEX_COLOR` palette, `PIZZ_FADE_MIN/MAX_MS`, `PENDING_MAX_AGE_MS`).
 - `js/transport.js` (Phase 2.3) — WebSocket transport. `connect()` / `send(obj)` / `on(name, fn)`. Auto-reconnect at 2 s. Typed events: `open`, `close`, `state`, `gyroState`, `gyroTick`, `diagrams`, `algorithm`, `algorithmBook`, `solve`, `midiEcho`.
 - `js/sieve.js` (Phase 2.4) — 49-cell pitch strip + per-cell emanation glow + active-set highlighting. Owns `assertSieveLayout` (init-time invariant). Exports `noteOn` / `noteOff` / `panic` / `setActive` / `getCellRect(pitch)` / `SIEVE_RANGE` / `BLACK_KEYS`.
-- `js/cube-scene.js` (Phase 2.5) — Three.js scene: live K-cube, fixed-orientation ghost C-cube, K↔C 3D line, gizmo, all per-frame animations (gyro live rotation, active-step LERP, K-vertex perm-change LERPs), camera auto-fit, gyro zero. Ghost cube does not track the live cube — it sits at `ghostViewOffset` (gizmo-controlled, identity by default) and ghost vertex meshes stay pinned to `CUBE_VERTS[c]`; only the active-C ring travels (between fixed corners) when the active C changes. Exports `init({ onAutoZero })` / `setCubeQuat([x,y,z,w])` / `update(state)` / `applyConnectView()` / `revertConnectView()` / `zeroGyro()` / `setGhostScale(s)` / `getActiveKWorldPos(out)` / `getCWorldPos(c, out)` / `getCamera()`. Owns the rotate-target buttons (cam/live/ghost) + ghost-size slider's geometry.
+ - `js/cube-scene.js` (Phase 2.5) — Three.js scene: live K-cube, snap-tracking ghost C-cube, K↔C 3D line, top-face slot markers, gizmo, all per-frame animations (gyro live rotation, ghost snap SLERP, active-step LERP, K-vertex LERPs, active highlights), camera auto-fit, gyro zero. Ghost orientation uses `state.snapQuat`, not phrase-lockable `state.cQuat`; C identity meshes and labels stay fixed to local slots in beta-cosmo, but walk to the assigned slot from `state.cAssignments` in alpha-cosmo. In beta-cosmo the active ghost ring resolves from the active local slot, matching the fixed C label in that corner, while alpha-cosmo can still highlight the assigned C type. Exports `init({ onAutoZero })` / `setCubeQuat([x,y,z,w])` / `update(state)` / `applyConnectView()` / `revertConnectView()` / `zeroGyro()` / `setGhostScale(s)` / `getActiveKWorldPos(out)` / `getCWorldPos(c, out)` / `getCamera()`. Owns the rotate-target buttons (cam/live/ghost) + ghost-size slider's geometry.
 - `js/rolling-score.js` (Phase 2.6) — full-viewport background piano-roll canvas + per-complex procedural brushes + gliss-chain Path2D stroker + slide-vs-leap chainStart classifier (rolling-side) + Phase 1 invariants (`assertPitchAxis` per resize, `assertGlissSync` ~1 Hz when a gliss line is active) + stuck-note watchdog. Exports `init({ onForceFinalise, getActiveGlissLineDisplay })` / `noteOn` / `noteOff` / `panic` / `setScrollSpeed` / `hasActiveNote(voice, complex)`.
 - `js/triangle.js` (Phase 2.7) — white K↔sieve / C↔sieve leg overlay. Cubic-smoothstep slide easing matches rolling-score exactly (Visual Invariant #3). Exports `init({ getCamera, getActiveKWorldPos, getCWorldPos, getSieveCellRect, hasActiveGliss })` / `noteOn` / `noteOff` / `panic` / `getActiveGlissLineDisplay(now)`.
-- `js/state-ui.js` (Phase 2.8) — overlay panels: state rows, mode badges, K/C cards, perm slots, algorithm buffer + toast, scramble bar, expression panel, recent-moves FIFO. Owns `FACE_SIG` (HUD mirror of `src/face-gesture.ts`) and `COMPLEX_SHORT`. Exports `init({ onPathToggle })` / `update(state, move)` / `handleAlgorithmEvent` / `setSolvedBadge(solved, pulse)` / `updateExpression(quat, dev)` / `setAlgorithmBook`.
-- `js/main.js` (Phase 2.9) — entry point. Imports every module, calls each one's `init()`, subscribes transport events to module update entry points, wires sliders + buttons + Web Bluetooth GAN cube connection, and dispatches `midi_echo` to sieve + triangle + rolling-score in one place.
+- `js/state-ui.js` (Phase 2.8) — overlay panels: state rows, mode badges, K/C cards, perm slots, algorithm buffer + toast, scramble bar, expression panel, recent-moves FIFO. Owns `FACE_SIG` (HUD mirror of `src/face-gesture.ts`) and `COMPLEX_SHORT`. Exports `init({ onPathToggle })` / `update(state, move)` / `setCosmologyBadge(cosmology)` / `handleAlgorithmEvent` / `setSolvedBadge(solved, pulse)` / `updateExpression(quat, dev)` / `setAlgorithmBook`.
+- `js/main.js` (Phase 2.9) — entry point. Imports every module, calls each one's `init()`, subscribes transport events to module update entry points, wires sliders + buttons + the visible alpha/beta cosmology toggle (`set_mode.cosmology`) + Web Bluetooth GAN cube connection, and dispatches `midi_echo` to sieve + triangle + rolling-score in one place.
+- `interruption/` — optional performance overlay package, disabled unless the URL includes `?intrusions=1` or the debug `I` key enables it. `index.js` owns the pressure state machine, generated/video playback, targeting canvas, debug keys, injected CSS, and DOM cleanup. `config.js` owns first-draft pressure/duration tunables. `clips.js` owns local clip metadata and generated placeholder entries. `main.js` is the only import and fanout boundary.
 
 ## Cross-module read surfaces (intentional, narrow — see `docs/todo.md` Phase 2 ownership table)
 
 - `triangle` reads cube-scene `getActiveKWorldPos` / `getCWorldPos` / `getCamera`, sieve `getCellRect`, rolling-score `hasActiveNote`.
 - `rolling-score` reads triangle `getActiveGlissLineDisplay` (wired via init() callback to avoid circular import) so `assertGlissSync` can compare line ↔ chain trajectories.
+- `interruption` reads cube-scene `getCamera` / `getActiveKWorldPos` / `getCWorldPos` through `main.js` only, for its separate targeting canvas. If those callbacks are absent while the module is enabled, it warns once and leaves target projection disabled.
 
 The "Cross-module init wiring" Dashboard Visual Invariant (`docs/dashboard-invariants.md`) covers the runtime contract that protects these surfaces.
 
 ## Overlays
 
-- **Top-left** (`.ovl-tl`): title + MAC/connect (button turns green via `.connected`), mode badges, active K/C cards.
+- **Top-left** (`.ovl-tl`): title + MAC/connect (button turns green via `.connected`), alpha/beta cosmology toggle, mode badges, active K/C cards.
 - **Bottom-left** (`.ovl-bl`, anchored `bottom: 110px`): State panel (face, active voice, S4 element, path, step, snap, complex phase, orbit, scramble, permutation), then Expression panel (Zero Gyro + smoothing slider + tilt/spin/deviation/scramble). `zoom: 0.5` applies per-child to keep the bottom anchor zoom-invariant so the stack never overlaps the sieve strip.
 - **Top-center** (`.ovl-tc`): cube-algorithm buffer + algorithm notification. Move strip is a dashboard-side 8-move FIFO (`recentMoves`, `RECENT_MOVES_MAX = 8`), decoupled from the engine's `state.algorithmBuffer` (which clears on its own 2 s timeout / algorithm-fire); each turn pushes one move and shifts the oldest, so the strip never empty-flashes. Match-highlighting still consumes `state.algorithmPartials` and applies to the trailing N entries.
 - **Top-right**: cam / live / ghost rotate toggles + rotation gizmo.
 - **Bottom**: full-width sieve piano-roll (C2–C6).
 - **Background** (`<canvas id="rolling-score">`, `position: fixed; inset: 0; z-index: -1`): rolling piano-roll behind cube-canvas (`alpha: true`). Right edge = `now`, scrolling left at `ROLL_PX_PER_SEC` CSS-px/sec (default 360, retunable live via the `score` slider in the bottom-right cluster — value persists in `localStorage`). Pitch axis C2..C6 maps into the *inner* rectangle defined by `ROLL_TOP_INSET_PX = 70` / `ROLL_BOTTOM_INSET_PX = 80` so notes never paint under the title / algorithm row / cam strip or the bottom sieve. See "Rolling-score brush rendering" below for per-complex visual treatment.
+- **Optional interruption layer** (`public/interruption/`, URL `?intrusions=1`): creates a fixed video element and fixed targeting canvas under the normal HUD overlays, plus a debug panel only when `intrusionDebug=1` or `D` is pressed. The layer injects/removes its own scoped stylesheet and leaves no DOM behind when disabled or destroyed.
 
 Only the active K/C cards render; the 8-vertex/complex grids and legacy controls are populated but hidden via `.ovl-legacy`.
 
@@ -61,4 +64,4 @@ Data source: `midi_echo` WS messages mirrored from Max; Phase E tier 3 will swit
 
 ## Editing checklist
 
-After editing `dashboard.html`, load `:3000` and verify the rolling score renders, K/C cards stay visible, and Zero Gyro works at 100 % and 50 % browser zoom.
+After editing `dashboard.html`, load `:3000` and verify the rolling score renders, K/C cards stay visible, and Zero Gyro works at 100 % and 50 % browser zoom. After interruption-layer edits, also verify `?intrusions=0` leaves no overlay DOM visible and `?intrusions=1&intrusionDebug=1` responds to `W`, `C`, `X`, `D`, and `T`.

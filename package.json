@@ -9,7 +9,9 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "gen:max": "node scripts/gen-max-include.js",
-    "check:docs": "node scripts/check-doc-sizes.mjs"
+    "check:doc-sizes": "node scripts/check-doc-sizes.mjs",
+    "check:agents": "node scripts/check-agents-sync.mjs",
+    "check:docs": "npm run check:doc-sizes && npm run check:agents"
   },
   "keywords": [],
   "author": "",

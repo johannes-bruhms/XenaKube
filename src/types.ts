@@ -82,9 +82,9 @@ export interface XenaKubeState {
   kVertices: VertexSet;
   /** C_i S4 element: live assignment walk in alpha-cosmo, shadow metadata in beta-cosmo. */
   cGroup: GroupElement;
-  /** C_i quaternion (cGroup as a unit quat). Ghost-cube target — locked during phrase. */
+  /** C_i quaternion (cGroup as a unit quat). Material assignment pose, phrase-lockable. */
   cQuat: Quaternion;
-  /** C_i cube: current complex assignments */
+  /** C_i cube: current complex assignments; beta-cosmo keeps C{i+1} at local slot i. */
   cAssignments: ComplexType[];
   /** Current cyclic phase */
   cyclicPhase: CyclicPhase;
@@ -100,7 +100,7 @@ export interface XenaKubeState {
   activeVertex: number;
   /** K_i label currently sounding at activeVertex. */
   activeK: number;
-  /** Beta-cosmo tracked K_i label; activeVertex is its current physical position. */
+  /** Beta-cosmo fallback K_i label used before the first turned-face selector. */
   trackedK: number;
   /** Active diagram name (null if none) */
   activeDiagram: string | null;

@@ -16,10 +16,11 @@ The detailed rationale, invariants, and roadmap live in `docs/`.
 ## Required reading by task
 
 - Any change: `CLAUDE.md`
-- Engine / OSC / mappings: `src/AGENTS.md`
-- Dashboard / visuals: `public/AGENTS.md` and `docs/dashboard-invariants.md`
-- Max / SWAM / patch work: `max/AGENTS.md` and `docs/bridge-invariants.md`
-- Documentation edits: `docs/AGENTS.md`
+- Engine / state / performance model: `src/AGENTS.md` and `docs/performance-model.md`
+- OSC / shared mappings: `src/AGENTS.md`, `docs/osc-reference.md`, and any touched bridge/dashboard invariant row
+- Dashboard / visuals: `public/AGENTS.md`, `docs/dashboard-architecture.md`, and `docs/dashboard-invariants.md`
+- Max / SWAM / patch work: `max/AGENTS.md`, `docs/synthesis-bridge.md`, and `docs/bridge-invariants.md`
+- Documentation edits: `docs/AGENTS.md` plus the owner doc for the changed behavior
 
 ## Commands
 
@@ -27,9 +28,13 @@ Run from the repo root unless a subtree guide says otherwise.
 
 ```bash
 npm test
+npm run test:watch
 npx tsc --noEmit
 npm run build
 npm run gen:max
+npm run check:doc-sizes
+npm run check:agents
+npm run check:docs
 npx tsx relay.js
 npm run dev
 ```
@@ -54,23 +59,49 @@ npm run dev
 - `docs/research_notes.md`: rationale, source notes, and design exploration.
 - `docs/bridge-invariants.md`: full bridge invariant enforcement detail.
 - `docs/dashboard-invariants.md`: full dashboard invariant enforcement detail.
+- `docs/dashboard-architecture.md`: browser dashboard module layout, cross-module reads, overlay positioning, and brush rendering.
+- `docs/interruption-layer-plan.md`: optional interruption-layer design and first-draft verification notes.
+- `docs/performance-model.md`: musical / structural model, core turn loop, modes, algorithm book, expression mapping, and key math.
 - `docs/osc-reference.md`: OSC address table and routing notes.
 - `docs/synthesis-bridge.md`: Max patch topology, bridge file roles, and SWAM routing notes.
 - `docs/swam/swam_cello_reference.md`: authoritative SWAM parameter, CC, and keyswitch reference.
+- `docs/xenakis_nomos_alpha_primary_source.md`: Xenakis primary source excerpt for the cube model.
+- `docs/xenakube-operator-manual.md`: performer-facing manual and face/complex behavior reference.
+- `docs/xenakube-feedback-04302026.md`: dated artistic feedback/reference notes; not a current-behavior spec unless another doc promotes a point from it.
 - `README.md`: user-facing setup and overview.
 
 If you add or rename a durable workflow doc, update this list and the matching table in `CLAUDE.md`.
+
+## AGENTS sync triggers
+
+Reflect these changes in the nearest `AGENTS.md` in the same change. `npm run check:agents` enforces the file/script/test coverage mechanically; use this list for the semantic cases the script cannot infer.
+
+- **Repo shape**: top-level surfaces, bridges, generated outputs, or support folders are added, removed, or renamed.
+- **Subtree scope**: a subtree guide starts or stops owning a class of files, workflows, or invariants.
+- **Durable docs**: a durable workflow/reference doc is added, renamed, retired, or changes ownership.
+- **Commands**: `package.json` scripts, required local commands, manual verification steps, or build/test expectations change.
+- **Source-of-truth files**: OSC schema, shared mappings, face signatures, generators, presets, or generated-file rules change.
+- **Engine semantics**: turn loop, cosmology boundary, K/C assignment, orientation/read-head logic, motion/dwell, turn-rate pressure, algorithms, phrase planning, or phrase audit behavior changes.
+- **OSC payloads**: address names, payload order, payload meaning, routing ports, or `/xk/midi/*` echo semantics change.
+- **Dashboard architecture**: module boundaries, cross-module callbacks, CSS/JS mirrored constants, visual invariant ownership, or manual browser verification changes.
+- **Max bridge**: patch topology, SWAM preset assumptions, single-instance model, generated include usage, bridge invariants, telemetry, or live-patch workflow changes.
+- **Cross-surface assumptions**: canonical move remap, dashboard/relay/Max mirrored constants, phrase-plan IDs, latency telemetry, or any other rule spanning two implementation surfaces changes.
+- **Tests and verification**: targeted tests, static guards, manual checks, or required command order changes.
+- **Recurring-bug/invariant discipline**: silent-failure policy, invariant-first workflow, or telemetry expectations change.
 
 ## Change checklists
 
 ### Engine / shared mapping changes
 
 - Update or add tests under `test/`.
+- Update `docs/performance-model.md` when the turn loop, cosmology boundary, algorithm behavior, orientation math, scramble, motion, or expression semantics change.
+- Update `docs/osc-reference.md` when OSC addresses or payloads change.
 - Audit `relay.js`, `public/js/*`, and `max/xk_swam.js` for mirrored assumptions if payloads, mappings, or timing semantics changed.
 - Run `npm run gen:max` after changes to `src/osc-schema.ts`, `src/swam-mapping.ts`, or `src/face-gesture.ts`.
 
 ### Dashboard changes
 
+- Check `docs/dashboard-architecture.md` for module/export/callback drift.
 - Re-audit every touched row in `docs/dashboard-invariants.md`.
 - Preserve the cross-module callback wiring in `public/js/main.js`.
 - Manually verify `http://localhost:3000` at 100% and 50% browser zoom.
@@ -85,6 +116,7 @@ If you add or rename a durable workflow doc, update this list and the matching t
 
 - Keep summaries in `CLAUDE.md`; keep deep enforcement details in `docs/bridge-invariants.md` and `docs/dashboard-invariants.md`.
 - Put dated narrative in `CHANGELOG.md` or `docs/revision_roadmap.md`, not in `CLAUDE.md`.
+- Run `npm run check:docs` if `CLAUDE.md` or invariant summary rows are in scope.
 
 ## Existing Claude-specific helper
 
