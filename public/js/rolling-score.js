@@ -1827,6 +1827,33 @@ export function noteOff(data) {
   };
   finishedMidiNotes.push(finished);
   _auditHairpinTrace(finished);
+
+  // D77 — truncate any in-flight bendSegment whose source pitch just
+  // got noteoff'd. Most common trigger: voice steal cancels a wild-gliss
+  // bend mid-flight; the bridge fires noteoff(source) at the steal time
+  // but the bendSegment was emitted earlier with `dur=150ms` and would
+  // otherwise keep animating to its planned `p1` for the rest of those
+  // 150ms — producing a phantom-tail curve that doesn't match the
+  // audible silence (PHRASE ECHO STOLEN audit row's visual signature).
+  // Clip both `dur` and `p1`: dur shortens to `offT - t0`, p1 becomes
+  // the audible pitch reached at that cutoff (computed with the same
+  // cubic-smoothstep easing the chain uses). After this, _glissPitchAt
+  // sees a complete short bend ending at the cutoff pitch, the chain
+  // stops drawing the phantom remainder, and _findActiveGlissChain's
+  // chainPitch matches what the audience actually heard.
+  for (let i = 0; i < bendSegments.length; i++) {
+    const bs = bendSegments[i];
+    if (bs.voice !== pending.voice) continue;
+    if (bs.complex !== pending.complex) continue;
+    if (bs.p0 !== pending.pitch) continue;
+    if (bs.t0 + bs.dur <= offT) continue;     // already past planned end
+    const elapsed = Math.max(0, offT - bs.t0);
+    const f = bs.dur > 0 ? Math.min(1, elapsed / bs.dur) : 1;
+    const eased = _glissEase(f);
+    bs.p1 = bs.p0 + (bs.p1 - bs.p0) * eased;
+    bs.dur = elapsed;
+  }
+
   return pending;
 }
 

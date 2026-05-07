@@ -87,13 +87,13 @@ Order chosen so each step leaves a working dashboard. Each commit: extract modul
 
 The smallest visual upgrade with the biggest impact: add Three.js `EffectComposer` + `UnrealBloomPass` + tone mapping to the cube scene. Validates the post-processing pipeline before any larger migration.
 
-- [ ] Add `three/examples/jsm/postprocessing/*` to the `cube-scene.js` render path
-- [ ] Switch renderer to linear color space (`renderer.outputColorSpace = LinearSRGBColorSpace`); convert all material colors to expect linear
-- [ ] Tune bloom radius / threshold / intensity so cube edges + active K-vertex glow without washing out
-- [ ] Add a quality slider (Low / Med / High) to `state-ui.js` that toggles bloom + post-processing for users on weaker GPUs
-- [ ] Document the post-processing pipeline in `CLAUDE.md` Dashboard Architecture section (new section, written here for the first time)
+- [x] Add `three/addons/postprocessing/*` to the `cube-scene.js` render path. `EffectComposer` chain (`RenderPass` → `UnrealBloomPass` → `OutputPass`) built once at module load.
+- [x] Tone-map the renderer (`ACESFilmicToneMapping`, exposure 1.0). The plan's "linear color space" wording was loose; the modern Three.js pattern keeps `outputColorSpace = SRGBColorSpace` (default) and lets `OutputPass` (or the renderer in Low mode) handle the final colour-management step. Both quality paths share the same tone curve so flipping the picker only gates bloom.
+- [ ] Tune bloom radius / threshold / intensity in browser. Defaults shipped (Med: strength 0.5 / radius 0.5 / threshold 0.78; High: 0.8 / 0.7 / 0.65); in-session iteration pending against real visuals + active-K glow ring.
+- [x] Quality picker (Low / Med / High) in the `.ovl-br` cluster, wired in `main.js` with `localStorage('quality')` persistence. Picker is a 3-button toggle group rather than the originally-planned slider — Low/Med/High is discrete. Wiring lives in `main.js` rather than `state-ui.js` to match the existing slider idiom (gyro smoothing, ghost size, score speed are all wired in `main.js`).
+- [x] Documented the pipeline in `CLAUDE.md` (one-paragraph summary) and `docs/dashboard-architecture.md` (full reference: composer chain, quality preset table, gizmo exclusion, resize wiring).
 
-**Acceptance**: cube has a perceptible glow without performance regression; quality slider works; CLAUDE.md describes the pipeline.
+**Acceptance**: cube has a perceptible glow without performance regression; quality picker works; CLAUDE.md + docs/dashboard-architecture.md describe the pipeline. Tuning pass requires in-session eyeball verification.
 
 ## Phase 4 — Rolling-score migration (Canvas 2D → WebGL, brush by brush)
 

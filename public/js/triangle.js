@@ -158,7 +158,16 @@ function _findGlissLine(voice, complex) {
 function sieveCellLeftEdgePos(pitch) {
   const r = _getSieveCellRect(pitch);
   if (!r || r.height === 0) return null;
-  return { x: r.left, y: r.top + r.height / 2 };
+  // Continuous fractional Y within the integer-pitch cell so the line
+  // endpoint matches rolling-score's midiToY(pitch) during bends. Without
+  // this, fetching the cell rect for `pitch | 0` and returning its centre Y
+  // throws away the sub-semitone fraction — the line snapped to integer
+  // cell centres while the chain interpolated continuously, tripping
+  // GLISS SYNC FAIL by up to ~22 px (one cell height) on every bend. Sieve
+  // strip is `flex-direction: column-reverse` (higher pitch = smaller Y),
+  // so the fractional offset within the cell is subtracted.
+  const frac = pitch - Math.floor(pitch);
+  return { x: r.left, y: r.top + r.height / 2 - frac * r.height };
 }
 
 // ---- World→screen projection ----------------------------------------------

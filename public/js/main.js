@@ -301,13 +301,13 @@ document.getElementById('mode-cosmology')?.addEventListener('click', () => {
 // XENAKUBE title doubles as a UI-collapse toggle. CSS `body.ui-hidden` hides
 // every chrome panel (state, mode pills, conn row, gizmo cluster, sliders,
 // move buffer, algorithm toasts, active K/C cards); sieve + rolling-score +
-// cube remain. Title stays as a faint outline so the toggle target is still
-// hittable. Persisted across reloads.
+// cube remain, including the K-vertex intensity / density / duration labels.
+// Title stays as a faint outline so the toggle target is still hittable.
+// Persisted across reloads.
 const uiToggle = document.getElementById('ui-toggle');
 function setUiHidden(hidden) {
   document.body.classList.toggle('ui-hidden', hidden);
   uiToggle.setAttribute('aria-pressed', hidden ? 'true' : 'false');
-  cubeScene.setVertexInfoVisible(!hidden);
   localStorage.setItem('uiHidden', hidden ? '1' : '0');
 }
 setUiHidden(localStorage.getItem('uiHidden') === '1');
@@ -445,6 +445,29 @@ bgColorEl.addEventListener('input', () => {
   const hex = bgColorEl.value;
   applyBgColor(hex);
   localStorage.setItem('bgColor', hex);
+});
+
+// Quality picker — Phase 3 post-processing tier (low / med / high). Toggles
+// the bloom + tone-mapping composer in cube-scene.js. Med is the default for
+// fresh users on a normal GPU; Low is the explicit "weak GPU" escape hatch.
+// Persisted in localStorage like the other ovl-br controls.
+const qualityCtrl = document.getElementById('qualityCtrl');
+function applyQuality(level) {
+  const applied = cubeScene.setQuality(level);
+  qualityCtrl.querySelectorAll('.q-btn').forEach(btn => {
+    const isActive = btn.dataset.level === applied;
+    btn.classList.toggle('active', isActive);
+    btn.setAttribute('aria-checked', isActive ? 'true' : 'false');
+  });
+}
+const savedQuality = localStorage.getItem('quality');
+applyQuality(['low', 'med', 'high'].includes(savedQuality) ? savedQuality : 'med');
+qualityCtrl.querySelectorAll('.q-btn').forEach(btn => {
+  btn.addEventListener('click', () => {
+    const level = btn.dataset.level;
+    applyQuality(level);
+    localStorage.setItem('quality', level);
+  });
 });
 
 // ---- Cube BLE connection (Web Bluetooth) ----------------------------------

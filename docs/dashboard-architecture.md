@@ -38,7 +38,7 @@ The "Cross-module init wiring" Dashboard Visual Invariant (`docs/dashboard-invar
 - **Background** (`<canvas id="rolling-score">`, `position: fixed; inset: 0; z-index: -1`): rolling piano-roll behind cube-canvas (`alpha: true`). Right edge = `now`, scrolling left at `ROLL_PX_PER_SEC` CSS-px/sec (default 360, retunable live via the `score` slider in the bottom-right cluster — value persists in `localStorage`). Pitch axis C2..C6 maps into the *inner* rectangle defined by `ROLL_TOP_INSET_PX = 70` / `ROLL_BOTTOM_INSET_PX = 80` so notes never paint under the title / algorithm row / cam strip or the bottom sieve. See "Rolling-score brush rendering" below for per-complex visual treatment.
 - **Optional interruption layer** (`public/interruption/`, URL `?intrusions=1`): creates a fixed video element and fixed targeting canvas under the normal HUD overlays, plus a debug panel only when `intrusionDebug=1` or `D` is pressed. The layer injects/removes its own scoped stylesheet and leaves no DOM behind when disabled or destroyed.
 
-Only the active K/C cards render; the 8-vertex/complex grids and legacy controls are populated but hidden via `.ovl-legacy`.
+Only the active K/C cards render; the 8-vertex/complex grids and legacy controls are populated but hidden via `.ovl-legacy`. The XENAKUBE title toggles chrome visibility with `body.ui-hidden`: connection controls, mode badges, state panels, bottom-right controls, move buffer, toasts, and active K/C cards hide, while the cube, rolling score, sieve, and live K-vertex telemetry labels remain visible.
 
 ## Rolling-score brush rendering
 
@@ -61,6 +61,32 @@ Per-key FIFO queue for in-flight notes (`activeMidiNotes: Map<key, Array<entry>>
 Within-note dynamic shape (D70 + D71): brush half-height samples the per-voice CC 11 trace at each polygon vertex / particle's t — see `docs/dashboard-invariants.md` "Within-note dynamic shape fidelity" row.
 
 Data source: `midi_echo` WS messages mirrored from Max; Phase E tier 3 will switch to TS-generated note lists once the phrase migration lands.
+
+## Post-processing pipeline (Phase 3)
+
+The cube scene runs through an `EffectComposer` chain in `public/js/cube-scene.js`. The composer is built once at module load and lives next to the renderer:
+
+```
+RenderPass(scene, camera) → UnrealBloomPass → OutputPass → canvas
+```
+
+`renderer.toneMapping = ACESFilmicToneMapping` and `renderer.toneMappingExposure = 1.0` are set on the WebGL renderer itself. Tone mapping + sRGB conversion are applied either by `OutputPass` (Med / High quality) or by the renderer directly (Low — composer bypassed). Both code paths honor the renderer's tone mapping setting, so flipping the picker only gates bloom + the composer overhead, not the colour curve.
+
+Quality is a discrete tier — `setQuality('low' | 'med' | 'high')` — exposed by `cube-scene.js`, persisted in `localStorage('quality')` by `main.js`, defaulted to **Med** so a fresh user on a normal GPU sees the effect. Low is the explicit "weak GPU" escape hatch that skips the composer entirely.
+
+| Tier | Composer | strength | radius | threshold |
+|---|---|---|---|---|
+| Low  | bypassed (direct `renderer.render`) | — | — | — |
+| Med (default) | enabled | 0.5 | 0.5 | 0.78 |
+| High | enabled | 0.8 | 0.7  | 0.65 |
+
+Defaults are tunable in browser; `applyQualityPreset` mutates the live `bloomPass` parameters. The active K-vertex glow ring (white, opacity pulsing 0.4 → 0.7) is the canonical "should bloom" element — Med threshold 0.78 catches the upper half of the pulse, High threshold 0.65 catches the full pulse plus the brightest K-vertex hues (lime / yellow-green).
+
+The gizmo runs on its own `gizmoRenderer` and does **not** post-process — small UI controls don't want a glow halo. `composer.setSize` + `bloomPass.resolution.set` are wired into `resizeCube()` so the composer tracks viewport changes.
+
+The picker DOM lives in `public/dashboard.html`'s `.ovl-br` cluster (`#qualityCtrl`), styled in `public/css/main.css` via `.quality-ctrl .q-btn{,:hover,.active}`, click-wired in `public/js/main.js`'s `applyQuality()`. The picker hides under `body.ui-hidden` along with the rest of the chrome so the title-toggle "performance mode" is unaffected.
+
+Phase 4 brush migration (Canvas-2D → WebGL) will share this composer chain rather than build a second one — the rolling-score canvas stays separate but post-processing of the cube scene is the validated reference pipeline.
 
 ## Editing checklist
 

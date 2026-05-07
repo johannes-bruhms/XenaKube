@@ -203,6 +203,14 @@
     <input type="color" id="bgColor" value="#000000">
     <span class="slider-val" id="bgColorVal">#000000</span>
   </div>
+  <div class="br-slider-row quality-row" title="Post-processing pipeline quality. Low bypasses bloom + composer; Med/High enable bloom with progressively stronger params.">
+    <label>quality</label>
+    <div class="quality-ctrl" id="qualityCtrl" role="radiogroup" aria-label="Render quality">
+      <button class="q-btn"            data-level="low"  role="radio" aria-checked="false">LOW</button>
+      <button class="q-btn active"     data-level="med"  role="radio" aria-checked="true" >MED</button>
+      <button class="q-btn"            data-level="high" role="radio" aria-checked="false">HIGH</button>
+    </div>
+  </div>
 </div>
 
 <!-- Hidden elements kept for JS compatibility -->

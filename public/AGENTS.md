@@ -66,3 +66,4 @@ After dashboard changes, verify at `http://localhost:3000`:
 - `../test/dashboard-ghost.test.ts`: static guard that beta-cosmo keeps ghost C geometry fixed in local slots, alpha-cosmo walks C identities by `state.cAssignments`, active C highlighting resolves from the active local slot in beta, and the alpha/beta dashboard toggle posts `set_mode.cosmology`.
 - `../test/dashboard-mac-privacy.test.ts`: static guard that served dashboard surfaces do not hardcode, prefill, or persist cube MAC addresses.
 - `../test/interruption-layer.test.ts`: static guard that the interruption layer stays feature-flagged, detachable, self-styled, and wired only through `js/main.js`.
+- `../test/dashboard-ui.test.ts`: static guard that the title-toggle "performance mode" leaves live K-vertex telemetry labels visible (no `setVertexInfoVisible` shutoff path), so per-vertex intensity / density / duration stays readable when chrome is hidden.

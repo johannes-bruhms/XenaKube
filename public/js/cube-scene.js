@@ -29,6 +29,10 @@
 
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FACES, FACE_NORMAL as FACE_GLYPH_NORMAL, paintFaceGlyph } from './face-glyph.js';
 
 // ---- Geometry constants (internal) -----------------------------------------
@@ -135,6 +139,13 @@ const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.
 const canvas = document.getElementById('cube-canvas');
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true });
 renderer.setPixelRatio(window.devicePixelRatio);
+// ACES Filmic tone mapping is applied either by `renderer` directly (Low
+// quality, composer bypassed) or by `OutputPass` (Med/High). Both code paths
+// honor `renderer.toneMapping` + `renderer.outputColorSpace`, so flipping the
+// quality picker doesn't change the colour curve — only whether bloom + the
+// composer chain run.
+renderer.toneMapping = THREE.ACESFilmicToneMapping;
+renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
@@ -188,37 +199,65 @@ scene.add(tetraBLines);
 const vertexMeshes = [];
 const vertexLabels = [];
 
-// Active vertex glow ring — white so the pulse reads as "this is the
-// active vertex right now" independent of whichever K-color the
-// underlying sphere has. Pre-K-palette this used 0x00ff88 (matched
-// tetra-A green); now that per-K colors differ from the active marker,
-// white is the safest cross-palette choice.
-const activeRingGeo = new THREE.RingGeometry(0.15, 0.22, 16);
-const activeRingMat = new THREE.MeshBasicMaterial({
+// Shared soft-halo texture — radial gradient from opaque white at center to
+// transparent at the edge. Used by per-K-vertex halos (tinted by K color),
+// the active highlight (white tint), and the ghost-active highlight. With
+// AdditiveBlending the texture's white core stacks with the underlying
+// sphere/scene to push pixel luminance above the bloom threshold (Phase 3
+// post-processing) so every K vertex glows regardless of its base hue —
+// previously only K3/K5/K8 (the highest-luma colors) ever cleared threshold.
+function makeHaloTexture(size = 256) {
+  const c = document.createElement('canvas');
+  c.width = size; c.height = size;
+  const ctx = c.getContext('2d');
+  const r = size / 2;
+  const g = ctx.createRadialGradient(r, r, 0, r, r, r);
+  g.addColorStop(0,    'rgba(255,255,255,1.00)');
+  g.addColorStop(0.30, 'rgba(255,255,255,0.55)');
+  g.addColorStop(0.65, 'rgba(255,255,255,0.18)');
+  g.addColorStop(1.00, 'rgba(255,255,255,0.00)');
+  ctx.fillStyle = g;
+  ctx.fillRect(0, 0, size, size);
+  const tex = new THREE.CanvasTexture(c);
+  tex.anisotropy = 4;
+  return tex;
+}
+const HALO_TEX = makeHaloTexture(256);
+
+// Active vertex highlight — replaces the prior hard-edged RingGeometry with
+// a Sprite carrying the soft radial-gradient halo texture. Sprite billboards
+// to the camera automatically (so the previous `lookAt` becomes harmless),
+// AdditiveBlending stacks brightness over the underlying K-vertex sphere and
+// halo, and the existing pulsing-opacity logic still drives the visible flux.
+const activeRingMat = new THREE.SpriteMaterial({
+  map: HALO_TEX,
   color: 0xffffff,
   transparent: true,
   opacity: 0.7,
-  side: THREE.DoubleSide,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
 });
-const activeRing = new THREE.Mesh(activeRingGeo, activeRingMat);
+const activeRing = new THREE.Sprite(activeRingMat);
+activeRing.scale.set(0.55, 0.55, 1);
 activeRing.visible = false;
 
 const topMarkerGeo = new THREE.SphereGeometry(0.035, 8, 8);
 const liveTopMarkers = [];
 
-// Ghost active vertex ring — mirrors activeRing but lives in ghostGroup so
-// it follows the snap target's rotation. Slightly smaller radius because
-// ghost vertex spheres are 0.05 (vs live's 0.06). Pulses out of phase
-// with the live ring so the eye picks out which is which when both are
-// near each other (locked snap, deviation ≈ 0).
-const ghostActiveRingGeo = new THREE.RingGeometry(0.12, 0.18, 16);
-const ghostActiveRingMat = new THREE.MeshBasicMaterial({
+// Ghost active vertex highlight — same soft-halo treatment as the live
+// activeRing. Slightly smaller radius because ghost vertex spheres are
+// 0.05 (vs live's 0.06). Pulses out of phase so the eye picks out which is
+// which when both are near each other (locked snap, deviation ≈ 0).
+const ghostActiveRingMat = new THREE.SpriteMaterial({
+  map: HALO_TEX,
   color: 0xffffff,
   transparent: true,
   opacity: 0.7,
-  side: THREE.DoubleSide,
+  blending: THREE.AdditiveBlending,
+  depthWrite: false,
 });
-const ghostActiveRing = new THREE.Mesh(ghostActiveRingGeo, ghostActiveRingMat);
+const ghostActiveRing = new THREE.Sprite(ghostActiveRingMat);
+ghostActiveRing.scale.set(0.45, 0.45, 1);
 ghostActiveRing.visible = false;
 const ghostTopMarkers = [];
 
@@ -238,6 +277,14 @@ function makeLabel(text, color) {
   return { sprite, canvas: c, ctx, tex };
 }
 
+// Per-K-vertex soft halo sprites tinted by each K color. Live alongside the
+// solid colored sphere; AdditiveBlending stacks halo + sphere RGB so the
+// pixel luminance at the vertex centre clears the Phase 3 bloom threshold
+// for every K, not just the high-luma three (K3/K5/K8). Inactive halo width
+// is HALO_BASE_SCALE (~2.7× sphere width); active halos scale up with the
+// vertex pulse so the halo:sphere ratio stays consistent.
+const HALO_BASE_SCALE = 0.32;
+const vertexHalos = [];
 for (let i = 0; i < 8; i++) {
   const geo = new THREE.SphereGeometry(0.06, 8, 8);
   const mat = new THREE.MeshBasicMaterial({ color: K_VERT_COLORS[i] });
@@ -245,6 +292,20 @@ for (let i = 0; i < 8; i++) {
   mesh.position.copy(CUBE_VERTS[i]);
   scene.add(mesh);
   vertexMeshes.push(mesh);
+
+  const haloMat = new THREE.SpriteMaterial({
+    map: HALO_TEX,
+    color: K_VERT_COLORS[i],
+    transparent: true,
+    opacity: 0.85,
+    blending: THREE.AdditiveBlending,
+    depthWrite: false,
+  });
+  const halo = new THREE.Sprite(haloMat);
+  halo.position.copy(CUBE_VERTS[i]);
+  halo.scale.set(HALO_BASE_SCALE, HALO_BASE_SCALE, 1);
+  scene.add(halo);
+  vertexHalos.push(halo);
 
   const label = makeLabel(`K${i + 1}`, K_VERT_COLORS_HEX[i]);
   label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.55);
@@ -272,6 +333,7 @@ for (let i = 0; i < 8; i++) {
   liveTopMarkers.push(marker);
 }
 vertexMeshes.forEach(m => cubeGroup.add(m));
+vertexHalos.forEach(h => cubeGroup.add(h));
 vertexLabels.forEach(l => cubeGroup.add(l.sprite));
 
 // Ghost cube — snapped S4 C-cube. It tracks state.snapQuat independently
@@ -703,11 +765,87 @@ function resizeCube() {
   const rect = canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return;
   renderer.setSize(rect.width, rect.height, false);
+  composer.setSize(rect.width, rect.height);
+  bloomPass.resolution.set(rect.width, rect.height);
   const aspect = rect.width / rect.height;
   camera.aspect = aspect;
   camera.updateProjectionMatrix();
   fitCameraToAspect(aspect);
 }
+
+// ---- Post-processing pipeline (Phase 3 — bloom + tone mapping) -------------
+//
+// EffectComposer chain: RenderPass → UnrealBloomPass → OutputPass. The render
+// pass writes the cube scene into a half-float-friendly target so highlights
+// survive into bloom thresholding; UnrealBloomPass extracts pixels above
+// `threshold`, blurs them, and additively composites; OutputPass applies the
+// renderer's tone mapping + sRGB conversion at the end.
+//
+// Quality picker (Low / Med / High) toggles between direct render (composer
+// bypassed) and the composer chain with stronger or gentler bloom. Defaults to
+// Med so a fresh user with a normal GPU sees the effect; Low is the explicit
+// "weak GPU" escape hatch. Tone mapping itself is always on (cheap fragment
+// op) so Low and Med/High share the same colour curve and the picker only
+// gates bloom + the composer overhead.
+//
+// The gizmo uses its own renderer (`gizmoRenderer`) and does NOT post-process —
+// small UI controls don't want a glow halo.
+const composer = new EffectComposer(renderer);
+composer.setPixelRatio(window.devicePixelRatio);
+const renderPass = new RenderPass(scene, camera);
+renderPass.clearAlpha = 0;
+composer.addPass(renderPass);
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(1, 1), 0.5, 0.5, 0.78);
+// Preserve canvas alpha through the bloom composite. UnrealBloomPass's final
+// additive blit uses CopyShader (`gl_FragColor = opacity * texel`), which
+// forces alpha = 1 everywhere bloom touches — that's what was making the
+// canvas opaque and hiding the page's `--bg`. Override so bloom's RGB stacks
+// additively but its alpha contribution scales with bloom luminance: bright
+// bloom regions get visible alpha, dim/zero regions stay transparent and the
+// body bg shows through. The pass's blit material is `blendMaterial` in
+// three@0.170+ (renamed from `materialCopy` in earlier versions); guard with
+// the alternate name in case it ever flips back.
+const _bloomBlend = bloomPass.blendMaterial || bloomPass.materialCopy;
+if (_bloomBlend) {
+  _bloomBlend.fragmentShader = `
+    uniform float opacity;
+    uniform sampler2D tDiffuse;
+    varying vec2 vUv;
+    void main() {
+      vec4 texel = texture2D(tDiffuse, vUv);
+      float bloomLuma = max(max(texel.r, texel.g), texel.b);
+      gl_FragColor = vec4(opacity * texel.rgb, opacity * bloomLuma);
+    }
+  `;
+  _bloomBlend.needsUpdate = true;
+}
+composer.addPass(bloomPass);
+composer.addPass(new OutputPass());
+
+// Belt-and-suspenders: ensure the renderer clears with alpha 0 explicitly so
+// the canvas stays transparent regardless of any pass clearing default.
+renderer.setClearColor(0x000000, 0);
+
+const QUALITY_PRESETS = {
+  low:  { useComposer: false, strength: 0,    radius: 0,    threshold: 1.0  },
+  med:  { useComposer: true,  strength: 0.5,  radius: 0.5,  threshold: 0.78 },
+  high: { useComposer: true,  strength: 0.8,  radius: 0.7,  threshold: 0.65 },
+};
+let _quality = 'med';
+
+function applyQualityPreset(level) {
+  const p = QUALITY_PRESETS[level];
+  if (!p) return false;
+  _quality = level;
+  if (p.useComposer) {
+    bloomPass.strength = p.strength;
+    bloomPass.radius = p.radius;
+    bloomPass.threshold = p.threshold;
+  }
+  return true;
+}
+applyQualityPreset(_quality);
+
 resizeCube();
 requestAnimationFrame(resizeCube);
 window.addEventListener('resize', resizeCube);
@@ -753,10 +891,10 @@ function animateCube() {
       const target = (k === currentActiveK) ? 2.5 : 1.0;
       const s = sphereScaleFrom[k] + (target - sphereScaleFrom[k]) * t;
       vertexMeshes[k].scale.setScalar(s);
+      vertexHalos[k].scale.setScalar(HALO_BASE_SCALE * s);
     }
     activeRingAnimated.copy(activeRingFrom).lerp(CUBE_VERTS[currentActiveVertex], t);
     activeRing.position.copy(activeRingAnimated);
-    activeRing.lookAt(camera.position);
   }
 
   if (vertexAnimReady) {
@@ -765,6 +903,7 @@ function animateCube() {
     for (let k = 0; k < 8; k++) {
       vertexPosAnimated[k].copy(vertexPosFrom[k]).lerp(vertexPosTarget[k], t);
       vertexMeshes[k].position.copy(vertexPosAnimated[k]);
+      vertexHalos[k].position.copy(vertexPosAnimated[k]);
       vertexLabels[k].sprite.position.copy(vertexPosAnimated[k]).multiplyScalar(LABEL_OFFSET_FACTOR);
     }
   }
@@ -796,7 +935,6 @@ function animateCube() {
     const targetPos = ghostVertPosTarget[currentActiveC] || CUBE_VERTS[currentActiveC];
     ghostActiveRingAnimated.copy(ghostActiveRingFrom).lerp(targetPos, t);
     ghostActiveRing.position.copy(ghostActiveRingAnimated);
-    ghostActiveRing.lookAt(camera.position);
   }
 
   ringPulse += 0.04;
@@ -834,7 +972,11 @@ function animateCube() {
     kcLine.visible = false;
   }
 
-  renderer.render(scene, camera);
+  if (QUALITY_PRESETS[_quality].useComposer) {
+    composer.render();
+  } else {
+    renderer.render(scene, camera);
+  }
   gizmoRenderer.render(gizmoScene, gizmoCamera);
 }
 animateCube();
@@ -1016,7 +1158,7 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
     ctx.textBaseline = 'top';
     ctx.fillText(`K${k + 1}`, W / 2, 2);
 
-    if (vertices && _vertexInfoVisible) {
+    if (vertices) {
       const v = vertices[slot];
       ctx.font = '14px monospace';
       ctx.fillStyle = dimColor;
@@ -1304,14 +1446,20 @@ export function setCubeDepthOffset(z) {
   ghostGroup.position.z = z;
 }
 
-// Toggled by setVertexInfoVisible(); paintVertexLabels() reads it each frame
-// to suppress the intensity / density / duration lines while keeping K# visible.
-let _vertexInfoVisible = true;
-
-/** Show / hide the per-vertex info lines (intensity / density / duration). K# stays. */
-export function setVertexInfoVisible(visible) {
-  _vertexInfoVisible = visible;
+/**
+ * Set the post-processing quality level. `level` ∈ { 'low' | 'med' | 'high' }.
+ * Low bypasses the composer (direct `renderer.render`); Med/High enable the
+ * bloom + tone-mapping chain with progressively stronger bloom. Returns the
+ * current level (unchanged on an unknown input). Persisted by the caller
+ * (main.js) via localStorage; the slider's default is Med.
+ */
+export function setQuality(level) {
+  applyQualityPreset(level);
+  return _quality;
 }
+
+/** Read-only access to the current quality level. */
+export function getQuality() { return _quality; }
 
 /** Write the active K-vertex's world position into `out` (Vector3). */
 export function getActiveKWorldPos(out) {

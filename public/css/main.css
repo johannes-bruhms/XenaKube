@@ -218,7 +218,8 @@
   /* Title-toggle: clicking XENAKUBE collapses the dashboard's chrome panels
      (state, mode pills, conn row, gizmo cluster, sliders, move buffer,
      algorithm toasts, active K/C cards) so only the cube + sieve +
-     rolling-score remain. Persisted via localStorage('uiHidden') in main.js. */
+     rolling-score remain. Live K-vertex info labels are part of the cube
+     scene and remain visible. Persisted via localStorage('uiHidden') in main.js. */
   body.ui-hidden .conn-row,
   body.ui-hidden .mode-row,
   body.ui-hidden .active-cards,
@@ -916,6 +917,38 @@
   .br-slider-row .motion-indicator.still {
     color: #4ade80;
     text-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
+  }
+
+  /* Quality picker — three discrete tiers (Low / Med / High) toggling
+     post-processing in cube-scene.js. Sits in .ovl-br alongside the other
+     visual sliders. Active tier glows accent2 (cyan); inactive tiers stay
+     dim until hovered. */
+  .quality-ctrl {
+    flex: 1;
+    display: flex;
+    gap: 4px;
+    align-items: center;
+    justify-content: stretch;
+  }
+  .quality-ctrl .q-btn {
+    flex: 1;
+    padding: 3px 0;
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 1px;
+    color: var(--dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+    cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+  }
+  .quality-ctrl .q-btn:hover { color: var(--text); border-color: var(--accent2); }
+  .quality-ctrl .q-btn.active {
+    color: var(--accent2);
+    border-color: var(--accent2);
+    background: rgba(0, 204, 255, 0.10);
   }
 
   /* Algorithm-history toast — top-right, just below the move-buffer + algorithm-row.

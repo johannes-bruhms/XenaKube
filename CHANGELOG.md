@@ -4,9 +4,15 @@ All notable changes to XenaKube are documented here.
 
 **Entry format**: dated section per release/working-day; under it, `### Added / Changed / Fixed` headers; under each header, **terse bullets** — one or two sentences naming the user-visible change and the file(s) touched. Long rationale, root-cause analyses, and D-coded design narratives belong in `docs/revision_roadmap.md` (bridge / SWAM) or `docs/research_notes.md` (engine / dashboard). When in doubt, link rather than copy. Older entries below predate this discipline and are kept as-is.
 
+## 2026-05-07
+
+### Fixed
+- Kept live K-vertex telemetry labels visible when the XENAKUBE title toggle hides dashboard chrome. `public/js/main.js` no longer suppresses cube-scene vertex details, `public/js/cube-scene.js` always paints intensity/density/duration when K-vertex data exists, and `test/dashboard-ui.test.ts` guards the behavior.
+
 ## 2026-05-06
 
 ### Added
+- Added Phase 3 post-processing pipeline (bloom + tone mapping) to the cube scene. `public/js/cube-scene.js` builds an `EffectComposer` chain (`RenderPass` → `UnrealBloomPass` → `OutputPass`) with `ACESFilmicToneMapping` on the renderer; new `setQuality('low'|'med'|'high')` API toggles between direct render (Low) and the composer chain with progressively stronger bloom. Discrete 3-button picker in the bottom-right cluster (`public/dashboard.html`, `public/css/main.css`), wired in `public/js/main.js` with localStorage persistence, defaults to Med. Full pipeline reference in `docs/dashboard-architecture.md` § Post-processing pipeline.
 - Added optional interruption dashboard overlay behind `?intrusions=1`. `public/interruption/` owns the pressure state machine, generated placeholder clip playback, separate targeting canvas, debug keys, and scoped DOM/CSS; `public/js/main.js` is the only wiring point and keeps the layer detachable.
 - Added canonical-top CCW-quadruple zero-gyro shortcut. With the cube held white-up, turning U counterclockwise four times within 1500 ms fires the same Zero Gyro action as the dashboard button. Detector lives in `public/js/main.js` (`checkTopFaceZeroGesture`); gated on `move === "U'"` AND `state.upFace === 'U'` so it cannot trigger in non-canonical holds.
 - Added a visible dashboard alpha/beta cosmology toggle. `public/dashboard.html` exposes a `mode-cosmology` badge, `public/js/main.js` posts `set_mode.cosmology`, and `public/js/state-ui.js` mirrors the engine-reported mode.
