@@ -48,6 +48,7 @@ npm run dev
 - Keep `public/dashboard.html` structural. Dashboard logic belongs in `public/js/*.js`; styling belongs in `public/css/main.css`.
 - Recurrent bugs in this repo are usually silent-failure surfaces. Do not ship a local fix without the invariant or telemetry that proves the bug and guards it from returning.
 - If code and docs diverge, fix the docs in the same change.
+- The physical solved edge is a cosmology anchor: alpha-cosmo returns to beta-cosmo with the normal structural reset; already-beta sessions stay in place.
 
 ## Documentation ownership
 

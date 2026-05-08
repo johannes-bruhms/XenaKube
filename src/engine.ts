@@ -20,14 +20,19 @@ import { VoiceEngine, type VoiceOutput } from './voice-engine.js';
 import { ExpressionProcessor, type ExpressionState } from './expression.js';
 import { ModeManager } from './mode-manager.js';
 import { TurnRateTracker } from './turn-rate.js';
-import { parseFace, getFaceSignature } from './face-gesture.js';
-import { topRightCorner, upFace, type Face } from './orientation.js';
+import { parseFace, getFaceSignature, type FaceMove } from './face-gesture.js';
+import { activeCornerForTurn, upFace, type Face } from './orientation.js';
 import { MotionTracker } from './motion.js';
 
 export type StateListener = (state: XenaKubeState) => void;
 export type CubeAlgorithmListener = (match: CubeAlgorithmMatch) => void;
 export type VoiceListener = (output: VoiceOutput) => void;
-export type SolveListener = () => void;
+export interface SolveReport {
+  state: XenaKubeState;
+  previousCosmology: EngineMode['cosmology'];
+  cosmologyChanged: boolean;
+}
+export type SolveListener = (report: SolveReport) => void;
 
 const C_SHIFT = parseMoveToElement('U') ?? IDENTITY;
 
@@ -67,6 +72,7 @@ export class XenaKubeEngine {
   private activeVertex = 0;
   private trackedK = 0;
   private lastTurnedFace: Face | null = null;
+  private lastTurnedMove: FaceMove | null = null;
   // Phrase-lock window: while Date.now() < voiceLockUntilMs, the current
   // (K, C) at activeVertex stays frozen — gyro tilt cannot drift the
   // read-head or rotate the C-assignments mid-phrase. Set on every onTurn
@@ -114,7 +120,8 @@ export class XenaKubeEngine {
 
   /**
    * Subscribe to cube-solved transitions. Edge detection is owned by the
-   * browser FACELETS stream; reportCubeSolved() forwards the event.
+   * browser FACELETS stream; reportCubeSolved() applies solve-anchor mode
+   * semantics, then forwards the event.
    */
   onSolve(listener: SolveListener): () => void {
     this.solveListeners.push(listener);
@@ -123,8 +130,21 @@ export class XenaKubeEngine {
     };
   }
 
-  reportCubeSolved(): void {
-    for (const listener of this.solveListeners) listener();
+  reportCubeSolved(): SolveReport {
+    const previousCosmology = this.mode.cosmology;
+    const cosmologyChanged = previousCosmology !== 'beta-cosmo';
+    if (cosmologyChanged) {
+      this.setMode({ cosmology: 'beta-cosmo' });
+      this.emitState(this.getState());
+    }
+
+    const report = {
+      state: this.getState(),
+      previousCosmology,
+      cosmologyChanged,
+    };
+    for (const listener of this.solveListeners) listener(report);
+    return report;
   }
 
   setMode(mode: Partial<EngineMode>): void {
@@ -203,7 +223,10 @@ export class XenaKubeEngine {
     // emitted so an interrupt starts from the current C assignment.
 
     const face = parseFace(move);
-    if (face !== null) this.lastTurnedFace = face[0] as Face;
+    if (face !== null) {
+      this.lastTurnedFace = face[0] as Face;
+      this.lastTurnedMove = face;
+    }
 
     this.step++;
     this.substitutionCount++;
@@ -340,6 +363,7 @@ export class XenaKubeEngine {
     this.step = 0;
     this.substitutionCount = 0;
     this.lastTurnedFace = null;
+    this.lastTurnedMove = null;
     this.voiceLockUntilMs = 0;
     this.activeVertex = this.nextActiveVertexAfterStep(0);
     this.gyro = [0, 0, 0, 1];
@@ -380,12 +404,12 @@ export class XenaKubeEngine {
 
   private nextActiveVertexAfterStep(step: number): number {
     if (this.mode.cosmology === 'alpha-cosmo') return step % 8;
-    // Beta-cosmo Design C: gyro chooses the current top face, then the
-    // last-turned face chooses its head-on top-right corner along that top
-    // face when the faces touch. Until the first turn, fall back to the
-    // tracked-K position for a deterministic initial state.
-    if (this.lastTurnedFace !== null) {
-      return topRightCorner(this.lastTurnedFace, this.gyro);
+    // Beta-cosmo: gyro chooses the current top face, then the last
+    // quarter-turn picks the endpoint its face rotation moves material into.
+    // Until the first turn, fall back to the tracked-K position for a
+    // deterministic initial state.
+    if (this.lastTurnedMove !== null) {
+      return activeCornerForTurn(this.lastTurnedMove, this.gyro);
     }
     return this.positionOfTrackedK();
   }

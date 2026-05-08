@@ -9,7 +9,7 @@ Each physical cube turn:
 1. Move -> **cube-algorithm detector** (168 rotation variants of 7 canonical algorithms).
 2. If algorithm matched -> **mode manager** records the event. Effect handlers are currently stubs.
 3. Cosmology advances:
-   - `beta-cosmo`: visible K_i topology advances by the **physical corner permutation** for that face turn. A position `i` contains K corner `kPermutation[i]`, and the sounding read-head is the turned face's head-on top-right corner; the calibrated gyro pose only decides which face is currently top.
+   - `beta-cosmo`: visible K_i topology advances by the **physical corner permutation** for that face turn. A position `i` contains K corner `kPermutation[i]`, and the sounding read-head is the direction-aware collision endpoint for the quarter-move: surrounding faces use CW top-right / CCW top-left relative to the current top face; top/bottom faces use the user-facing edge.
    - `alpha-cosmo`: K_i and C_i use the historical S4 walks; K/C assignments are derived from their S4 group elements.
 4. Kinematic diagrams drive alpha-cosmo walks and remain shadow metadata in beta-cosmo.
 5. C_i assignment advances only in alpha-cosmo. Beta-cosmo keeps C1..C8 fixed to local slots (`slot i -> C{i+1}`) and treats C S4 as shadow metadata.
@@ -24,13 +24,14 @@ Current migration boundary: Max still renders live audio with the legacy `phrase
 
 ## Voice Modes
 
-- **Sequential**: one active vertex at a time. In beta-cosmo this is the head-on top-right corner of the last turned face relative to the current top face; in alpha-cosmo it uses the historical step walk.
+- **Sequential**: one active vertex at a time. In beta-cosmo this is the endpoint the last quarter-turn moves material into on its orientation-selected edge; in alpha-cosmo it uses the historical step walk.
 - **Polyphonic**: all 8 vertices sound simultaneously; each turn morphs the ensemble.
 
 ## Engine Modes
 
 - **Cosmology**: `beta-cosmo` is the performer-visible corner instrument; `alpha-cosmo` restores the historical Nomos Alpha S4 walk.
 - **Switching cosmology**: `setMode({ cosmology })` resets structural state so beta physical topology and alpha S4 walks cannot leak into each other.
+- **Solve edge**: `reportCubeSolved()` returns alpha-cosmo sessions to beta-cosmo using the same structural reset, then fires `/xk/solve`. If the engine is already in beta-cosmo, the solve event does not reset the beta corner topology.
 - **K_i diagram**: drives K_i in alpha-cosmo; remains a visible/shadow path only in beta-cosmo.
 - **C_i algorithmic/gyro**: drives C_i assignment permutation in alpha-cosmo; remains shadow S4 metadata in beta-cosmo, where local C slots stay fixed.
 - **Freeze**: turns are still detected and algorithms still log, but K_i / C_i / sieve / step do not advance.
@@ -70,7 +71,7 @@ Turn rate is not a gyro expression parameter, but it is part of the same live co
 
 ## Key Math
 
-- **Visible corner topology**: `src/corner-topology.ts` tracks which of the 8 K corners occupies each visible cube corner. Face turns are local 4-cycles on the affected face. `src/orientation.ts` first chooses the current top face, then selects the right-hand endpoint of the turned face's shared top-face edge when the faces touch. Shallow gyro tilt does not slide the selector between corners until the top face changes.
+- **Visible corner topology**: `src/corner-topology.ts` tracks which of the 8 K corners occupies each visible cube corner. Face turns are local 4-cycles on the affected face. `src/orientation.ts` first chooses the current top face, then selects the orientation edge and the endpoint the move's corner permutation moves material into. Surrounding faces use the shared top-face edge (CW -> top-right, CCW -> top-left). Top/bottom faces use the side edge facing the user; the user-facing side is winner-take-all, so shallow tilt does not slide between individual corners.
 - **Corner solve distance**: `src/scramble.ts` precomputes exact quarter-turn distance for all `8! = 40,320` visible corner permutations. This is the current `/xk/scramble` and expression-scramble source. It ignores edge cubies and corner twist.
 - **S4 alpha/beta boundary**: `group.ts` provides the 24 hexahedral rotations, Cayley table, tetra-orbit math, algorithm orientation expansion, and gyro snap targets. In alpha-cosmo, K/C group elements drive the old walk assignments. In beta-cosmo, gyro updates `kGroup` as orientation metadata, `cGroup` is shadow metadata, and K/C diagrams remain non-permuting shadows.
 - **C_i alpha/beta/gamma cycle**: C assignments rotate phase every 3 substitutions only in alpha-cosmo, which then permutes the phase table by `cGroup`. Beta-cosmo keeps C identities fixed to local slots so an active K corner phrases with the visible C label in the same corner.

@@ -91,17 +91,18 @@ describe('PhrasePlanner', () => {
     expect(plan.expected.companionNoteOnCount).toBe(0);
   });
 
-  it('C5 plans wild gliss bends and anchor-only deterministic companions', () => {
+  it('C5 plans wild gliss bends and re-voiced in-range companions', () => {
     const planner = new PhrasePlanner({ rng: () => 0, now: () => 1000 });
     const plan = planner.planVoiceOutput(voice(ComplexType.AtaxicSliding, 'R'), state())[0];
     const companionNoteOns = plan.events.filter(e => e.kind === 'noteOn' && e.isCompanion === true);
     const companionNoteOffs = plan.events.filter(e => e.kind === 'noteOff' && e.isCompanion === true);
 
     expect(plan.expected.bendStepCount).toBeGreaterThanOrEqual(1);
-    expect(companionNoteOns).toHaveLength(1);
+    expect(companionNoteOns.length).toBeGreaterThan(1);
     expect(companionNoteOns[0].tMs).toBe(0);
-    expect(companionNoteOffs.some(e => e.tMs === 150)).toBe(true);
-    expect(plan.expected.companionNoteOnCount).toBe(1);
+    expect(companionNoteOffs.length).toBeGreaterThan(0);
+    expect(companionNoteOns.every(e => e.kind === 'noteOn' && e.pitch >= 36 && e.pitch <= 84)).toBe(true);
+    expect(plan.expected.companionNoteOnCount).toBe(companionNoteOns.length);
   });
 
   it('turn-rate pressure increases planned density and expression without changing complex identity', () => {
@@ -115,6 +116,7 @@ describe('PhrasePlanner', () => {
 
     const slowC2 = slowPlanner.planVoiceOutput(voice(ComplexType.OrderedCloudAscDesc, 'L'), stateWithRate(0.3))[0];
     const fastC2 = fastPlanner.planVoiceOutput(voice(ComplexType.OrderedCloudAscDesc, 'L'), stateWithRate(3.0))[0];
+    expect(fastC2.expected.noteOnCount).toBeGreaterThan(slowC2.expected.noteOnCount);
     const slowExpr = slowC2.events.find(e => e.kind === 'exprShape');
     const fastExpr = fastC2.events.find(e => e.kind === 'exprShape');
     expect(slowExpr?.kind).toBe('exprShape');

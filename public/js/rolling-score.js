@@ -51,7 +51,7 @@ let ROLL_RIGHT_INSET_CSS_PX = 90;
 
 // FIFO queue per (voice, pitch). The bridge legitimately emits overlapping
 // noteons for the same pitch (C8 trem rebows the same mainPitch every
-// iteration; the same companion pitch is reused across a whole phrase; any
+// iteration; companion re-voices can reuse a pitch; any
 // humanPitch collision in C2/C3/C4 produces the same key on consecutive
 // iterations). FIFO pairing matches what the bridge actually sends: oldest
 // noteon pairs with first noteoff for that key.
@@ -162,8 +162,8 @@ const EXPR_PRE_FADE_LOOKBACK_MS  = 1000;     // captures pre-fade expr at noteof
 // fix it: past chains are pinned to whatever companion (if any) overlapped
 // them when they were live, and stay that way as they scroll out. Multiple
 // sequential segments per (voice, complex) remain supported for historical or
-// future repeated companions; current C5 is anchor-only and C6 holds one
-// companion through the chain.
+// future repeated companions; current C5/C6 gliss companions re-voice across
+// bend boundaries and remain time-bounded here.
 const companionSegments = [];   // Array<{voice, complex, offsetSemis, companionPitch, t0, t1}>
 
 function recordExpr(voice, t, val) {
@@ -1067,7 +1067,23 @@ function buildGlissChains(nowMs, w, h) {
       const prevOff = prev ? (prev.evt.offsetMs ?? nowMs) : -Infinity;
       const gapMs = prev ? node.evt.onsetMs - prevOff : 0;
       const breakByCs  = !!node.evt.chainStart;
-      const breakByGap = gapMs > GLISS_GAP_MS;
+      // D81 — GLISS_GAP_MS is a UDP-reorder fallback for the slide-vs-leap
+      // noteon chainStart classifier; it should NOT split chains across bend
+      // transitions. softBend (C7) phrases have no rebow noteons between
+      // bends, so consecutive bend evts' (prev.offsetMs = bs.t0+bs.dur,
+      // node.onsetMs = next bs.t0) gap is the architectural held-pitch slack
+      // between bends (~50–100 ms = BEND_DUR_MARGIN_MS + scheduling) — well
+      // above 25 ms but musically continuous. Pre-D81 fix this broke the
+      // chain at every bend boundary, producing 4 overlapping fragments
+      // (anchor+bend1 chain extending its held flat to rightEdge, bend2
+      // chain painting its curve over the top of that flat, etc.) which
+      // read as "the old sustain stays + a new voice begins." Hard-bend
+      // chains (C5/C6) were unaffected because their rebow noteon between
+      // bends sits inside the gap and stays active until the next bend
+      // completes — `prev.offsetMs ?? nowMs` then evaluates to nowMs
+      // (active) or a later noteoff time, making the gap negative.
+      const involvesBend = node.evt.isBend || (prev && prev.evt.isBend);
+      const breakByGap = !involvesBend && gapMs > GLISS_GAP_MS;
       if (!chain || breakByCs || breakByGap) {
         if (window.xkDebugGliss && chain) {
           console.log(
@@ -1075,7 +1091,7 @@ function buildGlissChains(nowMs, w, h) {
             ' pitch=' + node.evt.pitch +
             ' cs=' + breakByCs +
             ' gap=' + (gapMs).toFixed(1) + 'ms' +
-            ' (>25? ' + breakByGap + ')'
+            ' (>25? ' + (gapMs > GLISS_GAP_MS) + ', bend-involved=' + involvesBend + ')'
           );
         }
         chain = {
@@ -1182,8 +1198,25 @@ function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
   const segs = _buildGlissSegments(nodes);
   const lineW = bu(0.85) * (GLISS_LINE_WIDTH_MUL[complex] || 1.0);
 
+  // Gliss companions are time-bounded audible dyad segments from the bridge.
+  // Each sample uses the companion segment active at that time and skips the
+  // overlay when the translated pitch would leave the rolling-score range.
   const startX = nodes[0].x0;
-  const endX   = nodes[nodes.length - 1].x1;
+  // D80 — softBend (C7) chains have the anchor noteon (lowest onsetMs) as
+  // the only chain participant from activeMidiNotes / finishedMidiNotes;
+  // bend segments fill the rest of the chain. The anchor's `x1` extends to
+  // `rightEdge` while it's active (or to `timeToX(phraseEnd)` after natural
+  // release) — that's the rightmost extent of the chain — but it sits at
+  // nodes[0] in onsetMs order, not nodes[last]. Pre-D80 the renderer used
+  // `nodes[last].x1` (= the last bend's end x), so for softBend phrases the
+  // post-bend held tail (from last bend's end to anchor's end) was never
+  // sampled and never drew. Hard-bend chains are unaffected because their
+  // last rebow noteon is BOTH the highest-onsetMs node AND the rightmost
+  // x1, so `nodes[last].x1` already coincides with `max(x1)`.
+  let endX = nodes[0].x1;
+  for (let i = 1; i < nodes.length; i++) {
+    if (nodes[i].x1 > endX) endX = nodes[i].x1;
+  }
   const span   = Math.max(1, endX - startX);
   const samplePx = 3 * rollDpr;
   const numSamples = Math.max(2, Math.ceil(span / samplePx));
@@ -1251,7 +1284,7 @@ function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
     return last.v;
   };
 
-  // Pre-sample (x, y, w, t, compDy) once. Reused across the 3 strokePath
+  // Pre-sample (x, y, w, t, compOffset, compDy) once. Reused across the 3 strokePath
   // invocations for C7 (halo×2 + main) so we don't recompute the curve /
   // expr lookup three times.
   //
@@ -1269,10 +1302,12 @@ function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
     const t = nowMs - (rightEdge - x) / pxPerMs;
     const p = _glissPitchAt(t, segs);
     const y = midiToY(p, canvasH);
+    const companionOffset = _companionOffsetAt(chain.voice, complex, t, nowMs);
     samples[i] = {
       x, y, t,
       w: lineW * exprScale(exprAtTime(t), complex),
-      compDy: _companionDyAt(chain.voice, complex, t, nowMs),
+      compOffset: companionOffset,
+      compDy: _companionDyFromOffset(companionOffset, p, y, canvasH),
     };
   }
 
@@ -1323,7 +1358,7 @@ function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
     const a = samples[i - 1];
     const b = samples[i];
     if (a.compDy == null || b.compDy == null) continue;
-    if (a.compDy !== b.compDy) continue;
+    if (a.compOffset !== b.compOffset) continue;
     ctx.lineWidth = (a.w + b.w) * 0.5 * 0.9;
     ctx.beginPath();
     ctx.moveTo(a.x, a.y + a.compDy);
@@ -1334,18 +1369,24 @@ function drawGlissChain(ctx, chain, nowMs, canvasW, canvasH) {
   ctx.globalAlpha = 1;
 }
 
-// D73 — return the parallel-companion vertical offset (device px) for
-// (voice, complex) at time `t`, or null if no companion segment overlaps.
-// Open segments (t1==null) extend up to `nowMs`. Time-bounded so past chains'
-// overlays stay pinned to whatever companion was held when they were live.
-function _companionDyAt(voice, complex, t, nowMs) {
+// D73 + range guard - return the parallel-companion semitone offset for (voice, complex)
+// at time `t`, or null if no companion segment overlaps. The caller converts
+// offset->Y only when the companion pitch remains inside the visible range.
+function _companionOffsetAt(voice, complex, t, nowMs) {
   for (let i = 0; i < companionSegments.length; i++) {
     const cs = companionSegments[i];
     if (cs.voice !== voice || cs.complex !== complex) continue;
     const segT1 = (cs.t1 != null) ? cs.t1 : nowMs;
-    if (cs.t0 <= t && t <= segT1) return -cs.offsetSemis * rollRowH;
+    if (cs.t0 <= t && t <= segT1) return cs.offsetSemis;
   }
   return null;
+}
+
+function _companionDyFromOffset(offsetSemis, mainPitch, mainY, canvasH) {
+  if (offsetSemis == null) return null;
+  const companionPitch = mainPitch + offsetSemis;
+  if (companionPitch < ROLL_MIN_MIDI || companionPitch > ROLL_MAX_MIDI) return null;
+  return midiToY(companionPitch, canvasH) - mainY;
 }
 
 // ---- Per-frame render loop -------------------------------------------------
@@ -1629,10 +1670,8 @@ export function noteOn(data) {
       const offset = data.pitch - mainPitch;
       const now = performance.now();
       // D73 — close any prior open segment for the same (voice, complex)
-      // before pushing a fresh one. Current C5 is anchor-only and C6 holds
-      // one companion, but the defensive close covers any future phrase that
-      // sends two companion noteons back-to-back without an intervening
-      // noteoff.
+      // before pushing a fresh one. C5/C6 re-voice companions at bend
+      // boundaries, so adjacent segments are expected and should not overlap.
       for (let i = 0; i < companionSegments.length; i++) {
         const cs = companionSegments[i];
         if (cs.voice === data.voice && cs.complex === cmx && cs.t1 == null) {

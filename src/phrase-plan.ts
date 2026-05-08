@@ -20,6 +20,7 @@ import {
   rateDensityMultiplier,
   rateExpressionMultiplier,
   rateVelocityMultiplier,
+  turnRatePressure,
   resolvePhraseDuration,
   stepVelScale,
   type DurationSource,
@@ -41,6 +42,8 @@ const WILD_GLISS_VEL = 22;
 const WILD_GLISS_BPA = 80;
 const PITCHBEND_RANGE_SEMI = 24;
 const MAX_BEND_DUR_MS = 1200;
+const DOUBLE_STOP_ROLL_MIN = CELLO_MIN;
+const DOUBLE_STOP_ROLL_MAX = 84;
 
 type Rng = () => number;
 
@@ -137,7 +140,7 @@ export interface PhrasePlan {
 }
 
 interface ComplexRuntime {
-  register: { lo: number; hi: number };
+  register?: { lo: number; hi: number };
   exprEnv: {
     attack: number;
     peak: number;
@@ -145,17 +148,22 @@ interface ComplexRuntime {
     releaseRampMs: number;
   };
   bowPressure: number;
+  /** D80 — when true, glissStep skips the per-bend noteOff(source) +
+   *  noteOn(target) at completion. The audible bow stays on the original
+   *  anchor for the whole phrase; pitchbend wheel cumulatively offsets
+   *  from the anchor. Mirrors `COMPLEX[*].softBend` in `max/xk_swam.js`. */
+  softBend?: boolean;
 }
 
 const COMPLEX: Record<number, ComplexRuntime> = {
-  1: { register: { lo: 36, hi: 72 }, exprEnv: { attack: 1.0, peak: 1.0, sustain: 0.4, releaseRampMs: 60 }, bowPressure: 64 },
-  2: { register: { lo: 40, hi: 64 }, exprEnv: { attack: 0.6, peak: 1.0, sustain: 0.85, releaseRampMs: 140 }, bowPressure: 70 },
-  3: { register: { lo: 36, hi: 55 }, exprEnv: { attack: 0.5, peak: 1.1, sustain: 0.9, releaseRampMs: 220 }, bowPressure: 55 },
-  4: { register: { lo: 60, hi: 84 }, exprEnv: { attack: 0.7, peak: 0.75, sustain: 0.6, releaseRampMs: 120 }, bowPressure: 30 },
-  5: { register: { lo: 36, hi: 89 }, exprEnv: { attack: 0.9, peak: 1.1, sustain: 0.7, releaseRampMs: 120 }, bowPressure: 70 },
-  6: { register: { lo: 43, hi: 67 }, exprEnv: { attack: 0.7, peak: 1.0, sustain: 0.85, releaseRampMs: 160 }, bowPressure: 70 },
-  7: { register: { lo: 36, hi: 52 }, exprEnv: { attack: 0.4, peak: 1.05, sustain: 0.9, releaseRampMs: 260 }, bowPressure: 55 },
-  8: { register: { lo: 60, hi: 81 }, exprEnv: { attack: 0.9, peak: 1.15, sustain: 1.0, releaseRampMs: 100 }, bowPressure: 100 },
+  1: { /* previous register: { lo: 36, hi: 72 } */ exprEnv: { attack: 1.0, peak: 1.0, sustain: 0.4, releaseRampMs: 60 }, bowPressure: 64 },
+  2: { /* previous register: { lo: 40, hi: 64 } */ exprEnv: { attack: 0.6, peak: 1.0, sustain: 0.85, releaseRampMs: 140 }, bowPressure: 70 },
+  3: { /* previous register: { lo: 36, hi: 55 } */ exprEnv: { attack: 0.5, peak: 1.1, sustain: 0.9, releaseRampMs: 220 }, bowPressure: 55 },
+  4: { /* previous register: { lo: 60, hi: 84 } */ exprEnv: { attack: 0.7, peak: 0.75, sustain: 0.6, releaseRampMs: 120 }, bowPressure: 30 },
+  5: { /* previous register: { lo: 36, hi: 89 } */ exprEnv: { attack: 0.9, peak: 1.1, sustain: 0.7, releaseRampMs: 120 }, bowPressure: 70 },
+  6: { /* previous register: { lo: 43, hi: 67 } */ exprEnv: { attack: 0.7, peak: 1.0, sustain: 0.85, releaseRampMs: 160 }, bowPressure: 70 },
+  7: { /* previous register: { lo: 36, hi: 60 } */ exprEnv: { attack: 0.6, peak: 1.05, sustain: 0.9, releaseRampMs: 260 }, bowPressure: 55, softBend: true },
+  8: { /* previous register: { lo: 60, hi: 81 } */ exprEnv: { attack: 0.9, peak: 1.15, sustain: 1.0, releaseRampMs: 100 }, bowPressure: 100 },
 };
 
 export interface PhrasePlannerOptions {
@@ -178,6 +186,7 @@ interface VoiceContext {
   baseVel: number;
   voiceTurnCount: number;
   activeNotes: number[];
+  glissCompanion: { offsetSemis: number; currentPitch: number; velocity: number } | null;
 }
 
 export class PhrasePlanner {
@@ -212,13 +221,19 @@ export class PhrasePlanner {
         ev.complex,
       );
       const intMap = intensityEntry(ev.params.intensity);
-      const peakExpr = clamp(
+      let peakExpr = clamp(
         intMap.expr *
           ((faceSnapshot.profile && faceSnapshot.profile.peakMult) || 1.0) *
           rateExpressionMultiplier(ev.complex, state.turnRate),
         0,
         127,
       );
+      // Mirror max/xk_swam.js C2 CC 11 floor — at low K-intensities the
+      // natural 0.55×peakExpr soft endpoint dips below 24; bump peakExpr
+      // for C2 so the run's lowest CC 11 stays > 24 at every intensity.
+      if (ev.complex === 2 && peakExpr < C2_MIN_PEAK_EXPR) {
+        peakExpr = C2_MIN_PEAK_EXPR;
+      }
       const plan: PhrasePlan = {
         id: ++this.planSeq,
         source: 'ts-shadow',
@@ -263,6 +278,7 @@ export class PhrasePlanner {
         baseVel: clamp(Math.round(intMap.vel * rateVelocityMultiplier(ev.complex, state.turnRate)), 1, 127),
         voiceTurnCount,
         activeNotes: [],
+        glissCompanion: null,
       };
 
       this.addExpressionShape(ctx, peakExpr);
@@ -386,16 +402,46 @@ export class PhrasePlanner {
   }
 
   private phraseC2(ctx: VoiceContext): void {
-    const hi = ctx.state.regime === 'burst' ? 6 : 5;
-    const count = this.faceShapedCount(ctx, 3, hi, false);
-    if (count >= 2) this.commitSieveWalk(count, ctx.faceMotion);
-    const spacing = Math.max(90, Math.round(ctx.durationMs / (count + 1)));
-    for (let i = 0; i < count; i++) {
-      const t = i * spacing + this.humanDelay();
-      const v = this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, i, count));
+    // Mirror of max/xk_swam.js phraseC2 — directional scalar run, NOT a
+    // sustained legato cloud. Density rate-driven and within-phrase
+    // tempo-curved (accel/rit/accel-rit/rit-accel coupled to arc dir);
+    // emergent articulation (per-note ring time -> legato when ring >=
+    // localSpacing, detache when ring < localSpacing); intentional
+    // double-stops are explicit per-note branches. Phrase arc is realized
+    // per-note in the bridge via velocity / CC 11 / bowPosBase shaped by
+    // phraseArcDirection; CC 17 is sampled once per note and held static.
+    // The plan side mirrors the noteon/noteoff structure and tempo curve
+    // so the phrase auditor's expected counts and timings stay honest.
+    const turnP = turnRatePressure(ctx.state.turnRate);
+    const arc = phraseArcDirection(ctx.plan.faceEnvelope, ctx.plan.complex);
+    const tempo = buildC2Tempo(arc, ctx.durationSec, turnP, this.rng);
+    const durMs = ctx.durationMs;
+    this.commitSieveWalk(tempo.count, ctx.faceMotion);
+    const noteOnAbs: number[] = new Array(tempo.count);
+    for (let i = 0; i < tempo.count; i++) {
+      noteOnAbs[i] = Math.round(tempo.noteTimes[i]) + this.humanDelay();
+    }
+    for (let i = 0; i < tempo.count; i++) {
+      const tOn = noteOnAbs[i];
+      const nextOn = i + 1 < tempo.count ? noteOnAbs[i + 1] : durMs;
+      const spacingToNext = nextOn - tOn;
+      const ring = C2_RING_MIN_MS + this.rng() * (C2_RING_MAX_MS - C2_RING_MIN_MS);
+      // Mirror max/xk_swam.js phraseC2 double-stop branch — first note
+      // always solo, others stochastically dyad'd with C2_DOUBLE_STOP_PROB.
+      const isDouble = i > 0 && this.rng() < C2_DOUBLE_STOP_PROB;
+      const cap = isDouble ? spacingToNext - C2_DOUBLE_STOP_GUARD_MS : spacingToNext;
+      const noteDur = Math.max(40, Math.round(Math.min(ring, cap)));
+      const v = this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, i, tempo.count));
       const main = this.humanPitch(this.pickPitch(2, ctx));
-      this.legatoNote(ctx, t, main, v);
-      this.maybeDoubleStop(ctx, t, main, v, 0.50);
+      this.noteOn(ctx, tOn, main, v);
+      this.noteOff(ctx, tOn + noteDur, main);
+      if (isDouble) {
+        const companion = doubleStopCompanion(main, this.rng);
+        if (companion != null) {
+          this.noteOn(ctx, tOn, companion, Math.max(1, Math.round(v * 0.85)), true);
+          this.noteOff(ctx, tOn + noteDur, companion, true);
+        }
+      }
     }
   }
 
@@ -418,7 +464,6 @@ export class PhrasePlanner {
   private phraseC4(ctx: VoiceContext): void {
     const s = ctx.sieve;
     const base = s.length > 0 ? s[Math.floor(s.length / 2)] : 60;
-    const cmx = COMPLEX[4];
     const rate = 2.5 * rateDensityMultiplier(ctx.plan.complex, ctx.state.turnRate);
     const count = Math.max(2, Math.round(ctx.durationSec * rate));
     const spacing = ctx.durationMs / count;
@@ -431,7 +476,7 @@ export class PhrasePlanner {
       const clusterSize = this.rng() < 0.50 ? 2 : 1;
       for (let k = 0; k < clusterSize; k++) {
         const pjitter = this.rrand(-2, 2) + (k > 0 ? this.rrand(2, 5) : 0);
-        const p = foldToRange(base + ctx.faceTr + pjitter, cmx.register.lo, cmx.register.hi);
+        const p = foldToRange(base + ctx.faceTr + pjitter, CELLO_MIN, CELLO_MAX);
         const v = clamp(
           this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, i, count)) - 15,
           25,
@@ -448,31 +493,41 @@ export class PhrasePlanner {
     const requestedCount = Math.max(WILD_MIN_COUNT, this.faceShapedCount(ctx, 4, 9, true));
     const minLeap = 8;
     let lastPitch = this.pickPitch(5, ctx);
-    let companion: number | null = null;
     const wildAccent = rateAccentValue(WILD_GLISS_BPA, ctx.plan.complex, ctx.state.turnRate);
     const tailEnd = Math.max(FIRST_GLISS_MS + 200, ctx.durationMs * 0.92);
-    const times = glissSchedule(requestedCount, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
+    // D78 — variable-gap schedule mirror of bridge's phraseC5.
+    const times = wildGlissSchedule(requestedCount, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS, this.rng);
+    const targets: number[] = new Array(times.length);
+    let previewPitch = lastPitch;
+    let pathMin = previewPitch;
+    let pathMax = previewPitch;
+    for (let i = 0; i < times.length; i++) {
+      let p = this.pickPitch(5, ctx);
+      let attempts = 0;
+      while (Math.abs(p - previewPitch) < minLeap && attempts < 12) {
+        p = this.pickPitch(5, ctx);
+        attempts++;
+      }
+      if (Math.abs(p - previewPitch) < minLeap) {
+        p = previewPitch + (p >= previewPitch ? minLeap : -minLeap);
+        p = clamp(p, CELLO_MIN, CELLO_MAX);
+      }
+      targets[i] = p;
+      pathMin = Math.min(pathMin, p);
+      pathMax = Math.max(pathMax, p);
+      previewPitch = p;
+    }
     const anchorVel = this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, 0, times.length + 1));
     this.legatoNote(ctx, 0, lastPitch, anchorVel);
-    companion = this.maybeDoubleStop(ctx, 0, lastPitch, anchorVel, 0.50);
+    this.maybeGlissDoubleStop(ctx, 0, lastPitch, anchorVel, 0.50, pathMin, pathMax);
 
     const phraseEndMs = ctx.durationMs - 100;
     for (let i = 0; i < times.length; i++) {
       const t = times[i];
-      if (companion != null) {
-        this.noteOff(ctx, t, companion, true);
-        companion = null;
-      }
-      let p = this.pickPitch(5, ctx);
-      let attempts = 0;
-      while (Math.abs(p - lastPitch) < minLeap && attempts < 12) {
-        p = this.pickPitch(5, ctx);
-        attempts++;
-      }
       const nextEventMs = i + 1 < times.length ? times[i + 1] : phraseEndMs;
       const gapMs = nextEventMs - t;
       const bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
-      lastPitch = this.glissStep(ctx, t, lastPitch, p, minLeap, WILD_GLISS_VEL, wildAccent, bendDur);
+      lastPitch = this.glissStep(ctx, t, lastPitch, targets[i], minLeap, WILD_GLISS_VEL, wildAccent, bendDur);
     }
   }
 
@@ -484,40 +539,54 @@ export class PhrasePlanner {
     const totalCount = 1 + slideTimes.length;
     this.commitSieveWalk(totalCount, ctx.faceMotion);
     let lastPitch = this.pickPitch(6, ctx);
+    const targets: number[] = new Array(slideTimes.length);
+    let pathMin = lastPitch;
+    let pathMax = lastPitch;
+    for (let i = 0; i < slideTimes.length; i++) {
+      const p = this.pickPitch(6, ctx);
+      targets[i] = p;
+      pathMin = Math.min(pathMin, p);
+      pathMax = Math.max(pathMax, p);
+    }
     const anchorT = this.humanDelay();
     const v = this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, 0, totalCount));
     this.legatoNote(ctx, anchorT, lastPitch, v);
-    this.maybeDoubleStop(ctx, anchorT, lastPitch, v, 0.50);
+    this.maybeGlissDoubleStop(ctx, anchorT, lastPitch, v, 0.50, pathMin, pathMax);
 
     const phraseEndMs = ctx.durationMs - 100;
     for (let i = 0; i < slideTimes.length; i++) {
       const t = slideTimes[i] + this.humanDelay();
-      const p = this.pickPitch(6, ctx);
       const nextEventMs = i + 1 < slideTimes.length ? slideTimes[i + 1] : phraseEndMs;
       const gapMs = nextEventMs - slideTimes[i];
       const bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
-      lastPitch = this.glissStep(ctx, t, lastPitch, p, 1, 18, undefined, bendDur);
+      lastPitch = this.glissStep(ctx, t, lastPitch, targets[i], 1, 18, undefined, bendDur);
     }
   }
 
   private phraseC7(ctx: VoiceContext): void {
     const isSingle = ctx.faceEnvProfile?.isSingle === true;
+    const cmx7 = COMPLEX[7];
+    const regLo = cmx7?.register?.lo ?? CELLO_MIN;
+    const regHi = cmx7?.register?.hi ?? CELLO_MAX;
     const p1 = this.pickPitch(7, ctx);
     let lastPitch = p1;
     this.legatoNote(ctx, 0, p1, this.humanVel(ctx, ctx.baseVel));
-    let driftCount = isSingle ? 1 : 1 + (intensityDensity(ctx.ev.params.intensity) >= 1.1 ? this.rrand(1, 2) : 0);
+    // D79 — driftCount baseline bumped (was 1 / 1-3) so the post-bend held
+    // tail shrinks from ~470 ms to ~50 ms in a typical 1.8 s phrase.
+    let driftCount = isSingle ? 2 : 2 + this.rrand(1, 2);
     if (!isSingle && ctx.faceEnvProfile && ctx.faceEnvProfile.countMult > 1.0) {
       driftCount = Math.min(6, Math.round(driftCount * ctx.faceEnvProfile.countMult));
     }
     if (!isSingle) {
       driftCount = Math.min(
         6,
-        Math.max(1, Math.round(driftCount * rateDensityMultiplier(ctx.plan.complex, ctx.state.turnRate))),
+        Math.max(2, Math.round(driftCount * rateDensityMultiplier(ctx.plan.complex, ctx.state.turnRate))),
       );
     }
     const motionDir = ctx.faceMotion === 'up' ? 1 : ctx.faceMotion === 'down' ? -1 : 0;
     const tailEnd = Math.max(FIRST_GLISS_MS_C7 + 250, ctx.durationMs * 0.88);
-    const times = glissSchedule(driftCount, FIRST_GLISS_MS_C7, tailEnd, MIN_GLISS_SPACING_MS);
+    // D79 — variable-gap schedule mirror of bridge's phraseC7.
+    const times = wildGlissSchedule(driftCount, FIRST_GLISS_MS_C7, tailEnd, MIN_GLISS_SPACING_MS, this.rng);
     const phraseStartSign = this.rng() < 0.5 ? 1 : -1;
     const phraseEndMs = ctx.durationMs - 100;
     for (let i = 0; i < times.length; i++) {
@@ -527,7 +596,8 @@ export class PhrasePlanner {
       const bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
       const sign = motionDir !== 0 ? motionDir : phraseStartSign * (i % 2 === 0 ? 1 : -1);
       const mag = this.rrand(1, 2);
-      const p2 = clamp(p1 + sign * mag, CELLO_MIN, CELLO_MAX);
+      // D79 — register-bound clamp (was CELLO_MIN..CELLO_MAX).
+      const p2 = clamp(p1 + sign * mag, regLo, regHi);
       lastPitch = this.glissStep(ctx, t, lastPitch, p2, 1, 18, undefined, bendDur);
     }
   }
@@ -547,8 +617,8 @@ export class PhrasePlanner {
   private pickPitch(complexType: number, ctx: VoiceContext): number {
     const s = ctx.sieve;
     const cmx = COMPLEX[complexType];
-    const lo = cmx ? Math.max(CELLO_MIN, cmx.register.lo) : CELLO_MIN;
-    const hi = cmx ? Math.min(CELLO_MAX, cmx.register.hi) : CELLO_MAX;
+    const lo = cmx?.register ? Math.max(CELLO_MIN, cmx.register.lo) : CELLO_MIN;
+    const hi = cmx?.register ? Math.min(CELLO_MAX, cmx.register.hi) : CELLO_MAX;
     if (s.length === 0) return foldToRange(36 + ctx.faceTr, lo, hi);
 
     let pitch: number;
@@ -675,8 +745,28 @@ export class PhrasePlanner {
       accent,
     });
     ctx.plan.expected.bendStepCount++;
-    this.noteOff(ctx, tMs + durMs, sourcePitch);
-    this.noteOn(ctx, tMs + durMs, p, glissVel);
+    // D80 — softBend (C7) keeps the bow on the original anchor for the whole
+    // phrase; the bridge's `completeBend` skips the per-bend rebow, so the
+    // plan must not predict noteOff(source) + noteOn(target) either.
+    // Anchor's noteOff fires at phrase release via the planner's natural
+    // close-out path (matches the bridge's allNotesOff in scheduleRelease).
+    const cmx = COMPLEX[ctx.plan.complex];
+    if (!(cmx && cmx.softBend === true)) {
+      this.noteOff(ctx, tMs + durMs, sourcePitch);
+      if (ctx.glissCompanion) {
+        const oldCompanion = ctx.glissCompanion.currentPitch;
+        const newCompanion = p + ctx.glissCompanion.offsetSemis;
+        this.noteOff(ctx, tMs + durMs, oldCompanion, true);
+        if (newCompanion >= DOUBLE_STOP_ROLL_MIN && newCompanion <= DOUBLE_STOP_ROLL_MAX) {
+          this.noteOn(ctx, tMs + durMs, newCompanion, ctx.glissCompanion.velocity, true);
+          ctx.glissCompanion.currentPitch = newCompanion;
+        } else {
+          ctx.plan.warnings.push(`gliss companion target out of range C${ctx.plan.complex} ${newCompanion}`);
+          ctx.glissCompanion = null;
+        }
+      }
+      this.noteOn(ctx, tMs + durMs, p, glissVel);
+    }
     return p;
   }
 
@@ -685,6 +775,38 @@ export class PhrasePlanner {
     const companion = doubleStopCompanion(mainPitch, this.rng);
     if (companion == null) return null;
     this.noteOn(ctx, tMs, companion, Math.max(1, Math.round(vel * 0.85)), true);
+    return companion;
+  }
+
+  private maybeGlissDoubleStop(
+    ctx: VoiceContext,
+    tMs: number,
+    mainPitch: number,
+    vel: number,
+    p: number,
+    minMainPitch: number,
+    maxMainPitch: number,
+  ): number | null {
+    if (this.rng() >= p) return null;
+    const companion = doubleStopCompanionForRange(
+      mainPitch,
+      minMainPitch,
+      maxMainPitch,
+      DOUBLE_STOP_ROLL_MIN,
+      DOUBLE_STOP_ROLL_MAX,
+      this.rng,
+    );
+    if (companion == null) {
+      ctx.plan.warnings.push(`gliss companion skipped outside range C${ctx.plan.complex} span=${minMainPitch}..${maxMainPitch}`);
+      return null;
+    }
+    const velocity = Math.max(1, Math.round(vel * 0.85));
+    this.noteOn(ctx, tMs, companion, velocity, true);
+    ctx.glissCompanion = {
+      offsetSemis: companion - mainPitch,
+      currentPitch: companion,
+      velocity,
+    };
     return companion;
   }
 
@@ -794,6 +916,95 @@ function phraseArcDirection(faceEnvelope: string | null, complex: number): ExprS
   return null;
 }
 
+// Mirror of max/xk_swam.js C2 tunables. All constants must match the
+// bridge for the auditor to predict realistic timings, articulation,
+// dynamics, and double-stop rate.
+const C2_RATE_MIN = 4;
+const C2_RATE_MAX = 12;
+const C2_RATE_SPAN_RATIO = 2.0;
+// Fraction of phrase time by which the C2 tempo curve completes. Mirrors
+// max/xk_swam.js; the phrase tail holds the curve's terminal rate.
+const C2_CURVE_END_U = 0.5;
+const C2_RING_MIN_MS = 120;
+const C2_RING_MAX_MS = 320;
+const C2_MIN_PEAK_EXPR = 46;
+const C2_DOUBLE_STOP_PROB = 0.30;
+const C2_DOUBLE_STOP_GUARD_MS = 5;
+
+interface C2Tempo {
+  count: number;
+  noteTimes: number[];
+  tempoLabel: string;
+}
+
+function buildC2Tempo(
+  arcDir: ExprShapeEvent['shape'] | null,
+  durSec: number,
+  turnP: number,
+  rng: Rng,
+): C2Tempo {
+  const loRate = C2_RATE_MIN +
+    turnP * (C2_RATE_MAX / C2_RATE_SPAN_RATIO - C2_RATE_MIN);
+  const hiRate = C2_RATE_MIN * C2_RATE_SPAN_RATIO +
+    turnP * (C2_RATE_MAX - C2_RATE_MIN * C2_RATE_SPAN_RATIO);
+  const spanFactor = hiRate / loRate;
+
+  let dirSign = 0;
+  let triangle = false;
+  let trianglePeak = false;
+  if (arcDir === 'cresc') dirSign = +1;
+  else if (arcDir === 'dim') dirSign = -1;
+  else if (arcDir === 'hairpin-up') { triangle = true; trianglePeak = true; }
+  else if (arcDir === 'hairpin-down') { triangle = true; trianglePeak = false; }
+  else dirSign = rng() < 0.5 ? +1 : -1;
+
+  const tempoCurve = (u: number): number => {
+    const w = Math.min(1, u / C2_CURVE_END_U);
+    if (triangle) {
+      const v = 1 - Math.abs(2 * w - 1);
+      return trianglePeak
+        ? loRate * Math.pow(spanFactor, v)
+        : hiRate * Math.pow(spanFactor, -v);
+    }
+    return dirSign > 0
+      ? loRate * Math.pow(spanFactor, w)
+      : hiRate * Math.pow(spanFactor, -w);
+  };
+
+  const SAMPLES = 100;
+  const phase = new Array<number>(SAMPLES + 1);
+  phase[0] = 0;
+  for (let s = 1; s <= SAMPLES; s++) {
+    phase[s] = phase[s - 1] +
+      0.5 * (tempoCurve((s - 1) / SAMPLES) + tempoCurve(s / SAMPLES)) / SAMPLES;
+  }
+  const tempoAvg = phase[SAMPLES];
+  const count = Math.max(2, Math.round(durSec * tempoAvg));
+
+  const durMs = durSec * 1000;
+  const noteTimes = new Array<number>(count);
+  for (let k = 0; k < count; k++) {
+    const target = (k / count) * tempoAvg;
+    let loIdx = 0;
+    let hiIdx = SAMPLES;
+    while (loIdx < hiIdx - 1) {
+      const mid = (loIdx + hiIdx) >> 1;
+      if (phase[mid] <= target) loIdx = mid;
+      else hiIdx = mid;
+    }
+    const span = phase[hiIdx] - phase[loIdx];
+    const u = (loIdx + (span > 1e-9 ? (target - phase[loIdx]) / span : 0)) / SAMPLES;
+    noteTimes[k] = u * durMs;
+  }
+
+  let tempoLabel: string;
+  if (triangle) tempoLabel = trianglePeak ? 'accel-rit' : 'rit-accel';
+  else if (arcDir) tempoLabel = dirSign > 0 ? 'accel' : 'rit';
+  else tempoLabel = dirSign > 0 ? 'rand-accel' : 'rand-rit';
+
+  return { count, noteTimes, tempoLabel };
+}
+
 function foldToRange(pitch: number, lo: number = CELLO_MIN, hi: number = CELLO_MAX): number {
   let p = pitch;
   while (p < lo) p += 12;
@@ -811,6 +1022,40 @@ function glissSchedule(maxCount: number, firstMs: number, tailEnd: number, minSp
     const t = firstMs + Math.round(i * spacing);
     if (t > tailEnd) break;
     times.push(t);
+  }
+  return times;
+}
+
+// D78/D79 — wild-gliss schedule with stochastic gap variation. Mirror of
+// `wildGlissSchedule` in `max/xk_swam.js`. Used by phraseC5 and phraseC7
+// in the planner so predicted event counts match the bridge's varied-
+// rhythm output. Bridge uses Math.random; planner uses its seeded `rng`
+// — exact times differ but the count + clip-not-collapse policy match.
+function wildGlissSchedule(
+  maxCount: number,
+  firstMs: number,
+  tailEnd: number,
+  minSpacingMs: number,
+  rng: Rng,
+): number[] {
+  const times = [firstMs];
+  if (maxCount <= 1) return times;
+  const nGaps = maxCount - 1;
+  const available = tailEnd - firstMs;
+  const rawGaps: number[] = [];
+  let rawTotal = 0;
+  for (let i = 0; i < nGaps; i++) {
+    const g = 0.4 + 1.6 * Math.pow(rng(), 2);
+    rawGaps.push(g);
+    rawTotal += g;
+  }
+  const scale = rawTotal > 0 ? available / rawTotal : 1;
+  let t = firstMs;
+  for (let i = 0; i < nGaps; i++) {
+    const gap = Math.max(minSpacingMs, rawGaps[i] * scale);
+    t += gap;
+    if (t > tailEnd) break;
+    times.push(Math.round(t));
   }
   return times;
 }
@@ -835,6 +1080,40 @@ function doubleStopCompanion(mainPitch: number, rng: Rng): number | null {
   if (candidate < CELLO_MIN || candidate > CELLO_MAX) return null;
   if (candidate === mainPitch) return null;
   return candidate;
+}
+
+function doubleStopCompanionForRange(
+  mainPitch: number,
+  mainMin: number,
+  mainMax: number,
+  rangeLo: number,
+  rangeHi: number,
+  rng: Rng,
+): number | null {
+  mainMin = Math.min(mainMin, mainPitch);
+  mainMax = Math.max(mainMax, mainPitch);
+  const intervals = DOUBLE_STOP_INTERVALS.slice();
+  for (let i = intervals.length - 1; i > 0; i--) {
+    const j = Math.floor(rng() * (i + 1));
+    [intervals[i], intervals[j]] = [intervals[j], intervals[i]];
+  }
+  let dirPref: 1 | -1;
+  if (mainPitch >= 60) dirPref = -1;
+  else if (mainPitch <= 48) dirPref = 1;
+  else dirPref = rng() < 0.5 ? 1 : -1;
+  const dirs: Array<1 | -1> = [dirPref, (dirPref === 1 ? -1 : 1)];
+  for (const interval of intervals) {
+    for (const dir of dirs) {
+      const offset = dir * interval;
+      const candidate = mainPitch + offset;
+      if (candidate === mainPitch) continue;
+      if (candidate < rangeLo || candidate > rangeHi) continue;
+      if (mainMin + offset < rangeLo) continue;
+      if (mainMax + offset > rangeHi) continue;
+      return candidate;
+    }
+  }
+  return null;
 }
 
 function intensityDensity(intensity: string): number {

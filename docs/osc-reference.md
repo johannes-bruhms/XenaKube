@@ -27,7 +27,7 @@ Phrase audit note: `/xk/phrase/plan` is sent immediately before its matching `/x
 | `/xk/snap/quat` | float×4 | quaternion of snap target |
 | `/xk/snap/dev` | float (0-1) | gyro deviation; 0=locked, 1=boundary |
 | `/xk/scramble` | float (0-1) | normalized exact quarter-turn distance over the 40,320 visible corner permutations |
-| `/xk/solve` | — | fires once on unsolved → solved edge (GAN FACELETS report) |
+| `/xk/solve` | — | fires once on unsolved → solved edge (GAN FACELETS report); alpha-cosmo returns to beta-cosmo before the event, beta-cosmo stays in place |
 | `/xk/rate` | float | turn rate (turns/sec) |
 | `/xk/regime` | string | 'contemplative' / 'conversational' / 'burst' |
 | `/xk/expr/{tilt,spin,dev,scramble}` | float (0-1) | 60 Hz continuous controls |

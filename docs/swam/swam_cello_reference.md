@@ -186,7 +186,7 @@ These have no default binding. Pick any unused CC, MIDI-Learn each in SWAM, then
 |-------|--------------|------------------|--------------------|
 | **Vibrato Rate** | 19 | Expressivity page | Smoothed spin (α≈0.08) |
 | **Vibrato Fade-In** | 22 | Expressivity page | Set once at init to 250 ms |
-| **Bow Position** | 16 | Bow page | Per-complex baseline + tilt modulation |
+| **Bow Position** | 16 | Bow page | Per-complex baseline + tilt modulation, bridge-clamped to `0..64` |
 | **Bow Pressure** | 17 | Bow page | Per-complex + cube-algorithm accents |
 | **Bow Pressure Accent** | 18 | Bow page | Cube-algorithm transients |
 | **Bow Speed** | 20 | Bow page | Deviation mapping |
@@ -359,7 +359,7 @@ Sending `keyswitch(24)` at velocity 100 hits KS C with HIGH velocity → **Col L
 
 | SWAM param | How to wire from XenaKube |
 |------------|---------------------------|
-| Bow Position | Map from **scramble** factor (sul tasto when solved → sul pont when scrambled) — drives sul tasto/pont color in v3.10 since those KS were removed |
+| Bow Position | Lower-half `0..64` color control: tilt modulates around the complex baseline, and scramble bias shifts solved toward tasto / scrambled toward pont |
 | Bow Pressure Accent | Cube-algorithm trigger transient (e.g. sexy-move) |
 | Portamento Max Time | Set per-complex (C5/C6/C7 long, C1/C4 short) |
 | Note-Off Velocity | Map from turn-rate (fast turns = shorter releases) |

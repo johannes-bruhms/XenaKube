@@ -33,7 +33,8 @@ This guide applies to the TypeScript engine and shared mapping/schema code under
 
 - Do not add raw `/xk/*`, `/gan/*`, or `/xk/midi/*` string literals outside `osc-schema.ts`.
 - Keep shared helper logic in `swam-mapping.ts` pure and testable. Max-specific stateful wrappers belong in `max/xk_swam.js`, not here.
-- Preserve the alpha/beta cosmology boundary. In `beta-cosmo`, physical corner turns own visible K topology, the active read-head is the turned face's head-on top-right corner, and C identities are fixed local slots (`slot i -> C{i+1}`); gyro chooses the current top face only. K/C diagrams remain shadow metadata. In `alpha-cosmo`, the historical S4 walks deliberately drive K/C assignments.
+- Preserve the alpha/beta cosmology boundary. In `beta-cosmo`, physical corner turns own visible K topology, the active read-head is direction-aware (`orientation.ts`: surrounding faces use CW top-right / CCW top-left; top/bottom faces use the user-facing edge and the endpoint the turn moves material into), and C identities are fixed local slots (`slot i -> C{i+1}`). K/C diagrams remain shadow metadata. In `alpha-cosmo`, the historical S4 walks deliberately drive K/C assignments.
+- Treat `reportCubeSolved()` as the solve anchor for that boundary: alpha-cosmo returns to beta-cosmo through the normal reset path, while an already-beta solve edge must not reset beta topology.
 - If you change orientation, visible-corner topology, canonical move semantics, or gyro snap semantics, audit `../relay.js`, `../public/js/cube-scene.js`, `../public/js/main.js`, and the matching dashboard invariant rows.
 - If you change `osc-schema.ts`, `swam-mapping.ts`, or `face-gesture.ts`, run `npm run gen:max` from the repo root and review the resulting `../max/gen_includes.js`.
 - If you change payload shapes, timing semantics, mapping tables, or face-signature meaning, audit these consumers:

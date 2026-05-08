@@ -75,23 +75,33 @@ describe('XenaKubeEngine', () => {
     expect([...new Set(movedDurations)].sort()).toEqual([2, 3, 4, 5]);
   });
 
-  it('beta-cosmo read-head = top-face anchored top-right of last-turned face', () => {
+  it('beta-cosmo read-head = direction-aware collision corner of last face-move', () => {
     const engine = new XenaKubeEngine();
 
     let state = engine.onTurn('R')!;
-    // R-twist canonical head-on top-right = vertex 3 (BTR).
+    // R clockwise moves the top-edge K corner into vertex 3 (BTR).
     expect(state.lastTurnedFace).toBe('R');
     expect(state.activeVertex).toBe(3);
 
+    state = engine.onTurn("R'")!;
+    // R counterclockwise moves the top-edge K corner into vertex 0 (FTR).
+    expect(state.lastTurnedFace).toBe('R');
+    expect(state.activeVertex).toBe(0);
+
     state = engine.onTurn('F')!;
-    // F-twist canonical home = vertex 0 (FTR).
+    // F clockwise moves the top-edge K corner into vertex 0 (FTR).
     expect(state.lastTurnedFace).toBe('F');
     expect(state.activeVertex).toBe(0);
 
     state = engine.onTurn('U')!;
-    // U-twist canonical home = vertex 3 (BTR), colliding with R by design.
+    // U clockwise uses the user-facing edge and moves into its left endpoint.
     expect(state.lastTurnedFace).toBe('U');
-    expect(state.activeVertex).toBe(3);
+    expect(state.activeVertex).toBe(2);
+
+    state = engine.onTurn("U'")!;
+    // U counterclockwise moves into the right endpoint facing the user.
+    expect(state.lastTurnedFace).toBe('U');
+    expect(state.activeVertex).toBe(1);
   });
 
   it('beta-cosmo pairs the active K corner with the fixed local C identity', () => {
@@ -175,6 +185,54 @@ describe('XenaKubeEngine', () => {
     expect(state.step).toBe(0);
     expect(state.kGroup).toBe(0);
     expect(state.kPermutation).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+  });
+
+  it('cube solve returns alpha-cosmo to beta-cosmo and emits the reset state', () => {
+    const engine = new XenaKubeEngine({ cosmology: 'alpha-cosmo' });
+    engine.onTurn('R');
+    expect(engine.getState().cosmology).toBe('alpha-cosmo');
+    expect(engine.getState().step).toBe(1);
+
+    const states: unknown[] = [];
+    let solveReport: ReturnType<XenaKubeEngine['reportCubeSolved']> | null = null;
+    engine.onState(s => states.push(s));
+    engine.onSolve(report => { solveReport = report; });
+
+    const report = engine.reportCubeSolved();
+    const state = engine.getState();
+
+    expect(report.cosmologyChanged).toBe(true);
+    expect(report.previousCosmology).toBe('alpha-cosmo');
+    expect(report.state).toEqual(state);
+    expect(solveReport).toBe(report);
+    expect(state.cosmology).toBe('beta-cosmo');
+    expect(state.step).toBe(0);
+    expect(state.kGroup).toBe(0);
+    expect(state.kPermutation).toEqual([0, 1, 2, 3, 4, 5, 6, 7]);
+    expect(states).toHaveLength(1);
+    expect((states[0] as { cosmology: string }).cosmology).toBe('beta-cosmo');
+  });
+
+  it('cube solve is a no-op for existing beta-cosmo structure', () => {
+    const engine = new XenaKubeEngine();
+    const moved = engine.onTurn('R')!;
+    const states: unknown[] = [];
+    let solveReport: ReturnType<XenaKubeEngine['reportCubeSolved']> | null = null;
+    engine.onState(s => states.push(s));
+    engine.onSolve(report => { solveReport = report; });
+
+    const report = engine.reportCubeSolved();
+    const state = engine.getState();
+
+    expect(report.cosmologyChanged).toBe(false);
+    expect(report.previousCosmology).toBe('beta-cosmo');
+    expect(report.state).toEqual(state);
+    expect(solveReport).toBe(report);
+    expect(state.cosmology).toBe('beta-cosmo');
+    expect(state.step).toBe(moved.step);
+    expect(state.activeVertex).toBe(moved.activeVertex);
+    expect(state.kPermutation).toEqual(moved.kPermutation);
+    expect(states).toHaveLength(0);
   });
 
   it('alpha-cosmo cycles alpha -> beta -> gamma every 3 substitutions', () => {

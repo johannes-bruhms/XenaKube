@@ -149,6 +149,8 @@ renderer.toneMappingExposure = 1.0;
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
+const DEFAULT_SCENE_LAYER = 0;
+const SHARP_LABEL_LAYER = 1;
 // Initial cube view sits ~12.8 units from origin (vs the prior 6.4) so the
 // performer doesn't have to scroll-zoom out on every connect. applyConnectView
 // only rotates around the target, so this distance survives the connect-time
@@ -271,8 +273,14 @@ function makeLabel(text, color) {
   ctx.textBaseline = 'top';
   ctx.fillText(text, 64, 2);
   const tex = new THREE.CanvasTexture(c);
-  const mat = new THREE.SpriteMaterial({ map: tex, depthTest: false });
+  const mat = new THREE.SpriteMaterial({
+    map: tex,
+    transparent: true,
+    depthTest: false,
+    depthWrite: false,
+  });
   const sprite = new THREE.Sprite(mat);
+  sprite.layers.set(SHARP_LABEL_LAYER);
   sprite.scale.set(1.0, 0.625, 1);
   return { sprite, canvas: c, ctx, tex };
 }
@@ -850,6 +858,20 @@ resizeCube();
 requestAnimationFrame(resizeCube);
 window.addEventListener('resize', resizeCube);
 
+function renderSharpLabels() {
+  const prevAutoClear = renderer.autoClear;
+  const prevLayerMask = camera.layers.mask;
+  renderer.autoClear = false;
+  camera.layers.set(SHARP_LABEL_LAYER);
+  try {
+    renderer.clearDepth();
+    renderer.render(scene, camera);
+  } finally {
+    camera.layers.mask = prevLayerMask;
+    renderer.autoClear = prevAutoClear;
+  }
+}
+
 // ---- Per-frame animation loop ----------------------------------------------
 
 const calibratedGyro = new THREE.Quaternion();
@@ -972,11 +994,13 @@ function animateCube() {
     kcLine.visible = false;
   }
 
+  camera.layers.set(DEFAULT_SCENE_LAYER);
   if (QUALITY_PRESETS[_quality].useComposer) {
     composer.render();
   } else {
     renderer.render(scene, camera);
   }
+  renderSharpLabels();
   gizmoRenderer.render(gizmoScene, gizmoCamera);
 }
 animateCube();

@@ -144,4 +144,4 @@ Phase 6 only makes sense after Phase 2 (modular split) has shipped. The static-h
 - **Performance budget** — `--quality` slider lands in Phase 3 and gets respected by every Phase 4–5 effect.
 - **No coupling effects to `handleMidiEcho` directly** — keep the midi echo signal pure; add a small event bus in `main.js` that visual effects subscribe to so layers can be added / removed without surgery.
 - **Doc maintenance**: every module-extraction commit updates `CLAUDE.md` File Roles + this `docs/todo.md` phase status in the same commit. `CHANGELOG.md` gets an entry per shipped feature.
-- **Carryover from v1**: Phase A2 solve-anchor, Phase B phrase library, Phase E tier 3 phrase migration all live in the synthesis side and are unaffected by v2's dashboard work — they continue tracking in `docs/revision_roadmap.md`.
+- **Carryover from v1**: the solve-anchor now returns alpha-cosmo to beta-cosmo on the physical solved edge; remaining solve sound design, Phase B phrase library, and Phase E tier 3 phrase migration live in the synthesis side and are unaffected by v2's dashboard work — they continue tracking in `docs/revision_roadmap.md`.

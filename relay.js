@@ -187,6 +187,73 @@ const VISUAL_DELAY_MS = 120;        // trailing latency for dashboard cube
 const VISUAL_BUFFER_MS = 1500;      // keep samples at least this long
 const visualSamples = [];           // [{ q, t }], oldest first
 
+// === Live WebSocket backpressure guard ===
+//
+// The dashboard is a visual consumer, not the clock source. If Chrome falls
+// behind, stale gyro frames should be dropped instead of queueing ahead of
+// live move / MIDI echo messages on the same socket.
+const WS_BACKPRESSURE_WARN_BYTES = 32 * 1024;
+const WS_BACKPRESSURE_DROP_BYTES = 64 * 1024;
+const WS_BACKPRESSURE_LOG_MS = 5000;
+const RELAY_LAG_INTERVAL_MS = 1000;
+const RELAY_LAG_WARN_MS = 75;
+const RELAY_LAG_FAIL_MS = 200;
+let wsClientSeq = 0;
+let relayLagLastTick = Date.now();
+
+function wsClientId(client) {
+  if (!client._xkClientId) client._xkClientId = ++wsClientSeq;
+  return client._xkClientId;
+}
+
+function logWsBackpressure(client, kind, buffered, dropped) {
+  const now = Date.now();
+  if (!client._xkBackpressure) {
+    client._xkBackpressure = { lastLog: now, dropped: 0 };
+  }
+  if (dropped) client._xkBackpressure.dropped++;
+  if (
+    now - client._xkBackpressure.lastLog < WS_BACKPRESSURE_LOG_MS &&
+    buffered < WS_BACKPRESSURE_WARN_BYTES
+  ) {
+    return;
+  }
+  client._xkBackpressure.lastLog = now;
+  const droppedText = client._xkBackpressure.dropped > 0
+    ? ` droppedLowPriority=${client._xkBackpressure.dropped}`
+    : '';
+  client._xkBackpressure.dropped = 0;
+  console.warn(
+    `[WS BACKPRESSURE] client=${wsClientId(client)} kind=${kind} ` +
+    `buffered=${Math.round(buffered / 1024)}KB${droppedText}`
+  );
+}
+
+function sendWs(client, payload, options = {}) {
+  if (!client || client.readyState !== WebSocket.OPEN) return false;
+  const kind = options.kind || 'message';
+  const buffered = client.bufferedAmount || 0;
+  const lowPriority = options.lowPriority === true;
+  const shouldDrop =
+    lowPriority &&
+    (buffered >= WS_BACKPRESSURE_DROP_BYTES ||
+     (options.dropIfBuffered === true && buffered > 0));
+
+  if (shouldDrop) {
+    logWsBackpressure(client, kind, buffered, true);
+    return false;
+  }
+  if (buffered >= WS_BACKPRESSURE_WARN_BYTES) {
+    logWsBackpressure(client, kind, buffered, false);
+  }
+  client.send(payload);
+  return true;
+}
+
+function broadcastWs(payload, options = {}) {
+  wss?.clients?.forEach((client) => sendWs(client, payload, options));
+}
+
 // === Turn -> first MIDI noteon latency probe ===
 //
 // Measures relay/Max bridge latency only: engine.onVoice timestamp to the
@@ -201,6 +268,17 @@ const pendingVoiceLatency = [];
 const latencyByComplex = new Map();
 const latestExprByVoice = new Map();
 let latencySeq = 0;
+
+setInterval(() => {
+  const now = Date.now();
+  const lag = now - relayLagLastTick - RELAY_LAG_INTERVAL_MS;
+  relayLagLastTick = now;
+  if (lag >= RELAY_LAG_FAIL_MS) {
+    console.error(`[RELAY LAG FAIL] event loop lag=${lag}ms pendingVoiceLatency=${pendingVoiceLatency.length}`);
+  } else if (lag >= RELAY_LAG_WARN_MS) {
+    console.warn(`[RELAY LAG WARN] event loop lag=${lag}ms pendingVoiceLatency=${pendingVoiceLatency.length}`);
+  }
+}, RELAY_LAG_INTERVAL_MS);
 
 function percentile(sorted, p) {
   if (sorted.length === 0) return 0;
@@ -299,9 +377,7 @@ function publishPhraseAuditResults(results) {
     }
 
     const payload = JSON.stringify({ type: 'phrase_audit', data: result });
-    wss?.clients?.forEach((client) => {
-      if (client.readyState === WebSocket.OPEN) client.send(payload);
-    });
+    broadcastWs(payload, { kind: 'phrase_audit' });
   }
 }
 
@@ -449,7 +525,7 @@ function gyroLoop() {
           dev: expr.deviation,
         });
         wss.clients.forEach((c) => {
-          if (c.readyState === WebSocket.OPEN) c.send(tick);
+          sendWs(c, tick, { kind: 'gyro_tick', lowPriority: true, dropIfBuffered: true });
         });
       }
 
@@ -509,11 +585,7 @@ engine.onAlgorithm((match) => {
       timestamp: match.timestamp,
     },
   });
-  wss?.clients?.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
-    }
-  });
+  broadcastWs(payload, { kind: 'algorithm' });
   console.log(`[ALGORITHM] ${match.algorithm.name} (${match.algorithm.moves.join(' ')})`);
 });
 
@@ -521,18 +593,22 @@ engine.onAlgorithm((match) => {
 // Source of truth: the GAN cube's FACELETS report (read by the browser and
 // relayed over WS as {type:'cube_solved'}). The browser owns edge detection.
 // Distinct from /xk/scramble, which is BFS distance in S4 (24 elements).
-engine.onSolve(() => {
+engine.onSolve((report) => {
+  if (report?.cosmologyChanged) {
+    phrasePlanner.reset();
+    sendPanic();
+  }
+
   const msg = solveToOsc();
   oscMax.send(msg.address, ...msg.args);
   oscTD.send(msg.address, ...msg.args);
 
   const payload = JSON.stringify({ type: 'solve' });
-  wss?.clients?.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
-    }
-  });
-  console.log('[SOLVE] cube solved');
+  broadcastWs(payload, { kind: 'solve' });
+  const cosmoText = report?.cosmologyChanged
+    ? ` -> beta-cosmo (from ${report.previousCosmology})`
+    : '';
+  console.log(`[SOLVE] cube solved${cosmoText}`);
 });
 
 // Broadcast voice output — and emit /xk/voice over OSC *only here* so it
@@ -550,11 +626,7 @@ engine.onVoice((output) => {
     type: 'voice',
     data: output,
   });
-  wss?.clients?.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
-    }
-  });
+  broadcastWs(payload, { kind: 'voice' });
 
   const planPayload = JSON.stringify({
     type: 'phrase_plan',
@@ -563,11 +635,7 @@ engine.onVoice((output) => {
       summary: phrasePlans.map(phrasePlanSummary),
     },
   });
-  wss?.clients?.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(planPayload);
-    }
-  });
+  broadcastWs(planPayload, { kind: 'phrase_plan' });
 });
 
 /** Send /xk/panic to Max (used on WS disconnect). Bridges/synth flush state. */
@@ -619,9 +687,7 @@ midiEchoServer.on('message', (msg) => {
   }
 
   const payload = JSON.stringify({ type: 'midi_echo', data });
-  wss?.clients?.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) client.send(payload);
-  });
+  broadcastWs(payload, { kind: 'midi_echo' });
 });
 
 /** Broadcast engine state to all connected WS clients */
@@ -632,11 +698,7 @@ function broadcastState(state, move) {
     data: state,
     move: move || undefined,
   });
-  wss?.clients?.forEach((client) => {
-    if (client.readyState === WebSocket.OPEN) {
-      client.send(payload);
-    }
-  });
+  broadcastWs(payload, { kind: isGyro ? 'gyro_state' : 'state', lowPriority: isGyro });
 }
 
 // Static file serving from public/. The dashboard imports ES modules
@@ -759,14 +821,14 @@ wss.on('connection', function connection(ws) {
     }
 
     // Send canonical cube-algorithm book on connect (unique names, not all rotation variants)
-    ws.send(JSON.stringify({
+    sendWs(ws, JSON.stringify({
       type: 'algorithm_book',
       data: engine.algorithmDetector.getCanonicalAlgorithms().map(a => ({
         name: a.name,
         moves: a.moves,
         effect: a.effect,
       })),
-    }));
+    }), { kind: 'algorithm_book' });
 
     ws.on('close', () => {
       console.log("Client disconnected.");
@@ -851,7 +913,7 @@ wss.on('connection', function connection(ws) {
                   description: d.description,
                   path: d.path,
                 }));
-                ws.send(JSON.stringify({ type: 'diagrams', data: diagrams }));
+                sendWs(ws, JSON.stringify({ type: 'diagrams', data: diagrams }), { kind: 'diagrams' });
             }
             else if (data.type === 'set_diagram') {
                 const diagrams = engine.getDiagrams();
@@ -889,7 +951,8 @@ wss.on('connection', function connection(ws) {
             }
             else if (data.type === 'cube_solved') {
                 // Browser detected a solved FACELETS on an unsolved→solved edge.
-                // Engine fires /xk/solve listeners (OSC out + WS broadcast).
+                // Engine applies solve-anchor mode semantics, then fires
+                // /xk/solve listeners (OSC out + WS broadcast).
                 engine.reportCubeSolved();
             }
             else if (data.type === 'zero_gyro') {

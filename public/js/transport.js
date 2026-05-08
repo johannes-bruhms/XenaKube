@@ -17,6 +17,27 @@
 
 let ws = null;
 
+// Browser -> relay backpressure guard. Gyro mirrors are continuous telemetry
+// and can be dropped; cube moves are live control messages and must always be
+// attempted when the socket is open.
+const OUTBOUND_GYRO_DROP_BYTES = 16 * 1024;
+const OUTBOUND_WARN_BYTES = 64 * 1024;
+const OUTBOUND_LOG_INTERVAL_MS = 5000;
+let _lastBackpressureLogMs = 0;
+let _droppedGyroMessages = 0;
+
+function _logBackpressure(kind, buffered, dropped) {
+  const now = performance.now();
+  if (dropped) _droppedGyroMessages++;
+  if (now - _lastBackpressureLogMs < OUTBOUND_LOG_INTERVAL_MS && buffered < OUTBOUND_WARN_BYTES) return;
+  _lastBackpressureLogMs = now;
+  const droppedText = _droppedGyroMessages > 0
+    ? ' droppedGyro=' + _droppedGyroMessages
+    : '';
+  _droppedGyroMessages = 0;
+  console.warn('[transport] backpressure kind=' + kind + ' buffered=' + Math.round(buffered / 1024) + 'KB' + droppedText);
+}
+
 // Event handler registry. One array per event name.
 //   open           — WS connection established (no args).
 //   close          — WS closed; transport will auto-reconnect (no args).
@@ -66,8 +87,16 @@ export function on(name, fn) {
 /** Send a JSON envelope to the relay. No-op if WS isn't open. */
 export function send(obj) {
   if (ws && ws.readyState === WebSocket.OPEN) {
+    const buffered = ws.bufferedAmount || 0;
+    if (obj?.type === 'gyro' && buffered >= OUTBOUND_GYRO_DROP_BYTES) {
+      _logBackpressure('gyro', buffered, true);
+      return false;
+    }
+    if (buffered >= OUTBOUND_WARN_BYTES) _logBackpressure(obj?.type || 'message', buffered, false);
     ws.send(JSON.stringify(obj));
+    return true;
   }
+  return false;
 }
 
 /** Open the WebSocket. Auto-reconnects on close / error. */

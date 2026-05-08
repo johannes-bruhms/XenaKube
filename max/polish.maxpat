@@ -13,6 +13,158 @@
         "boxes": [
             {
                 "box": {
+                    "id": "obj-17",
+                    "maxclass": "live.scope~",
+                    "numinlets": 2,
+                    "numoutlets": 1,
+                    "outlettype": [ "bang" ],
+                    "patching_rect": [ 457.0, 171.0, 184.0, 68.0 ]
+                }
+            },
+            {
+                "box": {
+                    "attr": "release",
+                    "id": "obj-15",
+                    "maxclass": "attrui",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "parameter_enable": 1,
+                    "patching_rect": [ 457.0, 75.0, 150.0, 22.0 ],
+                    "saved_attribute_attributes": {
+                        "valueof": {
+                            "parameter_initial": [ "release", 0.09000000000000002 ],
+                            "parameter_initial_enable": 1,
+                            "parameter_invisible": 1,
+                            "parameter_longname": "attrui[1]",
+                            "parameter_modmode": 0,
+                            "parameter_shortname": "attrui[1]",
+                            "parameter_type": 3
+                        }
+                    },
+                    "varname": "attrui[1]"
+                }
+            },
+            {
+                "box": {
+                    "attr": "ratio",
+                    "id": "obj-13",
+                    "maxclass": "attrui",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "parameter_enable": 1,
+                    "patching_rect": [ 457.0, 123.0, 150.0, 22.0 ],
+                    "saved_attribute_attributes": {
+                        "valueof": {
+                            "parameter_initial": [ "ratio", 4.0 ],
+                            "parameter_initial_enable": 1,
+                            "parameter_invisible": 1,
+                            "parameter_longname": "attrui[3]",
+                            "parameter_modmode": 0,
+                            "parameter_shortname": "attrui[3]",
+                            "parameter_type": 3
+                        }
+                    },
+                    "varname": "attrui[3]"
+                }
+            },
+            {
+                "box": {
+                    "attr": "gain",
+                    "id": "obj-9",
+                    "maxclass": "attrui",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "parameter_enable": 1,
+                    "patching_rect": [ 457.0, 147.0, 150.0, 22.0 ],
+                    "saved_attribute_attributes": {
+                        "valueof": {
+                            "parameter_initial": [ "gain", 3.0 ],
+                            "parameter_initial_enable": 1,
+                            "parameter_invisible": 1,
+                            "parameter_longname": "attrui[4]",
+                            "parameter_modmode": 0,
+                            "parameter_shortname": "attrui[4]",
+                            "parameter_type": 3
+                        }
+                    },
+                    "varname": "attrui[4]"
+                }
+            },
+            {
+                "box": {
+                    "attr": "threshold",
+                    "id": "obj-10",
+                    "maxclass": "attrui",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "parameter_enable": 1,
+                    "patching_rect": [ 457.0, 99.0, 150.0, 22.0 ],
+                    "saved_attribute_attributes": {
+                        "valueof": {
+                            "parameter_initial": [ "threshold", -25.0 ],
+                            "parameter_initial_enable": 1,
+                            "parameter_invisible": 1,
+                            "parameter_longname": "attrui[2]",
+                            "parameter_modmode": 0,
+                            "parameter_shortname": "attrui[2]",
+                            "parameter_type": 3
+                        }
+                    },
+                    "varname": "attrui[2]"
+                }
+            },
+            {
+                "box": {
+                    "attr": "attack",
+                    "id": "obj-12",
+                    "maxclass": "attrui",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "parameter_enable": 1,
+                    "patching_rect": [ 457.0, 51.0, 150.0, 22.0 ],
+                    "saved_attribute_attributes": {
+                        "valueof": {
+                            "parameter_initial": [ "attack", 0.01 ],
+                            "parameter_initial_enable": 1,
+                            "parameter_invisible": 1,
+                            "parameter_longname": "attrui",
+                            "parameter_modmode": 0,
+                            "parameter_shortname": "attrui",
+                            "parameter_type": 3
+                        }
+                    },
+                    "varname": "attrui"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-3",
+                    "maxclass": "newobj",
+                    "numinlets": 6,
+                    "numoutlets": 2,
+                    "outlettype": [ "signal", "signal" ],
+                    "patching_rect": [ 244.0, 165.0, 166.0, 22.0 ],
+                    "text": "abl.device.compressor~ @ins"
+                }
+            },
+            {
+                "box": {
+                    "id": "obj-2",
+                    "maxclass": "newobj",
+                    "numinlets": 6,
+                    "numoutlets": 2,
+                    "outlettype": [ "signal", "signal" ],
+                    "patching_rect": [ 50.0, 165.0, 166.0, 22.0 ],
+                    "text": "abl.device.compressor~ @ins"
+                }
+            },
+            {
+                "box": {
                     "autosave": 1,
                     "bgmode": 0,
                     "border": 0,
@@ -23,7 +175,7 @@
                     "numoutlets": 8,
                     "offset": [ 0.0, 0.0 ],
                     "outlettype": [ "signal", "signal", "", "list", "int", "", "", "" ],
-                    "patching_rect": [ 50.0, 298.0, 300.0, 100.0 ],
+                    "patching_rect": [ 57.0, 369.0, 300.0, 100.0 ],
                     "save": [ "#N", "vst~", "loaduniqueid", 0, "C74_VST3:/kHs 3-Band EQ", ";" ],
                     "saved_attribute_attributes": {
                         "valueof": {
@@ -57,7 +209,7 @@
                             "isbase64": 1,
                             "sliderorder": [],
                             "slidervisibility": [ 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
-                            "blob": "938.VMjLgD5....O+fWarAhckI2bo8la8HRLt.iHfTlai8FYo41Y8HRUTYTK3HxO9.BOVMEUy.Ea0cVZtMEcgQWY9vSRC8Vav8lak4Fc9XSL43RPt3hKtvDat3hKtP0RM4RPT4hKBgjYt3BTEMzahEjKt3hKt3hKt3hKt3hKt3hat3hKtXmX5UjQisFMnoUd3vVXyUGNw.WSJAEVh4xMwASanUTV0IWXP0zcMwFNigUYBoTQYAmS2wjZzX1XhwlQZMDNiUWdmgEZmECYW8ldBsRcIYVYsciLLw1PX4xSrwlZI4lQREyJ4.yc5olZLgFLxM0aiczZUQ0bYUUUVoEdKIyLJQSTvQlZuo1TUMWUuUDQS4FbxE1MAYzLwPFaLQDR0IFNTc0PZUCRvvDL54xcxk2UQI2PIEET0IFQykVVtMVNo0jVKMFbkcFbogWaZ0VbNomdSgVaps1RJAmUWUmbJEyMNY0Jzk0aJEWb3ICUUYTdIg0XsMENscSQUUTQvPyRqDFSsUFZoMjXVg0YxIGVvf1MUEFbW8TXrckTVYkUxgUUjMFSWczXKcGdMkVapQiQDE2ZJczaMIVU1PVYzDVR2DkVtYkLJMkTz01Sg8VQokSX4M0Pms1JzjUQosDVRwlY3Hlb4PSZ2YjQqblQxXkVKkWYuY2XT8TbyQiYRUWatUkUzDVMXYlauI0TSU2RzX1SWQWXW0jbywlZvjWUxXCb2HWYuU0MkUUaqMESzEzSFsTNp0VbBUVbOYkTtczUNMTTxbTc0XDav8jdtgGbg81UEgFRhMCS4w1aKYUbUsBR3TCT0YSL5cSSvsjT3IzaNMlPNkycsQiL2IyUDYjb4cSZX0VPWwlKFciQXYVPkokPX4hQ2zjctLjctvjK4ICTLMSaC4hQlEDVtXjYAgkcyAmKL4xP14BStLjctvjKCYmKL4xPzUUQlEDVtXjYAgkKFYVPX4hQlEDVtXjYAgkKFYVRAsRVQ4xP1cSRnc2J0L1Y3QGU5oWdWcUM5MjXxPCSOgUVyYSXt8zLkIzQSUVR3TkKPMmdAgjKpcDc0okLA4hKtjyZC4hKt.iTAgjKt3BTA4BRl4hPt3RULoFdEAEYyjCbicjKt3xLW4jKtXlPt3hKt3hKt3hKt3hKt3hKt3hKt3hKtXmX5UjQisFMnoUd3vVXPMGUAYjKt3hKt.kKtPjKtLiKt3hKTclKt3hKt3hK77RRC8Vav8lak4Fc9vyKVMEUy.Ea0cVZtMEcgQWY9.."
+                            "blob": "939.VMjLgH5....O+fWarAhckI2bo8la8HRLt.iHfTlai8FYo41Y8HRUTYTK3HxO9.BOVMEUy.Ea0cVZtMEcgQWY9vSRC8Vav8lak4Fc9XiLv3RPt3hKt.Eat3hKtP0RM4RPT4hKBgjYt3hLxIDbhEjKt3hKt3hKt3hKt3hKt3hat3hKtXmX5UjQisFMnoUd3vVXyUGNVQWSJwDUX4xLscVU2gjd2fUatQjP5AUa3XmbBYTSBQiPNQTbyrDUoMVZrYDL3PFNEYFTTEVYwAGbUUyJqgDM4QyLoshbIcEQQgVdukTVBA2YpgiMkIlSMkTRogUSGQkVx3lbMslLUQEaqw1M2zDcRQlZvcDVJQCUUYSUZEzcDAmR1XTYlQFcykVRCEjUsUWXZYENZUiKvvTSuQFZzXVcnMCSpQTP3fGRZsTdPEFNo0jVKMlV4HTUKs1SMMFc0P0XGkkXQY0XWUUTzTyMvMibOYWMNIGRxP2bUUTXokEQxECMDshRkUUNz0jMvAGcMwVdxX2Yj4zRx8Dd4EmUUYEUjEFMn4jSsIVXjkCaUUTbGc0bVUCYnsVXFYzYznEQwclRG4FLhUUdQUFM1jzMAokaVIiQSIEcsUGVsUTZ4LUdqXyP1jCMjUTZKgkTrYFNTIWNqM2cFo0JuokLIo0P4U1Z10DboACUkI0aOIkdJE2MUkmas41aRM0XssTV08jLZIyYZMCUMkTboEGcxTEMxU1aUcyQUE2ZSwDcF8DQKQld4U0YqD2SVIEVNQmXFgFcKQ1cMoWUk4VPqUkLPUmRDE0L1kkU5M0UxYTb4DUMvbFY4k1aqcDUWolZEIUSz4RaksRU4zzM3jzYA0FSksjSYY2ZIYVP0EjQXYWar4hQlETYCwjctvjKCY2MEQzP4PiKlEDVtXjYAgkKFIVbJ4xP14BStLjctvjKCYmKL4xP1YVXUEDVtXjYAgkKFYVPX4hQlEDVtXjYAgkKFYVPXIkckYEQ14BSkYFV2TWN0AUVWojV0PSbKMVMAQWXNk2PVYUd2oUMCkyQ1cmdsMUYA4BLRcjYtjzTL4TQjcjKt3hdW4jKt3BUKUjYt3hKtTjKl4hPH4hcMEmYJckZLc2LTMyXt3hKPUFMt3hKJ4hKt3hKt3hKt3hKt3hKt3hKt3hKt3hK4E0UXoWUrsDbMISXzEDLRUDVt3hKt3hKA4BTt3hYC4hKtXVQB4hKt3hKtvyKIMzasA2atUlaz4COuX0TTMCTrU2Yo41TzEFck4C."
                         },
                         "snapshotlist": {
                             "current_snapshot": 0,
@@ -81,7 +233,7 @@
                                         "isbase64": 1,
                                         "sliderorder": [],
                                         "slidervisibility": [ 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0 ],
-                                        "blob": "938.VMjLgD5....O+fWarAhckI2bo8la8HRLt.iHfTlai8FYo41Y8HRUTYTK3HxO9.BOVMEUy.Ea0cVZtMEcgQWY9vSRC8Vav8lak4Fc9XSL43RPt3hKtvDat3hKtP0RM4RPT4hKBgjYt3BTEMzahEjKt3hKt3hKt3hKt3hKt3hat3hKtXmX5UjQisFMnoUd3vVXyUGNw.WSJAEVh4xMwASanUTV0IWXP0zcMwFNigUYBoTQYAmS2wjZzX1XhwlQZMDNiUWdmgEZmECYW8ldBsRcIYVYsciLLw1PX4xSrwlZI4lQREyJ4.yc5olZLgFLxM0aiczZUQ0bYUUUVoEdKIyLJQSTvQlZuo1TUMWUuUDQS4FbxE1MAYzLwPFaLQDR0IFNTc0PZUCRvvDL54xcxk2UQI2PIEET0IFQykVVtMVNo0jVKMFbkcFbogWaZ0VbNomdSgVaps1RJAmUWUmbJEyMNY0Jzk0aJEWb3ICUUYTdIg0XsMENscSQUUTQvPyRqDFSsUFZoMjXVg0YxIGVvf1MUEFbW8TXrckTVYkUxgUUjMFSWczXKcGdMkVapQiQDE2ZJczaMIVU1PVYzDVR2DkVtYkLJMkTz01Sg8VQokSX4M0Pms1JzjUQosDVRwlY3Hlb4PSZ2YjQqblQxXkVKkWYuY2XT8TbyQiYRUWatUkUzDVMXYlauI0TSU2RzX1SWQWXW0jbywlZvjWUxXCb2HWYuU0MkUUaqMESzEzSFsTNp0VbBUVbOYkTtczUNMTTxbTc0XDav8jdtgGbg81UEgFRhMCS4w1aKYUbUsBR3TCT0YSL5cSSvsjT3IzaNMlPNkycsQiL2IyUDYjb4cSZX0VPWwlKFciQXYVPkokPX4hQ2zjctLjctvjK4ICTLMSaC4hQlEDVtXjYAgkcyAmKL4xP14BStLjctvjKCYmKL4xPzUUQlEDVtXjYAgkKFYVPX4hQlEDVtXjYAgkKFYVRAsRVQ4xP1cSRnc2J0L1Y3QGU5oWdWcUM5MjXxPCSOgUVyYSXt8zLkIzQSUVR3TkKPMmdAgjKpcDc0okLA4hKtjyZC4hKt.iTAgjKt3BTA4BRl4hPt3RULoFdEAEYyjCbicjKt3xLW4jKtXlPt3hKt3hKt3hKt3hKt3hKt3hKt3hKtXmX5UjQisFMnoUd3vVXPMGUAYjKt3hKt.kKtPjKtLiKt3hKTclKt3hKt3hK77RRC8Vav8lak4Fc9vyKVMEUy.Ea0cVZtMEcgQWY9.."
+                                        "blob": "939.VMjLgH5....O+fWarAhckI2bo8la8HRLt.iHfTlai8FYo41Y8HRUTYTK3HxO9.BOVMEUy.Ea0cVZtMEcgQWY9vSRC8Vav8lak4Fc9XiLv3RPt3hKt.Eat3hKtP0RM4RPT4hKBgjYt3hLxIDbhEjKt3hKt3hKt3hKt3hKt3hat3hKtXmX5UjQisFMnoUd3vVXyUGNVQWSJwDUX4xLscVU2gjd2fUatQjP5AUa3XmbBYTSBQiPNQTbyrDUoMVZrYDL3PFNEYFTTEVYwAGbUUyJqgDM4QyLoshbIcEQQgVdukTVBA2YpgiMkIlSMkTRogUSGQkVx3lbMslLUQEaqw1M2zDcRQlZvcDVJQCUUYSUZEzcDAmR1XTYlQFcykVRCEjUsUWXZYENZUiKvvTSuQFZzXVcnMCSpQTP3fGRZsTdPEFNo0jVKMlV4HTUKs1SMMFc0P0XGkkXQY0XWUUTzTyMvMibOYWMNIGRxP2bUUTXokEQxECMDshRkUUNz0jMvAGcMwVdxX2Yj4zRx8Dd4EmUUYEUjEFMn4jSsIVXjkCaUUTbGc0bVUCYnsVXFYzYznEQwclRG4FLhUUdQUFM1jzMAokaVIiQSIEcsUGVsUTZ4LUdqXyP1jCMjUTZKgkTrYFNTIWNqM2cFo0JuokLIo0P4U1Z10DboACUkI0aOIkdJE2MUkmas41aRM0XssTV08jLZIyYZMCUMkTboEGcxTEMxU1aUcyQUE2ZSwDcF8DQKQld4U0YqD2SVIEVNQmXFgFcKQ1cMoWUk4VPqUkLPUmRDE0L1kkU5M0UxYTb4DUMvbFY4k1aqcDUWolZEIUSz4RaksRU4zzM3jzYA0FSksjSYY2ZIYVP0EjQXYWar4hQlETYCwjctvjKCY2MEQzP4PiKlEDVtXjYAgkKFIVbJ4xP14BStLjctvjKCYmKL4xP1YVXUEDVtXjYAgkKFYVPX4hQlEDVtXjYAgkKFYVPXIkckYEQ14BSkYFV2TWN0AUVWojV0PSbKMVMAQWXNk2PVYUd2oUMCkyQ1cmdsMUYA4BLRcjYtjzTL4TQjcjKt3hdW4jKt3BUKUjYt3hKtTjKl4hPH4hcMEmYJckZLc2LTMyXt3hKPUFMt3hKJ4hKt3hKt3hKt3hKt3hKt3hKt3hKt3hK4E0UXoWUrsDbMISXzEDLRUDVt3hKt3hKA4BTt3hYC4hKtXVQB4hKt3hKtvyKIMzasA2atUlaz4COuX0TTMCTrU2Yo41TzEFck4C."
                                     },
                                     "fileref": {
                                         "name": "kHs 3-Band EQ",
@@ -106,7 +258,7 @@
                     "numinlets": 4,
                     "numoutlets": 2,
                     "outlettype": [ "signal", "signal" ],
-                    "patching_rect": [ 43.22034001350403, 145.76271533966064, 399.0, 22.0 ],
+                    "patching_rect": [ 50.0, 217.0, 399.0, 22.0 ],
                     "text": "abl.device.utility~ @gain -1 @bass_mono 1 @bass_mono_frequency 117"
                 }
             },
@@ -117,7 +269,7 @@
                     "numinlets": 4,
                     "numoutlets": 2,
                     "outlettype": [ "signal", "signal" ],
-                    "patching_rect": [ 43.0, 261.0, 347.0, 22.0 ],
+                    "patching_rect": [ 50.0, 332.0, 347.0, 22.0 ],
                     "text": "abl.device.utility~ @bass_mono 1 @bass_mono_frequency 117"
                 }
             },
@@ -127,7 +279,7 @@
                     "maxclass": "newobj",
                     "numinlets": 1,
                     "numoutlets": 0,
-                    "patching_rect": [ 50.0, 726.0, 48.0, 22.0 ],
+                    "patching_rect": [ 57.0, 797.0, 48.0, 22.0 ],
                     "text": "s~ out2"
                 }
             },
@@ -137,7 +289,7 @@
                     "maxclass": "newobj",
                     "numinlets": 1,
                     "numoutlets": 0,
-                    "patching_rect": [ 43.0, 702.0, 48.0, 22.0 ],
+                    "patching_rect": [ 50.0, 773.0, 48.0, 22.0 ],
                     "text": "s~ out1"
                 }
             },
@@ -148,7 +300,7 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "signal" ],
-                    "patching_rect": [ 84.0, 60.0, 72.0, 22.0 ],
+                    "patching_rect": [ 244.0, 46.0, 72.0, 22.0 ],
                     "text": "r~ fx-chain2"
                 }
             },
@@ -159,7 +311,7 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "signal" ],
-                    "patching_rect": [ 43.0, 34.0, 72.0, 22.0 ],
+                    "patching_rect": [ 50.0, 46.0, 72.0, 22.0 ],
                     "text": "r~ fx-chain1"
                 }
             },
@@ -170,8 +322,8 @@
                     "numinlets": 4,
                     "numoutlets": 2,
                     "outlettype": [ "signal", "signal" ],
-                    "patching_rect": [ 43.0, 219.0, 390.0, 22.0 ],
-                    "text": "abl.dsp.saturator~ @mix 0.1 @drive 5. @curve 1 @post_clip 0 @gain 0",
+                    "patching_rect": [ 50.0, 290.0, 390.0, 22.0 ],
+                    "text": "abl.dsp.saturator~ @mix 0.1 @drive 4. @curve 1 @post_clip 0 @gain 0",
                     "varname": "abl.dsp.darkhall~_AA[2]"
                 }
             },
@@ -182,8 +334,8 @@
                     "numinlets": 5,
                     "numoutlets": 2,
                     "outlettype": [ "signal", "signal" ],
-                    "patching_rect": [ 43.0, 181.3559365272522, 737.0, 22.0 ],
-                    "text": "abl.device.drumbuss~ 1. 0. 1. @drive 0.4 @boomfreq 64.4 @boom 0.85 @decay 1 @transients 0.7 @distortion 0.1 @crunch 0 @mix 0.7"
+                    "patching_rect": [ 50.0, 252.0, 717.0, 22.0 ],
+                    "text": "abl.device.drumbuss~ 1. 0. 1. @drive 0.3 @boomfreq 64.4 @boom 1. @decay 1 @transients 0.8 @distortion 0. @crunch 0 @mix 0.7"
                 }
             },
             {
@@ -195,7 +347,7 @@
                     "numoutlets": 5,
                     "outlettype": [ "signal", "signal", "", "float", "list" ],
                     "parameter_enable": 1,
-                    "patching_rect": [ 43.0, 553.0, 48.0, 136.0 ],
+                    "patching_rect": [ 50.0, 624.0, 48.0, 136.0 ],
                     "saved_attribute_attributes": {
                         "valueof": {
                             "parameter_longname": "live.gain~[2]",
@@ -217,7 +369,7 @@
                     "maxclass": "comment",
                     "numinlets": 1,
                     "numoutlets": 0,
-                    "patching_rect": [ 1193.0, 514.0, 150.0, 407.0 ],
+                    "patching_rect": [ 1200.0, 585.0, 150.0, 407.0 ],
                     "text": "additive_1024.ts\nadditive_8192.ts\nchafe_cello.ts\ndarbouka.ts\ndarbouka_onnx.ts\ndemo_attributes.ts\ndemo_buffers.ts\ndemo_mc.ts\ndowntempo_house.ts\neffects.ts\nfeatures.ts\nisis_NP.ts\nmusicnet.ts\nnasa.ts\nnn~.maxhelp\noldsynths.ts\noldsynths_new.ts\nordinario_1024.ts\nordinario_8192.ts\npercussion.ts\nrave_chafe_data_rt.ts\nsol_full_NP.ts\nsol_ordinario_fast_NP.ts\nsol_ordinario_NP.ts\nvae_cities.ts\nVCTK.ts\nvintage.ts\nwavetable.ts\nwheel.ts"
                 }
             },
@@ -228,7 +380,7 @@
                     "numinlets": 2,
                     "numoutlets": 1,
                     "outlettype": [ "bang" ],
-                    "patching_rect": [ 254.0, 553.0, 184.98193097114563, 69.0 ]
+                    "patching_rect": [ 261.0, 624.0, 184.98193097114563, 69.0 ]
                 }
             },
             {
@@ -238,7 +390,7 @@
                     "numinlets": 3,
                     "numoutlets": 3,
                     "outlettype": [ "signal", "signal", "signal" ],
-                    "patching_rect": [ 43.0, 523.0, 400.0, 22.0 ],
+                    "patching_rect": [ 50.0, 594.0, 400.0, 22.0 ],
                     "text": "abl.device.limiter~ @maximize 1 @threshold -3. @mode 1 @lookahead 6"
                 }
             },
@@ -249,7 +401,7 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "signal" ],
-                    "patching_rect": [ 84.0, 111.0, 192.0, 22.0 ],
+                    "patching_rect": [ 244.0, 99.0, 192.0, 22.0 ],
                     "text": "abl.dsp.compander~ @shape 0.05"
                 }
             },
@@ -260,7 +412,7 @@
                     "numinlets": 1,
                     "numoutlets": 1,
                     "outlettype": [ "signal" ],
-                    "patching_rect": [ 43.0, 87.0, 192.0, 22.0 ],
+                    "patching_rect": [ 50.0, 99.0, 192.0, 22.0 ],
                     "text": "abl.dsp.compander~ @shape 0.05"
                 }
             },
@@ -273,7 +425,7 @@
                     "numoutlets": 5,
                     "outlettype": [ "signal", "signal", "", "float", "list" ],
                     "parameter_enable": 1,
-                    "patching_rect": [ 43.0, 380.0, 48.0, 136.0 ],
+                    "patching_rect": [ 50.0, 451.0, 48.0, 136.0 ],
                     "saved_attribute_attributes": {
                         "valueof": {
                             "parameter_longname": "live.gain~",
@@ -286,6 +438,18 @@
                         }
                     },
                     "varname": "live.gain~"
+                }
+            },
+            {
+                "box": {
+                    "attr": "damping",
+                    "id": "obj-5",
+                    "maxclass": "attrui",
+                    "numinlets": 1,
+                    "numoutlets": 1,
+                    "outlettype": [ "" ],
+                    "parameter_enable": 0,
+                    "patching_rect": [ 644.0, 222.0, 150.0, 22.0 ]
                 }
             }
         ],
@@ -304,6 +468,22 @@
             },
             {
                 "patchline": {
+                    "destination": [ "obj-2", 0 ],
+                    "midpoints": [ 466.5, 122.0, 443.0, 122.0, 443.0, 152.0, 59.5, 152.0 ],
+                    "order": 1,
+                    "source": [ "obj-10", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-3", 0 ],
+                    "midpoints": [ 466.5, 122.0, 443.0, 122.0, 443.0, 152.0, 253.5, 152.0 ],
+                    "order": 0,
+                    "source": [ "obj-10", 0 ]
+                }
+            },
+            {
+                "patchline": {
                     "destination": [ "obj-135", 1 ],
                     "source": [ "obj-117", 1 ]
                 }
@@ -312,6 +492,38 @@
                 "patchline": {
                     "destination": [ "obj-135", 0 ],
                     "source": [ "obj-117", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-2", 0 ],
+                    "midpoints": [ 466.5, 74.0, 437.0, 74.0, 437.0, 152.0, 59.5, 152.0 ],
+                    "order": 1,
+                    "source": [ "obj-12", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-3", 0 ],
+                    "midpoints": [ 466.5, 74.0, 437.0, 74.0, 437.0, 152.0, 253.5, 152.0 ],
+                    "order": 0,
+                    "source": [ "obj-12", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-2", 0 ],
+                    "midpoints": [ 466.5, 146.0, 59.5, 146.0 ],
+                    "order": 1,
+                    "source": [ "obj-13", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-3", 0 ],
+                    "midpoints": [ 466.5, 146.0, 253.5, 146.0 ],
+                    "order": 0,
+                    "source": [ "obj-13", 0 ]
                 }
             },
             {
@@ -340,6 +552,22 @@
             },
             {
                 "patchline": {
+                    "destination": [ "obj-2", 0 ],
+                    "midpoints": [ 466.5, 98.0, 443.0, 98.0, 443.0, 152.0, 59.5, 152.0 ],
+                    "order": 1,
+                    "source": [ "obj-15", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-3", 0 ],
+                    "midpoints": [ 466.5, 98.0, 443.0, 98.0, 443.0, 152.0, 253.5, 152.0 ],
+                    "order": 0,
+                    "source": [ "obj-15", 0 ]
+                }
+            },
+            {
+                "patchline": {
                     "destination": [ "obj-11", 0 ],
                     "source": [ "obj-16", 0 ]
                 }
@@ -353,13 +581,37 @@
             {
                 "patchline": {
                     "destination": [ "obj-8", 0 ],
-                    "source": [ "obj-30", 0 ]
+                    "source": [ "obj-2", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-17", 0 ],
+                    "source": [ "obj-3", 1 ]
                 }
             },
             {
                 "patchline": {
                     "destination": [ "obj-8", 1 ],
+                    "source": [ "obj-3", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-2", 0 ],
+                    "source": [ "obj-30", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-3", 0 ],
                     "source": [ "obj-31", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-117", 0 ],
+                    "source": [ "obj-5", 0 ]
                 }
             },
             {
@@ -414,6 +666,22 @@
                 "patchline": {
                     "destination": [ "obj-117", 0 ],
                     "source": [ "obj-8", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-2", 0 ],
+                    "midpoints": [ 466.5, 170.0, 422.0, 170.0, 422.0, 152.0, 59.5, 152.0 ],
+                    "order": 1,
+                    "source": [ "obj-9", 0 ]
+                }
+            },
+            {
+                "patchline": {
+                    "destination": [ "obj-3", 0 ],
+                    "midpoints": [ 466.5, 170.0, 422.0, 170.0, 422.0, 152.0, 253.5, 152.0 ],
+                    "order": 0,
+                    "source": [ "obj-9", 0 ]
                 }
             }
         ]

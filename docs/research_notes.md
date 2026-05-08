@@ -340,7 +340,7 @@ Each `/xk/voice` dispatches a **phrase generator** in `max/xk_swam.js` — not a
 | Complex | Xenakis technique | SWAM phrase |
 |---------|------------------|--------------|
 | C1 | Ataxic pizzicato | Pizz keyswitch, cloud of 2-5 plucked notes scattered ≤600ms with short (60-200ms) gates |
-| C2 | Bowed ascending/descending | Arco, legato run of 2-3 notes (3 in burst regime) with ~120ms spacing |
+| C2 | Bowed ascending/descending | Arco directional scalar run with turn-rate-aware exponential tempo curve. Endpoints scale with `turnRatePressure()` ∈ [0,1]: at turnP=0, range `[C2_RATE_MIN=4, 8]` notes/sec; at turnP=1, range `[6, C2_RATE_MAX=12]` notes/sec. Span ratio held constant at `C2_RATE_SPAN_RATIO=2` (within-phrase 2× accel/rit at every turn rate). Curve is exponential in rate (geometric) using compressed progress `w = min(1, u / C2_CURVE_END_U)`, so the tempo motion completes by phrase midpoint and holds its terminal rate through the tail. Tempo motion coupled to arc dir: cresc→accel, dim→rit, hairpin-up→accel-rit, hairpin-down→rit-accel, null→random. Emergent articulation: per-note ring time `r ~ uniform[C2_RING_MIN_MS=120, C2_RING_MAX_MS=320]` (legato when `r ≥ localSpacing`, detache when `r < localSpacing`). Strict directional sieve walk via `commitSieveWalk`. CC 81 baseline `MONO_POLY_RELEASE`; per-note flip to `DOUBLE_HOLD` for intentional double stops at probability `C2_DOUBLE_STOP_PROB=0.30` (companion via `doubleStopCompanion`). Phrase arc realized PER-NOTE (vel + CC 11 + bowPosBase shaped by `phraseArcDirection`); CC 17 is sampled once per note from the voice bow-pressure baseline and held. C2 is excluded from `ARC_COMPLEXES`. |
 | C3 | Bowed sustained | Arco, sul tasto, single long note with expression swell (soft→peak@40%→settle) |
 | C4 | Harmonics + col legno | Arco, Harmonics ON, single ethereal note (shifted up if <MIDI 60), light bow pressure |
 | C5 | Ataxic glissando | Arco, Portamento ON (50), two notes ≥5 semitones apart with legato slide at 200-600ms |
@@ -361,10 +361,10 @@ Each `/xk/voice` dispatches a **phrase generator** in `max/xk_swam.js` — not a
 
 | Expression param | SWAM target | Curve |
 |-----------------|------------|-------|
-| tilt (0–1) | Expression CC 11 | Exponential (`val²`) blended with base intensity: `baseExpr*0.3 + tilt²*97`. Face down → near-silent (5), face up → full (127). Skipped on C1 pizz. |
-| spin (0–1) | Vibrato Depth CC 1 + Rate CC 76 | Dead zone below 0.15, then exponential. No vibrato at rest; dramatic at fast rotation. |
-| deviation (0–1) | Bow Pressure CC 17 + Bow Speed CC 19 | Exponential 20-127 pressure; speed 40-120. Locked to S4 snap = light/slow, at boundary = heavy/erratic. |
-| scramble (0–1) | Bow Position CC 16 | Solved = fingerboard (120), scrambled = bridge (5). Skipped when complex type owns position (C3, C4, C7, C8). |
+| tilt (0-1) | Bow Position CC 16 | EMA-smoothed +/-30 tilt jitter around the complex baseline plus scramble bias, clamped to the lower-half `0..64` window. C3/C4 own per-note ramps; C8 skips live tilt. |
+| spin (0-1) | Telemetry/dashboard activity | Stored for visual activity; not currently mapped to SWAM vibrato, tremolo, or pressure. |
+| deviation (0-1) | Telemetry | Stored as S4 snap distance; not currently mapped to SWAM bow pressure. |
+| scramble (0-1) | Bow Position CC 16 | Current bridge constrains CC 16 to the lower half (`0..64`): solved bias pushes toward the upper edge of that window, scrambled bias pulls toward the bridge end. Skipped when complex type owns position (C3, C4, C7, C8). |
 
 ### Humanization
 

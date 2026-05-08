@@ -1,5 +1,9 @@
 // XenaKube Engine — public API
-export { XenaKubeEngine, type StateListener, type CubeAlgorithmListener, type VoiceListener, type SolveListener } from './engine.js';
+export {
+  XenaKubeEngine,
+  type StateListener, type CubeAlgorithmListener, type VoiceListener,
+  type SolveListener, type SolveReport,
+} from './engine.js';
 export {
   stateToOsc, expressionToOsc, algorithmToOsc, voiceToOsc, phrasePlanToOsc,
   solveToOsc, type OscMessage,
