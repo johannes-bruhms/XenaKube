@@ -170,20 +170,20 @@ export const ART_OFF_VEL: Record<Articulation, number> = {
 };
 
 // ================================================================
-// Motion → semitone nudge (oscillate flips per-turn in Max)
+// Motion no longer nudges pitch. Table remains for generated Max include
+// compatibility and to keep older imports neutral.
 // ================================================================
 
 export const MOTION_NUDGE: Record<Motion, number> = {
   static:     0,
-  up:         2,
-  down:      -2,
+  up:         0,
+  down:       0,
   oscillate:  0,
 };
 
 // ================================================================
-// Face signature — Max-side shape (durationMult, registerBias,
-// envelope name, articulation name, motion name). Generated from
-// FACE_SIGNATURES by `buildFaceMap()` for codegen.
+// Face signature — Max-side shape. `registerBias` / `motion` remain metadata
+// in FACE_MAP but the live pitch path ignores them.
 // ================================================================
 
 export interface FaceMapEntry {
@@ -243,7 +243,25 @@ export type DurationSource =
   | 'vertex'
   | 'vertex+floor'
   | 'vertex*face'
-  | 'vertex*face+floor';
+  | 'vertex*face+floor'
+  | 'half-turn';
+
+// ================================================================
+// Half-turn punctuation
+// ================================================================
+
+// GAN reports a fast physical 180-degree flick as two same-direction quarter
+// turns. The second matching turn inside this window becomes a punctuation
+// gesture instead of inheriting the normal K/C/face phrase shape.
+export const HALF_TURN_WINDOW_MS = 150;
+export const HALF_TURN_GESTURE_DURATION_SEC = 0.28;
+export const HALF_TURN_GESTURE_INTENSITY = 'fff' as const;
+export const HALF_TURN_GESTURE_EXPR = 127;
+export const HALF_TURN_GESTURE_VELOCITY = 124;
+export const HALF_TURN_GESTURE_NOTE_MS = 150;
+export const HALF_TURN_GESTURE_RELEASE_MS = 60;
+export const HALF_TURN_GESTURE_BOW_PRESSURE = 118;
+export const HALF_TURN_GESTURE_BOW_POSITION = 18;
 
 // ================================================================
 // Regime → ramp multipliers
@@ -477,10 +495,10 @@ export function stepVelScale(velCurve: VelCurve, i: number, count: number): numb
 }
 
 /**
- * Face-motion-committed sieve walker — used by C2 / C6 to stop
- * mid-phrase direction flips at boundaries. Pure over (sieveLen,
- * sieveIdx, sieveDir, count, motion) → next {idx, dir}. Returned
- * values are applied to the mutable state in Max.
+ * Committed sieve walker — used by C2 / C6 to stop mid-phrase direction
+ * flips at boundaries. Pure over (sieveLen, sieveIdx, sieveDir, count,
+ * motion) -> next {idx, dir}. Current live face paths pass null so face
+ * grammar does not force pitch direction.
  */
 export function commitSieveWalk(
   sieveLen: number,
@@ -509,17 +527,17 @@ export function commitSieveWalk(
   return { idx: sieveIdx, dir: sieveDir };
 }
 
-/** Face-motion nudge including oscillate's per-turn flip. Single 12-semi
- *  spread (V1's value, kept after V2 retirement). */
+/** Face signatures no longer transpose pitch. Kept as a neutral helper for
+ *  older imports and tests around the Max/TS mapping boundary. */
 export function faceTranspose(
   registerBias: number,
   motion: Motion,
   turnCount: number,
 ): number {
-  const spread = 12;
-  let nudge = MOTION_NUDGE[motion] ?? 0;
-  if (motion === 'oscillate') nudge = turnCount % 2 === 0 ? 2 : -2;
-  return Math.round(registerBias * spread) + nudge;
+  void registerBias;
+  void motion;
+  void turnCount;
+  return 0;
 }
 
 // ================================================================

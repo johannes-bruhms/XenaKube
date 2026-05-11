@@ -14,7 +14,6 @@ import {
   ENV_PROFILE,
   INTENSITY_MAP,
   clamp,
-  faceTranspose,
   intensityEntry,
   rateAccentValue,
   rateDensityMultiplier,
@@ -23,6 +22,12 @@ import {
   turnRatePressure,
   resolvePhraseDuration,
   stepVelScale,
+  HALF_TURN_GESTURE_DURATION_SEC,
+  HALF_TURN_GESTURE_INTENSITY,
+  HALF_TURN_GESTURE_EXPR,
+  HALF_TURN_GESTURE_VELOCITY,
+  HALF_TURN_GESTURE_NOTE_MS,
+  HALF_TURN_GESTURE_RELEASE_MS,
   type DurationSource,
   type EnvProfile,
   type IntensityLabel,
@@ -117,6 +122,7 @@ export interface PhrasePlan {
   vertexIndex: number;
   complex: ComplexType;
   face: FaceMove | null;
+  halfTurn: boolean;
   durationSec: number;
   durationSource: DurationSource;
   density: number;
@@ -140,7 +146,6 @@ export interface PhrasePlan {
 }
 
 interface ComplexRuntime {
-  register?: { lo: number; hi: number };
   exprEnv: {
     attack: number;
     peak: number;
@@ -180,7 +185,6 @@ interface VoiceContext {
   faceEnvProfile: EnvProfile | null;
   velCurve: VelCurve;
   faceMotion: Motion | null;
-  faceTr: number;
   durationSec: number;
   durationMs: number;
   baseVel: number;
@@ -211,20 +215,26 @@ export class PhrasePlanner {
 
   planVoiceOutput(output: VoiceOutput, state: XenaKubeState): PhrasePlan[] {
     const faceSnapshot = this.faceSnapshot(output.face);
+    const isHalfTurn = output.halfTurn === true;
     const plans: PhrasePlan[] = [];
 
     for (const ev of output.active) {
       const voiceTurnCount = ++this.turnCount;
-      const { durationSec, durationSource } = resolvePhraseDuration(
+      const resolved = resolvePhraseDuration(
         ev.params.duration,
         faceSnapshot.durationMult,
         ev.complex,
       );
-      const intMap = intensityEntry(ev.params.intensity);
+      const durationSec = isHalfTurn ? HALF_TURN_GESTURE_DURATION_SEC : resolved.durationSec;
+      const durationSource: DurationSource = isHalfTurn ? 'half-turn' : resolved.durationSource;
+      const intensity = isHalfTurn ? HALF_TURN_GESTURE_INTENSITY : ev.params.intensity;
+      const intMap = intensityEntry(intensity);
       let peakExpr = clamp(
-        intMap.expr *
-          ((faceSnapshot.profile && faceSnapshot.profile.peakMult) || 1.0) *
-          rateExpressionMultiplier(ev.complex, state.turnRate),
+        isHalfTurn
+          ? HALF_TURN_GESTURE_EXPR
+          : intMap.expr *
+            ((faceSnapshot.profile && faceSnapshot.profile.peakMult) || 1.0) *
+            rateExpressionMultiplier(ev.complex, state.turnRate),
         0,
         127,
       );
@@ -241,15 +251,16 @@ export class PhrasePlanner {
         vertexIndex: ev.vertexIndex,
         complex: ev.complex,
         face: output.face,
+        halfTurn: isHalfTurn,
         durationSec,
         durationSource,
         density: ev.params.density,
-        intensity: ev.params.intensity,
+        intensity,
         regime: state.regime,
         tetra: state.tetraIndex,
-        faceMotion: faceSnapshot.motion,
-        faceEnvelope: faceSnapshot.envelope,
-        faceTranspose: faceSnapshot.transpose,
+        faceMotion: isHalfTurn ? null : faceSnapshot.motion,
+        faceEnvelope: isHalfTurn ? 'half-turn' : faceSnapshot.envelope,
+        faceTranspose: isHalfTurn ? 0 : faceSnapshot.transpose,
         createdAt: this.now(),
         events: [],
         expected: {
@@ -269,21 +280,26 @@ export class PhrasePlanner {
         ev,
         rng: this.rng,
         sieve: state.sieve.map(p => p + SIEVE_BASE),
-        faceEnvProfile: faceSnapshot.profile,
-        velCurve: (faceSnapshot.profile && faceSnapshot.profile.velCurve) || 'flat',
-        faceMotion: faceSnapshot.motion,
-        faceTr: faceSnapshot.transpose,
+        faceEnvProfile: isHalfTurn ? null : faceSnapshot.profile,
+        velCurve: isHalfTurn ? 'accent-first' : (faceSnapshot.profile && faceSnapshot.profile.velCurve) || 'flat',
+        faceMotion: isHalfTurn ? null : faceSnapshot.motion,
         durationSec,
         durationMs: Math.round(durationSec * 1000),
-        baseVel: clamp(Math.round(intMap.vel * rateVelocityMultiplier(ev.complex, state.turnRate)), 1, 127),
+        baseVel: isHalfTurn
+          ? HALF_TURN_GESTURE_VELOCITY
+          : clamp(Math.round(intMap.vel * rateVelocityMultiplier(ev.complex, state.turnRate)), 1, 127),
         voiceTurnCount,
         activeNotes: [],
         glissCompanion: null,
       };
 
-      this.addExpressionShape(ctx, peakExpr);
-      this.dispatchComplex(ctx);
-      this.addRelease(ctx);
+      if (isHalfTurn) {
+        this.phraseHalfTurn(ctx);
+      } else {
+        this.addExpressionShape(ctx, peakExpr);
+        this.dispatchComplex(ctx);
+        this.addRelease(ctx);
+      }
       finalizePlan(plan);
       plans.push(plan);
     }
@@ -309,7 +325,7 @@ export class PhrasePlanner {
       durationMult: sig.durationMult,
       envelope: sig.envelope,
       motion: sig.motion,
-      transpose: faceTranspose(sig.registerBias, sig.motion, this.turnCount),
+      transpose: 0,
       profile: ENV_PROFILE[sig.envelope] ?? null,
     };
   }
@@ -383,6 +399,28 @@ export class PhrasePlanner {
     }
   }
 
+  private phraseHalfTurn(ctx: VoiceContext): void {
+    const p = this.pickPitch(1, ctx);
+    const companion = foldToRange(p + 7, CELLO_MIN, DOUBLE_STOP_ROLL_MAX);
+    const offT = Math.min(ctx.durationMs, HALF_TURN_GESTURE_NOTE_MS);
+    ctx.plan.events.push({
+      kind: 'exprShape',
+      tMs: 0,
+      shape: 'static',
+      peakExpr: HALF_TURN_GESTURE_EXPR,
+      durationMs: ctx.durationMs,
+    });
+    this.noteOn(ctx, 0, p, HALF_TURN_GESTURE_VELOCITY);
+    this.noteOn(ctx, 0, companion, Math.round(HALF_TURN_GESTURE_VELOCITY * 0.92), true);
+    this.noteOff(ctx, offT, p);
+    this.noteOff(ctx, offT, companion, true);
+    ctx.plan.events.push({ kind: 'release', tMs: ctx.durationMs, fadeMs: HALF_TURN_GESTURE_RELEASE_MS });
+    ctx.plan.events.push({
+      kind: 'allNotesOff',
+      tMs: ctx.durationMs + HALF_TURN_GESTURE_RELEASE_MS + 20,
+    });
+  }
+
   private phraseC1(ctx: VoiceContext): void {
     const rate = 5.0 * rateDensityMultiplier(ctx.plan.complex, ctx.state.turnRate);
     const count = Math.max(2, Math.round(ctx.durationSec * rate));
@@ -416,19 +454,23 @@ export class PhrasePlanner {
     const arc = phraseArcDirection(ctx.plan.faceEnvelope, ctx.plan.complex);
     const tempo = buildC2Tempo(arc, ctx.durationSec, turnP, this.rng);
     const durMs = ctx.durationMs;
-    this.commitSieveWalk(tempo.count, ctx.faceMotion);
+    this.commitSieveWalk(tempo.count, null);
     const noteOnAbs: number[] = new Array(tempo.count);
     for (let i = 0; i < tempo.count; i++) {
       noteOnAbs[i] = Math.round(tempo.noteTimes[i]) + this.humanDelay();
     }
+    const noteOnBudget = Math.max(tempo.count, Math.floor(ctx.durationSec * C2_RATE_MAX));
+    let doubleSlotsRemaining = noteOnBudget - tempo.count;
     for (let i = 0; i < tempo.count; i++) {
       const tOn = noteOnAbs[i];
       const nextOn = i + 1 < tempo.count ? noteOnAbs[i + 1] : durMs;
       const spacingToNext = nextOn - tOn;
       const ring = C2_RING_MIN_MS + this.rng() * (C2_RING_MAX_MS - C2_RING_MIN_MS);
       // Mirror max/xk_swam.js phraseC2 double-stop branch — first note
-      // always solo, others stochastically dyad'd with C2_DOUBLE_STOP_PROB.
-      const isDouble = i > 0 && this.rng() < C2_DOUBLE_STOP_PROB;
+      // always solo, others stochastically dyad'd with C2_DOUBLE_STOP_PROB
+      // while the C2_RATE_MAX note-on budget has room.
+      const isDouble = i > 0 && doubleSlotsRemaining > 0 && this.rng() < C2_DOUBLE_STOP_PROB;
+      if (isDouble) doubleSlotsRemaining--;
       const cap = isDouble ? spacingToNext - C2_DOUBLE_STOP_GUARD_MS : spacingToNext;
       const noteDur = Math.max(40, Math.round(Math.min(ring, cap)));
       const v = this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, i, tempo.count));
@@ -462,8 +504,7 @@ export class PhrasePlanner {
   }
 
   private phraseC4(ctx: VoiceContext): void {
-    const s = ctx.sieve;
-    const base = s.length > 0 ? s[Math.floor(s.length / 2)] : 60;
+    const base = this.pickPitch(4, ctx);
     const rate = 2.5 * rateDensityMultiplier(ctx.plan.complex, ctx.state.turnRate);
     const count = Math.max(2, Math.round(ctx.durationSec * rate));
     const spacing = ctx.durationMs / count;
@@ -476,7 +517,7 @@ export class PhrasePlanner {
       const clusterSize = this.rng() < 0.50 ? 2 : 1;
       for (let k = 0; k < clusterSize; k++) {
         const pjitter = this.rrand(-2, 2) + (k > 0 ? this.rrand(2, 5) : 0);
-        const p = foldToRange(base + ctx.faceTr + pjitter, CELLO_MIN, CELLO_MAX);
+        const p = foldToRange(base + pjitter, CELLO_MIN, CELLO_MAX);
         const v = clamp(
           this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, i, count)) - 15,
           25,
@@ -537,7 +578,7 @@ export class PhrasePlanner {
     const tailEnd = Math.max(FIRST_GLISS_MS + 200, ctx.durationMs * 0.9);
     const slideTimes = glissSchedule(requestedCount - 1, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
     const totalCount = 1 + slideTimes.length;
-    this.commitSieveWalk(totalCount, ctx.faceMotion);
+    this.commitSieveWalk(totalCount, null);
     let lastPitch = this.pickPitch(6, ctx);
     const targets: number[] = new Array(slideTimes.length);
     let pathMin = lastPitch;
@@ -565,9 +606,6 @@ export class PhrasePlanner {
 
   private phraseC7(ctx: VoiceContext): void {
     const isSingle = ctx.faceEnvProfile?.isSingle === true;
-    const cmx7 = COMPLEX[7];
-    const regLo = cmx7?.register?.lo ?? CELLO_MIN;
-    const regHi = cmx7?.register?.hi ?? CELLO_MAX;
     const p1 = this.pickPitch(7, ctx);
     let lastPitch = p1;
     this.legatoNote(ctx, 0, p1, this.humanVel(ctx, ctx.baseVel));
@@ -583,7 +621,6 @@ export class PhrasePlanner {
         Math.max(2, Math.round(driftCount * rateDensityMultiplier(ctx.plan.complex, ctx.state.turnRate))),
       );
     }
-    const motionDir = ctx.faceMotion === 'up' ? 1 : ctx.faceMotion === 'down' ? -1 : 0;
     const tailEnd = Math.max(FIRST_GLISS_MS_C7 + 250, ctx.durationMs * 0.88);
     // D79 — variable-gap schedule mirror of bridge's phraseC7.
     const times = wildGlissSchedule(driftCount, FIRST_GLISS_MS_C7, tailEnd, MIN_GLISS_SPACING_MS, this.rng);
@@ -594,10 +631,9 @@ export class PhrasePlanner {
       const nextEventMs = i + 1 < times.length ? times[i + 1] : phraseEndMs;
       const gapMs = nextEventMs - t;
       const bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
-      const sign = motionDir !== 0 ? motionDir : phraseStartSign * (i % 2 === 0 ? 1 : -1);
+      const sign = phraseStartSign * (i % 2 === 0 ? 1 : -1);
       const mag = this.rrand(1, 2);
-      // D79 — register-bound clamp (was CELLO_MIN..CELLO_MAX).
-      const p2 = clamp(p1 + sign * mag, regLo, regHi);
+      const p2 = clamp(p1 + sign * mag, CELLO_MIN, CELLO_MAX);
       lastPitch = this.glissStep(ctx, t, lastPitch, p2, 1, 18, undefined, bendDur);
     }
   }
@@ -616,16 +652,16 @@ export class PhrasePlanner {
 
   private pickPitch(complexType: number, ctx: VoiceContext): number {
     const s = ctx.sieve;
-    const cmx = COMPLEX[complexType];
-    const lo = cmx?.register ? Math.max(CELLO_MIN, cmx.register.lo) : CELLO_MIN;
-    const hi = cmx?.register ? Math.min(CELLO_MAX, cmx.register.hi) : CELLO_MAX;
-    if (s.length === 0) return foldToRange(36 + ctx.faceTr, lo, hi);
+    if (s.length === 0) return foldToRange(36, CELLO_MIN, CELLO_MAX);
 
     let pitch: number;
     switch (complexType) {
       case 1:
+      case 3:
       case 4:
       case 5:
+      case 7:
+      case 8:
         pitch = s[Math.floor(this.rng() * s.length)];
         break;
       case 2:
@@ -642,15 +678,10 @@ export class PhrasePlanner {
         }
         this.sieveIdx = clamp(this.sieveIdx, 0, s.length - 1);
         break;
-      case 3:
-      case 7:
-      case 8:
-        pitch = s[Math.floor(s.length / 2)];
-        break;
       default:
         pitch = s[0];
     }
-    return foldToRange(pitch + ctx.faceTr, lo, hi);
+    return foldToRange(pitch, CELLO_MIN, CELLO_MAX);
   }
 
   private commitSieveWalk(count: number, motion: Motion | null): void {
@@ -919,9 +950,14 @@ function phraseArcDirection(faceEnvelope: string | null, complex: number): ExprS
 // Mirror of max/xk_swam.js C2 tunables. All constants must match the
 // bridge for the auditor to predict realistic timings, articulation,
 // dynamics, and double-stop rate.
-const C2_RATE_MIN = 4;
-const C2_RATE_MAX = 12;
-const C2_RATE_SPAN_RATIO = 2.0;
+const C2_RATE_MIN = 3;
+const C2_RATE_LOW_MAX = 4;
+const C2_RATE_FAST_MIN = 5;
+// Final post-turn-rate-pressure ceiling for the C2 local main-note tempo.
+// C2 companion dyads are budgeted separately so total scheduled note-ons
+// also stay within duration * C2_RATE_MAX. Keep this mirrored with
+// max/xk_swam.js buildC2Tempo().
+const C2_RATE_MAX = 10;
 // Fraction of phrase time by which the C2 tempo curve completes. Mirrors
 // max/xk_swam.js; the phrase tail holds the curve's terminal rate.
 const C2_CURVE_END_U = 0.5;
@@ -943,10 +979,9 @@ function buildC2Tempo(
   turnP: number,
   rng: Rng,
 ): C2Tempo {
-  const loRate = C2_RATE_MIN +
-    turnP * (C2_RATE_MAX / C2_RATE_SPAN_RATIO - C2_RATE_MIN);
-  const hiRate = C2_RATE_MIN * C2_RATE_SPAN_RATIO +
-    turnP * (C2_RATE_MAX - C2_RATE_MIN * C2_RATE_SPAN_RATIO);
+  const loRate = C2_RATE_MIN + turnP * (C2_RATE_FAST_MIN - C2_RATE_MIN);
+  const hiRate = Math.min(C2_RATE_MAX,
+    C2_RATE_LOW_MAX + turnP * (C2_RATE_MAX - C2_RATE_LOW_MAX));
   const spanFactor = hiRate / loRate;
 
   let dirSign = 0;
@@ -1122,5 +1157,6 @@ function intensityDensity(intensity: string): number {
 
 export function phrasePlanSummary(plan: PhrasePlan): string {
   const first = plan.expected.firstNoteOnMs == null ? '-' : `${plan.expected.firstNoteOnMs}ms`;
-  return `P${plan.id} C${plan.complex} face=${plan.face ?? '-'} dur=${plan.durationSec.toFixed(2)}s events=${plan.events.length} noteons=${plan.expected.noteOnCount} bends=${plan.expected.bendStepCount} companions=${plan.expected.companionNoteOnCount} first=${first}`;
+  const half = plan.halfTurn ? ' half-turn=1' : '';
+  return `P${plan.id} C${plan.complex} face=${plan.face ?? '-'}${half} dur=${plan.durationSec.toFixed(2)}s events=${plan.events.length} noteons=${plan.expected.noteOnCount} bends=${plan.expected.bendStepCount} companions=${plan.expected.companionNoteOnCount} first=${first}`;
 }

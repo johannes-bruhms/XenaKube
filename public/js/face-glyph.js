@@ -1,15 +1,16 @@
 // public/js/face-glyph.js
 //
-// Face-signature glyph painter. Shared by cube-scene.js (6 sprites on the
-// ghost cube faces, predictive — "if you turn this face, here's the
-// gesture you'll get") and state-ui.js (one slot in the K/C card area,
-// retrospective — "the gesture you just heard came from this face").
+// Face-signature glyph painter. Shared by cube-scene.js (predictive physical
+// decals on ghost-cube faces) and state-ui.js (retrospective badge in the
+// active K/C card area).
 //
 // Each face owns TWO signatures (CW unprimed + CCW primed) and the
 // primed/unprimed pair can be very different (U = pluck/up vs U' =
-// fade/down). One glyph per face must show both, so the painter draws a
-// stacked pair: top row = unprimed, bottom row = primed (marked with a
-// faint apostrophe).
+// fade/down). One face decal shows both as two separate, unlabeled marks:
+// top = unprimed clockwise, bottom = primed counter-clockwise. Each mark has
+// its own bottom underline baked into the texture so orientation remains
+// readable when the face twists or when the decal is viewed from behind
+// through the transparent cube.
 //
 // FACE_SIG is the local mirror of `src/face-gesture.ts` FACE_SIGNATURES.
 // Source of truth is the TS file; keep both in sync. Half-turns (L2/R2/...)
@@ -140,48 +141,64 @@ function drawEnvelope(ctx, env, x, y, w, h) {
   }
 }
 
-function drawPrimeMark(ctx, x, y, w, h, color) {
-  // Faint slanted apostrophe to mark the primed (CCW) row. Drawn with the
-  // same stroke style as the glyph but at reduced opacity so it reads as
-  // notation, not data.
-  ctx.save();
-  ctx.globalAlpha = 0.65;
-  ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(2, ctx.lineWidth);
+function roundedRectPath(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w / 2, h / 2);
   ctx.beginPath();
-  ctx.moveTo(x + w * 0.35, y + h * 0.10);
-  ctx.lineTo(x + w * 0.60, y + h * 0.55);
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+}
+
+function drawDirectionIcon(ctx, cx, cy, r, clockwise) {
+  const start = clockwise ? -Math.PI * 0.70 : Math.PI * 0.30;
+  const end = clockwise ? Math.PI * 0.95 : -Math.PI * 0.95;
+  ctx.beginPath();
+  ctx.arc(cx, cy, r, start, end, !clockwise);
   ctx.stroke();
-  ctx.restore();
+
+  const theta = end;
+  const tx = cx + Math.cos(theta) * r;
+  const ty = cy + Math.sin(theta) * r;
+  const dir = clockwise ? 1 : -1;
+  const a = theta + dir * Math.PI * 0.58;
+  ctx.beginPath();
+  ctx.moveTo(tx, ty);
+  ctx.lineTo(tx + Math.cos(a) * r * 0.42, ty + Math.sin(a) * r * 0.42);
+  ctx.lineTo(tx + Math.cos(a - dir * Math.PI * 0.55) * r * 0.36, ty + Math.sin(a - dir * Math.PI * 0.55) * r * 0.36);
+  ctx.closePath();
+  ctx.fill();
 }
 
 // ---- Public painter --------------------------------------------------------
 
 /**
- * Paint the paired (CW + CCW) glyph for `face` onto `ctx`. Two symbols per
- * face — both are envelope sparklines.
+ * Paint the paired (CW + CCW) glyph for `face` onto `ctx`.
  *
  * Layout (canvas WxH):
- *   row 0 (top half)    — unprimed (CW) envelope
- *   row 1 (bottom half) — primed   (CCW) envelope + faint ' marker
- *
- * Motion direction is intentionally NOT drawn: it's already implicit in face
- * position on the cube (U register treble, D register bass) and partially in
- * envelope shape (a `>` fade implies decay/release). The pair F vs F' (both
- * `swell`) is distinguished only by the apostrophe — the audible up/down
- * difference is learned by ear, not visual encoding. Background transparent
- * unless `opts.background` is passed.
+ *   top row    - clockwise / unprimed gesture
+ *   bottom row - counter-clockwise / primed gesture
  */
 export function paintFaceGlyph(ctx, face, opts = {}) {
   const W = opts.width  ?? ctx.canvas.width;
   const H = opts.height ?? ctx.canvas.height;
   const color = opts.color || '#e0f4ff';
-  const lineWidth = opts.lineWidth ?? Math.max(2.4, W / 44);
+  const lineWidth = opts.lineWidth ?? Math.max(2.1, W / 64);
+  const activeMove = opts.activeMove || null;
 
   ctx.clearRect(0, 0, W, H);
-  if (opts.background) {
-    ctx.fillStyle = opts.background;
-    ctx.fillRect(0, 0, W, H);
+  if (opts.background !== false) {
+    roundedRectPath(ctx, W * 0.06, H * 0.08, W * 0.88, H * 0.84, W * 0.07);
+    ctx.fillStyle = opts.background || 'rgba(2, 10, 16, 0.58)';
+    ctx.fill();
+    ctx.strokeStyle = 'rgba(180, 245, 255, 0.28)';
+    ctx.lineWidth = Math.max(1, W / 170);
+    ctx.stroke();
   }
 
   ctx.strokeStyle = color;
@@ -196,30 +213,46 @@ export function paintFaceGlyph(ctx, face, opts = {}) {
   const sigCW  = FACE_SIG[moveCW];
   const sigCCW = FACE_SIG[moveCCW];
 
-  const rowH = H / 2;
-  const padY = rowH * 0.16;
-  const envX = W * 0.10, envW = W * 0.70;
-  const primeX = W * 0.82, primeW = W * 0.14;
+  const rowX = W * 0.12;
+  const rowW = W * 0.76;
+  const rowH = H * 0.34;
+  const topY = H * 0.12;
+  const botY = H * 0.54;
+  const iconX = rowX + rowW * 0.18;
+  const envX = rowX + rowW * 0.36;
+  const envW = rowW * 0.48;
+  const iconR = Math.max(8, W * 0.055);
 
-  if (sigCW) {
-    drawEnvelope(ctx, sigCW.envelope, envX, padY,           envW, rowH - 2 * padY);
-  }
-  if (sigCCW) {
-    drawEnvelope(ctx, sigCCW.envelope, envX, rowH + padY,   envW, rowH - 2 * padY);
-    drawPrimeMark(ctx, primeX, rowH + padY, primeW, rowH - 2 * padY, color);
-  }
-
-  // Optional face letter in the top-left (used by the K/C card slot —
-  // the 6 ghost-cube sprites don't need it because face position
-  // already conveys identity).
-  if (opts.faceLetter) {
+  const rows = [
+    { move: moveCW, sig: sigCW, y: topY, clockwise: true },
+    { move: moveCCW, sig: sigCCW, y: botY, clockwise: false },
+  ];
+  for (const row of rows) {
+    if (!row.sig) continue;
+    const active = activeMove === row.move;
     ctx.save();
-    ctx.globalAlpha = 0.85;
+    if (active) {
+      roundedRectPath(ctx, rowX - W * 0.025, row.y - H * 0.025, rowW + W * 0.05, rowH + H * 0.05, W * 0.035);
+      ctx.fillStyle = 'rgba(255, 255, 255, 0.12)';
+      ctx.fill();
+      ctx.strokeStyle = 'rgba(255, 255, 255, 0.64)';
+      ctx.lineWidth = Math.max(1.4, W / 130);
+      ctx.stroke();
+    }
+    ctx.globalAlpha = active || !activeMove ? 1.0 : 0.48;
+    ctx.strokeStyle = color;
     ctx.fillStyle = color;
-    ctx.font = `bold ${Math.round(W * 0.14)}px monospace`;
-    ctx.textAlign = 'left';
-    ctx.textBaseline = 'top';
-    ctx.fillText(face, W * 0.04, H * 0.02);
+    ctx.lineWidth = lineWidth;
+    drawDirectionIcon(ctx, iconX, row.y + rowH / 2, iconR, row.clockwise);
+    drawEnvelope(ctx, row.sig.envelope, envX, row.y + H * 0.055, envW, rowH - H * 0.16);
+    ctx.save();
+    ctx.globalAlpha *= 0.92;
+    ctx.lineWidth = Math.max(2.4, W / 70);
+    ctx.beginPath();
+    ctx.moveTo(rowX + rowW * 0.18, row.y + rowH - H * 0.045);
+    ctx.lineTo(rowX + rowW * 0.82, row.y + rowH - H * 0.045);
+    ctx.stroke();
+    ctx.restore();
     ctx.restore();
   }
 }

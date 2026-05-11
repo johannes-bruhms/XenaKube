@@ -8,8 +8,10 @@
 </head>
 <body>
 
+<canvas id="spectrogram-score"></canvas>
 <canvas id="rolling-score"></canvas>
 <canvas id="cube-canvas"></canvas>
+<svg id="cube-contrast-layer" aria-hidden="true"></svg>
 <canvas id="line-overlay"></canvas>
 
 <div class="algorithm-history" id="algorithm-history"></div>
@@ -50,7 +52,7 @@
       id="active-face-glyph"
       class="active-face-glyph"
       width="256" height="256"
-      title="last face turn — top: unprimed (CW), bottom: primed (CCW)"></canvas>
+      title="last face turn"></canvas>
   </div>
 </div>
 
@@ -198,11 +200,84 @@
     <input type="range" id="scoreSpeed" min="60" max="900" step="30" value="360">
     <span class="slider-val" id="scoreSpeedVal">360</span>
   </div>
+  <div class="br-slider-row visual-layer-row" title="Toggle rolling visual layers. MIDI brushes default on; spectrogram default off.">
+    <label>layers</label>
+    <div class="layer-toggle-group">
+      <button type="button" id="midiBrushToggle" class="layer-toggle active" aria-pressed="true">midi</button>
+      <button type="button" id="spectrogramToggle" class="layer-toggle" aria-pressed="false">spec</button>
+    </div>
+    <span class="slider-val spectrum-status" id="spectrumStatus">off</span>
+  </div>
+  <div class="br-slider-row" title="Shared visual delay used when spectrogram is on, so audio FFT frames and MIDI brushes share one rolling time axis.">
+    <label>spec ms</label>
+    <input type="range" id="spectrumLatency" min="0" max="250" step="10" value="120">
+    <span class="slider-val" id="spectrumLatencyVal">120</span>
+  </div>
+  <div class="br-slider-row" title="Audio/MIDI nudge for spectrogram alignment. Positive values move spectrum later/right.">
+    <label>spec d</label>
+    <input type="range" id="spectrumNudge" min="-200" max="200" step="10" value="0">
+    <span class="slider-val" id="spectrumNudgeVal">0</span>
+  </div>
+  <div class="br-slider-row" title="Sonogram exposure. Slides every bin&apos;s dB before palette mapping. Positive brightens the whole image; negative darkens.">
+    <label>spec gain</label>
+    <input type="range" id="spectrumGain" min="-30" max="30" step="1" value="0">
+    <span class="slider-val" id="spectrumGainVal">0</span>
+  </div>
+  <div class="br-slider-row" title="Sonogram floor (dB). Lower reveals quieter detail; higher flattens silence into the background.">
+    <label>spec floor</label>
+    <input type="range" id="spectrumFloor" min="-130" max="-50" step="1" value="-95">
+    <span class="slider-val" id="spectrumFloorVal">-95</span>
+  </div>
+  <div class="br-slider-row" title="Sonogram background brightness. 0 = palette base (darkest); higher values keep silence glowing.">
+    <label>spec bg</label>
+    <input type="range" id="spectrumBg" min="0" max="40" step="1" value="10">
+    <span class="slider-val" id="spectrumBgVal">10</span>
+  </div>
+  <div class="br-slider-row" title="Time-interpolation density between FFT frames. 0 = sharp columns (time grid visible). ~67 = RX-style smooth (1 sub-column per 1.5 device px). 120 = pixel-perfect (CPU heavy).">
+    <label>spec smooth</label>
+    <input type="range" id="spectrumSmooth" min="0" max="120" step="1" value="67">
+    <span class="slider-val" id="spectrumSmoothVal">67</span>
+  </div>
+  <div class="br-slider-row" title="CSS blur applied to the spectrogram canvas. Dissolves any residual hairline seams between paints. ~8 (0.8 px) is invisible-soft default; higher = creamier, slightly softens harmonic lines.">
+    <label>spec blur</label>
+    <input type="range" id="spectrumBlur" min="0" max="40" step="1" value="8">
+    <span class="slider-val" id="spectrumBlurVal">8</span>
+  </div>
+  <div class="br-slider-row" title="Per-bin temporal exponential average on incoming source frames. Filters out the source-rate aliasing pulse from cello vibrato/tremolo (the vertical-stripe artifact). 0 = no smoothing (sees stripes). 65 = default, dissolves the pulse. 90+ = very heavy, slow to respond to real changes.">
+    <label>spec time</label>
+    <input type="range" id="spectrumTime" min="0" max="95" step="1" value="65">
+    <span class="slider-val" id="spectrumTimeVal">65</span>
+  </div>
+  <div class="br-slider-row" title="Sonogram heatmap. Auto = per-complex modality color (C1 amber, C2 red, C3 teal-magenta, C4 aqua, C5 magenta, C6 ice, C7 purple, C8 pink). Named palettes override regardless of complex.">
+    <label>spec palette</label>
+    <select id="spectrumPalette" class="record-mode">
+      <option value="auto">auto (modality)</option>
+      <option value="inferno">inferno</option>
+      <option value="thermal">thermal</option>
+      <option value="magma">magma</option>
+      <option value="viridis">viridis</option>
+      <option value="mono">mono</option>
+    </select>
+  </div>
+  <div class="br-slider-row record-row" title="Record a long PNG from the rolling visual layers.">
+    <label>record</label>
+    <select id="recordMode" class="record-mode">
+      <option value="visible">visible</option>
+      <option value="composite">both</option>
+      <option value="spectrum">spec</option>
+      <option value="midi">midi</option>
+    </select>
+    <button type="button" id="recordBeginBtn" class="record-action">begin</button>
+    <button type="button" id="recordEndBtn" class="record-action" disabled>end</button>
+    <span class="slider-val record-status" id="recordStatus">idle</span>
+  </div>
+  <!-- Legacy manual background picker, kept for easy revert.
   <div class="br-slider-row">
     <label>bg</label>
     <input type="color" id="bgColor" value="#000000">
     <span class="slider-val" id="bgColorVal">#000000</span>
   </div>
+  -->
   <div class="br-slider-row quality-row" title="Post-processing pipeline quality. Low bypasses bloom + composer; Med/High enable bloom with progressively stronger params.">
     <label>quality</label>
     <div class="quality-ctrl" id="qualityCtrl" role="radiogroup" aria-label="Render quality">

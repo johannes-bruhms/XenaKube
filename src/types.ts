@@ -118,6 +118,8 @@ export interface XenaKubeState {
   turnRate: number;
   /** Current performance speed regime */
   regime: 'contemplative' | 'conversational' | 'burst';
+  /** True when the most recent valid turn completed a rapid same-move pair. */
+  lastHalfTurn: boolean;
   /** Gyro-derived continuous expression parameters (all 0–1) */
   expression: {
     tilt: number;

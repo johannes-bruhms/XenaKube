@@ -25,6 +25,11 @@ const {
   HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,
   INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE,
   LEGATO_COMPLEX, MAX_PHRASE_DURATION_SEC, COMPLEX_DURATION_FLOOR_SEC,
+  HALF_TURN_WINDOW_MS, HALF_TURN_GESTURE_DURATION_SEC,
+  HALF_TURN_GESTURE_INTENSITY, HALF_TURN_GESTURE_EXPR,
+  HALF_TURN_GESTURE_VELOCITY, HALF_TURN_GESTURE_NOTE_MS,
+  HALF_TURN_GESTURE_RELEASE_MS, HALF_TURN_GESTURE_BOW_PRESSURE,
+  HALF_TURN_GESTURE_BOW_POSITION,
   REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
   RATE_PRESSURE_START_TPS, RATE_PRESSURE_FULL_TPS,
   RATE_DENSITY_GAIN_BY_COMPLEX, RATE_VELOCITY_GAIN_BY_COMPLEX,
@@ -83,7 +88,7 @@ lines.push('// ---------------- Envelope profiles (per-note + per-phrase) ------
 lines.push(block('ENV_PROFILE', ENV_PROFILE));
 lines.push('// ---------------- Articulation → note-off velocity ---------------');
 lines.push(block('ART_OFF_VEL', ART_OFF_VEL));
-lines.push('// ---------------- Motion → semitone nudge ------------------------');
+lines.push('// ---------------- Motion metadata (neutral for pitch) ------------');
 lines.push(block('MOTION_NUDGE', MOTION_NUDGE));
 lines.push('// ---------------- 12 face signatures (derived from TS source) ----');
 lines.push(block('FACE_MAP', buildFaceMap()));
@@ -92,6 +97,16 @@ lines.push(block('LEGATO_COMPLEX', LEGATO_COMPLEX));
 lines.push('// ---------------- Phrase duration bounds -------------------------');
 lines.push(block('MAX_PHRASE_DURATION_SEC', MAX_PHRASE_DURATION_SEC));
 lines.push(block('COMPLEX_DURATION_FLOOR_SEC', COMPLEX_DURATION_FLOOR_SEC));
+lines.push('// ---------------- Half-turn punctuation --------------------------');
+lines.push(block('HALF_TURN_WINDOW_MS', HALF_TURN_WINDOW_MS));
+lines.push(block('HALF_TURN_GESTURE_DURATION_SEC', HALF_TURN_GESTURE_DURATION_SEC));
+lines.push(block('HALF_TURN_GESTURE_INTENSITY', HALF_TURN_GESTURE_INTENSITY));
+lines.push(block('HALF_TURN_GESTURE_EXPR', HALF_TURN_GESTURE_EXPR));
+lines.push(block('HALF_TURN_GESTURE_VELOCITY', HALF_TURN_GESTURE_VELOCITY));
+lines.push(block('HALF_TURN_GESTURE_NOTE_MS', HALF_TURN_GESTURE_NOTE_MS));
+lines.push(block('HALF_TURN_GESTURE_RELEASE_MS', HALF_TURN_GESTURE_RELEASE_MS));
+lines.push(block('HALF_TURN_GESTURE_BOW_PRESSURE', HALF_TURN_GESTURE_BOW_PRESSURE));
+lines.push(block('HALF_TURN_GESTURE_BOW_POSITION', HALF_TURN_GESTURE_BOW_POSITION));
 lines.push('// ---------------- Regime → attack/expr ramp multipliers ----------');
 lines.push(block('REGIME_ATTACK_MULT',    REGIME_ATTACK_MULT));
 lines.push(block('REGIME_EXPR_RAMP_MULT', REGIME_EXPR_RAMP_MULT));

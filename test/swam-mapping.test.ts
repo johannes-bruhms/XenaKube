@@ -5,6 +5,11 @@ import {
   HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,
   INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE,
   LEGATO_COMPLEX, MAX_PHRASE_DURATION_SEC, COMPLEX_DURATION_FLOOR_SEC,
+  HALF_TURN_WINDOW_MS, HALF_TURN_GESTURE_DURATION_SEC,
+  HALF_TURN_GESTURE_INTENSITY, HALF_TURN_GESTURE_EXPR,
+  HALF_TURN_GESTURE_VELOCITY, HALF_TURN_GESTURE_NOTE_MS,
+  HALF_TURN_GESTURE_RELEASE_MS, HALF_TURN_GESTURE_BOW_PRESSURE,
+  HALF_TURN_GESTURE_BOW_POSITION,
   REGIME_ATTACK_MULT, REGIME_EXPR_RAMP_MULT,
   RATE_PRESSURE_START_TPS, RATE_PRESSURE_FULL_TPS,
   RATE_DENSITY_GAIN_BY_COMPLEX, RATE_VELOCITY_GAIN_BY_COMPLEX,
@@ -79,10 +84,24 @@ describe('swam-mapping — tables', () => {
     for (const v of Object.values(ART_OFF_VEL)) expect(v).toBeLessThanOrEqual(127);
   });
 
-  it('MOTION_NUDGE symmetric around 0 for up/down, zero for static/oscillate', () => {
-    expect(MOTION_NUDGE.up).toBe(-MOTION_NUDGE.down);
+  it('MOTION_NUDGE is neutral because faces do not prescribe pitch direction', () => {
+    expect(MOTION_NUDGE.up).toBe(0);
+    expect(MOTION_NUDGE.down).toBe(0);
     expect(MOTION_NUDGE.static).toBe(0);
     expect(MOTION_NUDGE.oscillate).toBe(0);
+  });
+
+  it('half-turn punctuation constants define a short loud gesture', () => {
+    expect(HALF_TURN_WINDOW_MS).toBe(150);
+    expect(HALF_TURN_GESTURE_DURATION_SEC).toBeLessThan(0.4);
+    expect(HALF_TURN_GESTURE_INTENSITY).toBe('fff');
+    expect(HALF_TURN_GESTURE_EXPR).toBe(127);
+    expect(HALF_TURN_GESTURE_VELOCITY).toBeGreaterThanOrEqual(120);
+    expect(HALF_TURN_GESTURE_NOTE_MS).toBeLessThan(HALF_TURN_GESTURE_DURATION_SEC * 1000);
+    expect(HALF_TURN_GESTURE_RELEASE_MS).toBeLessThanOrEqual(80);
+    expect(HALF_TURN_GESTURE_BOW_PRESSURE).toBeGreaterThanOrEqual(110);
+    expect(HALF_TURN_GESTURE_BOW_POSITION).toBeGreaterThanOrEqual(0);
+    expect(HALF_TURN_GESTURE_BOW_POSITION).toBeLessThanOrEqual(64);
   });
 
   it('LEGATO_COMPLEX covers C2,C3,C5,C6,C7 only', () => {
@@ -273,19 +292,13 @@ describe('swam-mapping — helpers', () => {
   });
 
   describe('faceTranspose', () => {
-    it('uses ±12 spread', () => {
-      expect(faceTranspose(1.0, 'static', 0)).toBe(12);
-      expect(faceTranspose(-1.0, 'static', 0)).toBe(-12);
-    });
-    it('motion up adds +2, down adds -2', () => {
-      expect(faceTranspose(0.0, 'up',   0)).toBe(2);
-      expect(faceTranspose(0.0, 'down', 0)).toBe(-2);
-    });
-    it('oscillate flips per turnCount parity', () => {
-      const even = faceTranspose(0.0, 'oscillate', 0);
-      const odd  = faceTranspose(0.0, 'oscillate', 1);
-      expect(even + odd).toBe(0);
-      expect(Math.abs(even)).toBe(2);
+    it('is neutral for every registerBias, motion, and turn parity', () => {
+      expect(faceTranspose(1.0, 'static', 0)).toBe(0);
+      expect(faceTranspose(-1.0, 'static', 0)).toBe(0);
+      expect(faceTranspose(0.0, 'up', 0)).toBe(0);
+      expect(faceTranspose(0.0, 'down', 0)).toBe(0);
+      expect(faceTranspose(0.0, 'oscillate', 0)).toBe(0);
+      expect(faceTranspose(0.0, 'oscillate', 1)).toBe(0);
     });
   });
 

@@ -19,10 +19,12 @@ This guide applies to the browser dashboard under `public/`.
 - `js/main.js`: entry point, init/callback wiring, Web Bluetooth connect flow, and `midi_echo` dispatch.
 - `js/cube-scene.js`: Three.js cube scene, snap ghost, canonical alignment checks, gyro zero, and 3D read positions.
 - `js/rolling-score.js`: rolling piano-roll canvas, brushes, note/gliss history, and visual assertions.
+- `js/spectrum-score.js`: optional actual-audio spectrogram canvas, spectrum frame buffer, modality rendering, no-synthetic-stale painting guard, and stale-frame telemetry.
+- `js/performance-recorder.js`: optional long-PNG recorder for visible/composite/spectrum/MIDI rolling visual layers.
 - `js/triangle.js`: white K/C-to-sieve leg overlay and gliss-line trajectory model.
 - `js/sieve.js`: 49-cell pitch strip, active pitch glow, and sieve layout assertion.
 - `js/state-ui.js`: overlay state rows, badges, K/C cards, algorithm UI, expression panel, and recent moves.
-- `js/face-glyph.js`: shared FACE_SIG mirror of `src/face-gesture.ts` plus `paintFaceGlyph` painter. Consumed by `js/cube-scene.js` (six predictive ghost-cube face sprites, billboarded with face-normal back-face culling) and by `js/state-ui.js` (single retrospective glyph slot in the K/C card area).
+- `js/face-glyph.js`: shared FACE_SIG mirror of `src/face-gesture.ts` plus `paintFaceGlyph`. Consumed by `js/cube-scene.js` for through-cube-visible ghost decals with a display-face remap and transient face-turn cue, and by `js/state-ui.js` for the retrospective active-card glyph. The painter draws two unlabeled underlined move marks per face; do not reintroduce camera-side glyph flipping or face letters.
 - `interruption/`: optional `?intrusions=1` overlay package. `index.js` owns DOM, injected CSS, pressure state machine, generated/video playback, debug keys, and targeting canvas; `config.js` owns tunables; `clips.js` owns clip metadata. It is wired only from `js/main.js`.
 
 ## Read before editing
@@ -66,5 +68,5 @@ After dashboard changes, verify at `http://localhost:3000`:
 - `../test/dashboard-ghost.test.ts`: static guard that beta-cosmo keeps ghost C geometry fixed in local slots, alpha-cosmo walks C identities by `state.cAssignments`, active C highlighting resolves from the active local slot in beta, and the alpha/beta dashboard toggle posts `set_mode.cosmology`.
 - `../test/dashboard-mac-privacy.test.ts`: static guard that served dashboard surfaces do not hardcode, prefill, or persist cube MAC addresses.
 - `../test/interruption-layer.test.ts`: static guard that the interruption layer stays feature-flagged, detachable, self-styled, and wired only through `js/main.js`.
-- `../test/dashboard-ui.test.ts`: static guard that the title-toggle "performance mode" leaves live K-vertex telemetry labels visible (no `setVertexInfoVisible` shutoff path), so per-vertex intensity / density / duration stays readable when chrome is hidden.
+- `../test/dashboard-ui.test.ts`: static guard that the title-toggle "performance mode" leaves live K-vertex telemetry labels visible (no `setVertexInfoVisible` shutoff path), so per-vertex intensity / density / duration stays readable when chrome is hidden; also guards the optional spectrogram layer controls and module contracts.
 - `../test/transport-backpressure.test.ts`: static guard that relay/browser WS backpressure sheds low-priority gyro telemetry without adding a move-drop path.

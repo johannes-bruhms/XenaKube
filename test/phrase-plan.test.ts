@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
 import { XenaKubeEngine } from '../src/engine.js';
-import { PhrasePlanner, phrasePlanSummary } from '../src/phrase-plan.js';
+import { PhrasePlanner, phrasePlanSummary, type PhrasePlan } from '../src/phrase-plan.js';
 import { ComplexType, type XenaKubeState } from '../src/types.js';
+import {
+  HALF_TURN_GESTURE_DURATION_SEC,
+  HALF_TURN_GESTURE_EXPR,
+  HALF_TURN_GESTURE_INTENSITY,
+  HALF_TURN_GESTURE_NOTE_MS,
+  HALF_TURN_GESTURE_VELOCITY,
+} from '../src/swam-mapping.js';
 import type { FaceMove } from '../src/face-gesture.js';
 import type { VoiceOutput } from '../src/voice-engine.js';
 
@@ -19,12 +26,26 @@ function stateWithRate(turnRate: number): XenaKubeState {
   };
 }
 
+function stateWithSieve(sieve: number[]): XenaKubeState {
+  return {
+    ...state(),
+    sieve,
+  };
+}
+
 function voice(complex: ComplexType, face: FaceMove | null = 'R'): VoiceOutput {
   return {
     mode: 'sequential',
     face,
+    halfTurn: false,
     active: [{ vertexIndex: 0, complex, params: baseParams }],
   };
+}
+
+function firstMainPitch(plan: PhrasePlan): number {
+  const evt = plan.events.find(e => e.kind === 'noteOn' && e.isCompanion !== true);
+  if (!evt || evt.kind !== 'noteOn') throw new Error('missing main noteOn');
+  return evt.pitch;
 }
 
 describe('PhrasePlanner', () => {
@@ -91,6 +112,65 @@ describe('PhrasePlanner', () => {
     expect(plan.expected.companionNoteOnCount).toBe(0);
   });
 
+  it('does not pin flat and sustained complex anchors to the middle sieve register', () => {
+    const wide = stateWithSieve([0, 12, 24, 36, 48]);
+    const anchored = [
+      ComplexType.OrderedCloudFlat,
+      ComplexType.IonizedAtom,
+      ComplexType.OrderedSlidingFlat,
+      ComplexType.Atom,
+    ];
+
+    for (const complex of anchored) {
+      const lowPlan = new PhrasePlanner({ rng: () => 0, now: () => 1000 })
+        .planVoiceOutput(voice(complex, 'R'), wide)[0];
+      const highPlan = new PhrasePlanner({ rng: () => 0.999, now: () => 1000 })
+        .planVoiceOutput(voice(complex, 'R'), wide)[0];
+
+      expect(firstMainPitch(lowPlan), `C${complex} low anchor`).toBeLessThanOrEqual(48);
+      expect(firstMainPitch(highPlan), `C${complex} high anchor`).toBeGreaterThanOrEqual(80);
+    }
+  });
+
+  it("does not let U' force C2 into a high descending run", () => {
+    const wide = stateWithSieve([0, 12, 24, 36, 48]);
+    const plan = new PhrasePlanner({ rng: () => 0, now: () => 1000 })
+      .planVoiceOutput(voice(ComplexType.OrderedCloudAscDesc, "U'"), wide)[0];
+    const mainPitches = plan.events
+      .filter(e => e.kind === 'noteOn' && e.isCompanion !== true)
+      .map(e => (e.kind === 'noteOn' ? e.pitch : 0));
+
+    expect(plan.faceTranspose).toBe(0);
+    expect(mainPitches[0]).toBe(36);
+    expect(mainPitches[1]).toBeGreaterThan(mainPitches[0]);
+  });
+
+  it('plans half-turn punctuation as short loud assertive material regardless of C or face', () => {
+    const planner = new PhrasePlanner({ rng: () => 0, now: () => 1000 });
+    const out = voice(ComplexType.OrderedSlidingFlat, "U'");
+    out.halfTurn = true;
+    out.active[0].params = { density: 0.1, intensity: 'ppp', duration: 5 };
+
+    const plan = planner.planVoiceOutput(out, stateWithSieve([0, 12, 24]))[0];
+    const noteOns = plan.events.filter(e => e.kind === 'noteOn');
+    const noteOffs = plan.events.filter(e => e.kind === 'noteOff');
+    const expr = plan.events.find(e => e.kind === 'exprShape');
+
+    expect(plan.halfTurn).toBe(true);
+    expect(plan.durationSource).toBe('half-turn');
+    expect(plan.durationSec).toBe(HALF_TURN_GESTURE_DURATION_SEC);
+    expect(plan.intensity).toBe(HALF_TURN_GESTURE_INTENSITY);
+    expect(plan.faceEnvelope).toBe('half-turn');
+    expect(expr?.kind).toBe('exprShape');
+    if (expr?.kind === 'exprShape') expect(expr.peakExpr).toBe(HALF_TURN_GESTURE_EXPR);
+    expect(noteOns).toHaveLength(2);
+    expect(noteOns.some(e => e.kind === 'noteOn' && e.isCompanion === true)).toBe(true);
+    expect(noteOns.every(e => e.kind === 'noteOn' && e.velocity >= Math.round(HALF_TURN_GESTURE_VELOCITY * 0.9))).toBe(true);
+    expect(noteOffs.every(e => e.tMs === HALF_TURN_GESTURE_NOTE_MS)).toBe(true);
+    expect(plan.expected.bendStepCount).toBe(0);
+    expect(plan.expected.companionNoteOnCount).toBe(1);
+  });
+
   it('C5 plans wild gliss bends and re-voiced in-range companions', () => {
     const planner = new PhrasePlanner({ rng: () => 0, now: () => 1000 });
     const plan = planner.planVoiceOutput(voice(ComplexType.AtaxicSliding, 'R'), state())[0];
@@ -126,6 +206,27 @@ describe('PhrasePlanner', () => {
     }
   });
 
+  it('caps C2 scheduled note-ons at 10 n/s after turn-rate pressure and dyads', () => {
+    const planner = new PhrasePlanner({ rng: () => 0.01, now: () => 1000 });
+    const out = voice(ComplexType.OrderedCloudAscDesc, 'L');
+    out.active[0].params = { ...out.active[0].params, duration: 4 };
+
+    const plan = planner.planVoiceOutput(out, stateWithRate(3.0))[0];
+    expect(plan.expected.noteOnCount).toBeLessThanOrEqual(Math.floor(plan.durationSec * 10));
+  });
+
+  it('keeps C2 slow-turn main onsets around 3-4 n/s', () => {
+    const planner = new PhrasePlanner({ rng: () => 0.99, now: () => 1000 });
+    const out = voice(ComplexType.OrderedCloudAscDesc, 'L');
+    out.active[0].params = { ...out.active[0].params, duration: 4 };
+
+    const plan = planner.planVoiceOutput(out, stateWithRate(0.3))[0];
+    const mainNoteOns = plan.events.filter(e => e.kind === 'noteOn' && e.isCompanion !== true);
+
+    expect(mainNoteOns.length).toBeGreaterThanOrEqual(Math.floor(plan.durationSec * 3));
+    expect(mainNoteOns.length).toBeLessThanOrEqual(Math.ceil(plan.durationSec * 4));
+  });
+
   it('summarizes plan counts for dashboard and Max audit logs', () => {
     const planner = new PhrasePlanner({ rng: () => 0.5, now: () => 1000 });
     const plan = planner.planVoiceOutput(voice(ComplexType.Atom, 'R'), state())[0];
@@ -135,5 +236,13 @@ describe('PhrasePlanner', () => {
     expect(summary).toContain('C8');
     expect(summary).toContain(`events=${plan.events.length}`);
     expect(summary).toContain(`noteons=${plan.expected.noteOnCount}`);
+  });
+
+  it('summarizes half-turn plans for dashboard and Max audit logs', () => {
+    const planner = new PhrasePlanner({ rng: () => 0.5, now: () => 1000 });
+    const out = voice(ComplexType.Atom, 'R');
+    out.halfTurn = true;
+    const plan = planner.planVoiceOutput(out, state())[0];
+    expect(phrasePlanSummary(plan)).toContain('half-turn=1');
   });
 });

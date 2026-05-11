@@ -406,6 +406,7 @@ var state = {
 	faceOffVelOverride: null,
 	faceReleaseMult: 1.0,
 	currentPlanId: 0,
+	halfTurn: false,
 
 	// Cube algorithm / last-voice routing
 	lastAllocatedInstance: 0
@@ -481,11 +482,13 @@ function makeInstance(id) {
 		faceDurationMult: null,
 		faceTranspose: 0,
 		faceEnvelope: null,      // 'pluck'|'swell'|'stab'|'hairpin-up'|'hairpin-down'|'fade'|'burst'|null — drives phrase count + expr shape
-		faceMotion: null,        // 'static'|'up'|'down'|'oscillate'|null — drives sieve-walker direction
+		faceMotion: null,        // reserved face metadata; does not drive pitch direction
 		faceEnvProfile: null,
 		faceOffVelOverride: null,
 		faceReleaseMult: 1.0,
+		halfTurn: false,
 		planId: 0,
+		forceComplexSetup: false,
 
 		// Expression targets
 		baseExpr: 0,
@@ -1603,19 +1606,11 @@ function setupComplex(inst, complexType) {
 // ================================================================
 function pickPitch(complexType, inst) {
 	var s = state.sieve;
-	var cmx = COMPLEX[complexType];
-	var reg = cmx && cmx.register;
-	var lo, hi;
-	var faceTr = inst ? inst.faceTranspose : (state.faceTranspose || 0);
-	if (reg) {
-		lo = Math.max(CELLO_MIN, reg.lo);
-		hi = Math.min(CELLO_MAX, reg.hi);
-	}
-	if (s.length === 0) return foldToRange(36 + faceTr, lo, hi);
+	if (s.length === 0) return foldToRange(36);
 
 	var pitch;
 	switch (complexType) {
-		case 1: case 4: case 5:
+		case 1: case 3: case 4: case 5: case 7: case 8:
 			pitch = s[Math.floor(Math.random() * s.length)];
 			break;
 
@@ -1627,14 +1622,10 @@ function pickPitch(complexType, inst) {
 			state.sieveIdx = clamp(state.sieveIdx, 0, s.length - 1);
 			break;
 
-		case 3: case 7: case 8:
-			pitch = s[Math.floor(s.length / 2)];
-			break;
-
 		default:
 			pitch = s[0];
 	}
-	return foldToRange(pitch + faceTr, lo, hi);
+	return foldToRange(pitch);
 }
 
 function foldToRange(pitch, lo, hi) {
@@ -1643,6 +1634,61 @@ function foldToRange(pitch, lo, hi) {
 	while (pitch < lo) pitch += 12;
 	while (pitch > hi) pitch -= 12;
 	return clamp(pitch, lo, hi);
+}
+
+// ================================================================
+// HALF-TURN PUNCTUATION
+// ================================================================
+function setupHalfTurnGesture(inst) {
+	setPlayMode(inst, "bow");
+	setHarmonics(inst, HARMONICS.OFF);
+	setTremolo(inst, TREMOLO.OFF);
+	setBowPolyphony(inst, BOW_POLY.DOUBLE_HOLD);
+	cancelCCRamp(inst, CC.EXPRESSION);
+	cancelCCRamp(inst, CC.TREMOLO_RATE);
+	cancelCCRamp(inst, CC.BOW_POSITION);
+	cancelCCRamp(inst, CC.BOW_PRESSURE);
+	inst.faceEnvelope = "half-turn";
+	inst.faceMotion = null;
+	inst.faceEnvProfile = null;
+	inst.faceOffVelOverride = 110;
+	inst.faceReleaseMult = 0.5;
+	inst.phraseArcDir = null;
+	inst.peakExpr = HALF_TURN_GESTURE_EXPR;
+	inst.bowPosBase = clampBowPosition(HALF_TURN_GESTURE_BOW_POSITION);
+	inst.bowPressureBase = HALF_TURN_GESTURE_BOW_PRESSURE;
+	ccForce(inst, CC.BOW_POSITION, inst.bowPosBase);
+	ccForce(inst, CC.BOW_PRESSURE, inst.bowPressureBase);
+	ccForce(inst, CC.PORTAMENTO_ON, 0);
+	ccForce(inst, CC.PORTAMENTO_TIME, 0);
+	ccForce(inst, CC.EXPRESSION, HALF_TURN_GESTURE_EXPR);
+	// Punctuation temporarily overrides selectors while preserving the original
+	// complex number for MIDI echo. Force full setup on the next normal voice
+	// even if it repeats the same complex.
+	inst.forceComplexSetup = true;
+}
+
+function phraseHalfTurn(inst, vel, dur) {
+	var p = pickPitch(1, inst);
+	var companion = foldToRange(p + 7, DOUBLE_STOP_ROLL_MIN, DOUBLE_STOP_ROLL_MAX);
+	var noteMs = Math.min(Math.round(dur * 1000), HALF_TURN_GESTURE_NOTE_MS);
+	scheduleAt(inst, 0, function() {
+		noteOn(inst, p, vel);
+		inst.activeNotes.push(p);
+		if (companion !== p) {
+			noteOn(inst, companion, Math.round(vel * 0.92), true);
+			inst.activeNotes.push(companion);
+		}
+	});
+	scheduleAt(inst, noteMs, function() {
+		noteOff(inst, p, 110);
+		removeActiveNote(inst, p);
+		if (companion !== p) {
+			noteOff(inst, companion, 110);
+			removeActiveNote(inst, companion);
+		}
+	});
+	scheduleRelease(inst, dur);
 }
 
 // ================================================================
@@ -1818,7 +1864,7 @@ var ARC_CEIL  = 1.00;
 //
 // **C2 EXCLUSION (2026-05-07)**: C2 is a directional scalar run, not a
 // sustained complex. A phrase-wide CC 11 ramp under detache notes makes
-// it audibly indistinguishable from C3 (constant-register cloud). C2
+// it audibly indistinguishable from C3 (local-anchor cloud). C2
 // realizes the phrase arc PER-NOTE inside `phraseC2` (velocity + CC 11
 // + bowPosBase shaped by `phraseArcDirection(inst)`). CC 17 is sampled
 // once per note and held. The dispatch at handleVoice short-circuits to
@@ -2741,9 +2787,8 @@ function intensityDensity(inst) {
 // Commit the shared sieve walker to one direction for a phrase of `count`
 // notes (used by C2 / C6). Prevents mid-phrase direction flips at
 // boundaries so each phrase reads unambiguously ascending or descending.
-// A face-motion override forces the direction (reseeding the index to the
-// appropriate boundary if there isn't runway); 'static' / 'oscillate' /
-// null fall back to the default auto-flip-at-boundary behaviour.
+// Optional caller-directed motion can force the direction, but live face
+// paths pass null so face grammar does not force pitch direction.
 function commitSieveWalk(count, motion) {
 	var s = state.sieve;
 	if (s.length === 0) return;
@@ -2850,7 +2895,7 @@ function phraseC1(inst, vel, dur) {
 }
 
 // C2: OrderedCloudAscDesc — directional scalar run, NOT a sustained
-// long-tone cloud. Differentiated from C3 (constant-register hover) and
+// long-tone cloud. Differentiated from C3 (local-anchor hover) and
 // C7 (drifting sustain) by audible per-note motion through the sieve.
 // Pre-2026-05-07 phraseC2 was a slow legato cloud with 50% double-stops
 // + phrase-wide CC 11 arc; in practice that read identically to C3, so
@@ -2860,10 +2905,10 @@ function phraseC1(inst, vel, dur) {
 // Density (rate-driven, tempo-curved, turn-rate-aware): tempoCurve(u)
 // returns absolute rate in notes/sec, with endpoints loRate / hiRate
 // derived from `turnRatePressure()` ∈ [0,1]:
-//   • turnP=0 (slow turning): range = [4, 8] notes/sec.
-//   • turnP=1 (fast turning): range = [6, 12] notes/sec.
-// Span ratio is held constant at 2× across all turn rates so accel/rit
-// remains audible without snapping into a steep density surge. Curve is
+//   • turnP=0 (slow turning): range = [3, 4] notes/sec.
+//   • turnP=1 (fast turning): range = [5, 10] notes/sec.
+// The within-phrase span grows with pressure, making fast turns audibly
+// denser instead of merely nudging the endpoints. Curve is
 // EXPONENTIAL in rate (geometric):
 // each unit of u multiplies rate by a fixed factor — linear-in-log-rate
 // matches musical tempo perception. Per-phrase total count = round(dur
@@ -2927,11 +2972,11 @@ function phraseC1(inst, vel, dur) {
 // C2 within-phrase note rate (notes/sec) endpoints. The tempo curve
 // spans from `loRate` (slow point) to `hiRate` (fast point); both
 // scale with turn-rate pressure (`turnRatePressure()` ∈ [0, 1]):
-//   • turnP=0 (slow turning): range = [C2_RATE_MIN=4, C2_RATE_MIN×SPAN=8].
-//   • turnP=1 (fast turning): range = [C2_RATE_MAX/SPAN=6, C2_RATE_MAX=12].
-// Span ratio is held constant at C2_RATE_SPAN_RATIO = 2 across all turn
-// rates, so the within-phrase accel/rit is always a 2× swing — audible
-// but less steep than the prior 3× curve. Replaces the previous baseRate × tempo-
+//   • turnP=0 (slow turning): range = [C2_RATE_MIN=3, C2_RATE_LOW_MAX=4].
+//   • turnP=1 (fast turning): range = [C2_RATE_FAST_MIN=5, C2_RATE_MAX=10].
+// The span grows from ~1.33× to 2× as turn pressure rises, making the
+// pressure change audible while preserving a clear 10 n/s ceiling.
+// Replaces the previous baseRate × tempo-
 // multiplier model: turn-rate scaling now lives in the endpoints, not
 // in a separate `rateDensityMultiplier(2)` layer (one source of truth).
 //
@@ -2944,9 +2989,13 @@ function phraseC1(inst, vel, dur) {
 // Linear-in-log-rate matches musical tempo perception (each unit of w
 // multiplies rate by a fixed factor). The curve completes by phrase
 // midpoint, then holds its terminal rate through the phrase tail.
-var C2_RATE_MIN = 4;
-var C2_RATE_MAX = 12;
-var C2_RATE_SPAN_RATIO = 2.0;
+var C2_RATE_MIN = 3;
+var C2_RATE_LOW_MAX = 4;
+var C2_RATE_FAST_MIN = 5;
+// Final post-turn-rate-pressure ceiling for the C2 local main-note tempo.
+// phraseC2 also gates dyad companions so total scheduled note-ons stay
+// within duration * C2_RATE_MAX. Do not apply a later C2 density multiplier.
+var C2_RATE_MAX = 10;
 // Fraction of phrase time by which the C2 tempo curve completes. 0.5
 // means accel reaches fast, rit reaches slow, and hairpin tempo returns
 // to its edge rate halfway through the phrase; the back half holds.
@@ -2986,11 +3035,14 @@ var C2_MIN_PEAK_EXPR = 46;
 var C2_RING_MIN_MS = 120;
 var C2_RING_MAX_MS = 320;
 
-// Intentional double-stop probability per note. C3 (constant-register
+// Intentional double-stop probability per note. C3 (local-anchor
 // cloud) uses 0.50 because dyads thicken its hovering texture; C2 is a
 // directional run where dyads should accent rather than dominate, so
 // 0.30 reads as occasional cellistic chord-strikes during the scale.
-// First note (i==0) is always solo — keeps the run's anchor unambiguous.
+// C2 dyads are additionally capped by the phrase note-on budget derived
+// from C2_RATE_MAX, so companions cannot push the total note-on rate over
+// the requested ceiling. First note (i==0) is always solo — keeps the
+// run's anchor unambiguous.
 var C2_DOUBLE_STOP_PROB = 0.30;
 
 // Guard between a double-stop note's scheduled noteOffs and the next
@@ -3021,14 +3073,12 @@ var C2_DOUBLE_STOP_GUARD_MS = 5;
 // time inside each scheduled task so articulation choice (legato vs
 // detache emergence) is independent of tempo curve.
 function buildC2Tempo(arcDir, dur, turnP) {
-	// Turn-rate-aware endpoints. SPAN_RATIO held constant across turn
-	// rates so within-phrase swing is always 2× — audible accel/rit
-	// without the prior steep density surge.
-	var loRate = C2_RATE_MIN +
-	    turnP * (C2_RATE_MAX / C2_RATE_SPAN_RATIO - C2_RATE_MIN);
-	var hiRate = C2_RATE_MIN * C2_RATE_SPAN_RATIO +
-	    turnP * (C2_RATE_MAX - C2_RATE_MIN * C2_RATE_SPAN_RATIO);
-	var spanFactor = hiRate / loRate;  // ≈ C2_RATE_SPAN_RATIO
+	// Turn-rate-aware endpoints. Slow pressure sits around 3–4 n/s;
+	// full pressure reaches 5–10 n/s with a hard 10 n/s ceiling.
+	var loRate = C2_RATE_MIN + turnP * (C2_RATE_FAST_MIN - C2_RATE_MIN);
+	var hiRate = Math.min(C2_RATE_MAX,
+	    C2_RATE_LOW_MAX + turnP * (C2_RATE_MAX - C2_RATE_LOW_MAX));
+	var spanFactor = hiRate / loRate;
 
 	var dirSign = 0;       // +1 = accel, -1 = rit (linear cases)
 	var triangle = false;  // hairpin-up / hairpin-down
@@ -3104,7 +3154,7 @@ function phraseC2(inst, vel, dur) {
 	var noteTimes = tempo.noteTimes;
 	var durMs = dur * 1000;
 
-	commitSieveWalk(count, inst.faceMotion);
+	commitSieveWalk(count, null);
 
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
 	var peakExpr = inst.peakExpr || 64;
@@ -3149,6 +3199,8 @@ function phraseC2(inst, vel, dur) {
 	var noteDurMs = new Array(count);
 	var isDouble = new Array(count);
 	var bowPressureVals = new Array(count);
+	var noteOnBudget = Math.max(count, Math.floor(dur * C2_RATE_MAX));
+	var doubleSlotsRemaining = noteOnBudget - count;
 	var detacheCount = 0;
 	var doubleCount = 0;
 	for (var i = 0; i < count; i++) {
@@ -3156,7 +3208,8 @@ function phraseC2(inst, vel, dur) {
 		var spacingToNext = nextOnAbs - noteOnAbs[i];
 		ringMs[i] = C2_RING_MIN_MS + Math.random() * (C2_RING_MAX_MS - C2_RING_MIN_MS);
 		// First note (i==0) always solo — keeps the run's anchor unambiguous.
-		isDouble[i] = (i > 0) && (Math.random() < C2_DOUBLE_STOP_PROB);
+		isDouble[i] = (i > 0) && doubleSlotsRemaining > 0 && (Math.random() < C2_DOUBLE_STOP_PROB);
+		if (isDouble[i]) doubleSlotsRemaining--;
 		var cap = isDouble[i] ? (spacingToNext - C2_DOUBLE_STOP_GUARD_MS) : spacingToNext;
 		noteDurMs[i] = Math.max(40, Math.round(Math.min(ringMs[i], cap)));
 		bowPressureVals[i] = clamp(Math.round(bowPressBase + rrand(-C2_BOW_PRESSURE_JITTER, C2_BOW_PRESSURE_JITTER)), 1, 127);
@@ -3235,7 +3288,7 @@ function phraseC2(inst, vel, dur) {
 	scheduleRelease(inst, dur);
 }
 
-// C3: OrderedCloudFlat — legato rebows hovering at constant register. D43:
+// C3: OrderedCloudFlat — legato rebows hovering around a phrase-local anchor. D43:
 // ~40% double-stop rate. C3 is the most sustained-flat complex, so double
 // stops here read as the cleanest "held interval" effect. Each held note
 // also owns a CC 16 / CC 17 bow-motion ramp that begins at note onset;
@@ -3304,7 +3357,7 @@ function scheduleC3BowMotion(inst, noteDurMs, exprAtOn) {
 	inst.c3BowMotionMaxRate = Math.max(inst.c3BowMotionMaxRate, speed);
 }
 
-// C4: IonizedAtom — harmonic attacks clustered near central pitch with
+// C4: IonizedAtom — harmonic attacks clustered near a phrase-local pitch with
 // random-timed arrival across the phrase ("atom + ionized timing")
 //
 // Per-note bow motion: each scheduled C4 note seeds a fresh CC 16
@@ -3319,11 +3372,7 @@ function scheduleC3BowMotion(inst, noteDurMs, exprAtOn) {
 // steal so an in-flight ramp doesn't leak into the next voice's baseline.
 function phraseC4(inst, vel, dur) {
 	var velCurve = (inst.faceEnvProfile && inst.faceEnvProfile.velCurve) || 'flat';
-	var s = state.sieve;
-	var base = (s.length > 0) ? s[Math.floor(s.length / 2)] : 60;
-	var faceTr = inst.faceTranspose || 0;
-	var loReg = CELLO_MIN;
-	var hiReg = CELLO_MAX;
+	var base = pickPitch(4, inst);
 	// User request: a 4-second C4 should stream harmonics across the WHOLE
 	// 4 seconds, not produce 2-5 quick attacks scattered random-uniformly
 	// (which can all cluster in the first half). Now: rate-driven count
@@ -3356,7 +3405,7 @@ function phraseC4(inst, vel, dur) {
 				for (var k = 0; k < clusterSize; k++) {
 					(function() {
 						var pjitter = rrand(-2, 2) + (k > 0 ? rrand(2, 5) : 0);
-						var p = foldToRange(base + faceTr + pjitter, loReg, hiReg);
+						var p = foldToRange(base + pjitter);
 						var v = clamp(humanVel(vel * stepVelScale(velCurve, idx, stepCount)) - 15, 25, 100);
 						// Capture the humanised pitch once: noteOn /
 						// activeNotes / noteOff must all reference the SAME
@@ -3583,7 +3632,7 @@ function phraseC6(inst, vel, dur) {
 	var tailEnd = Math.max(FIRST_GLISS_MS + 200, durMs * 0.9);
 	var slideTimes = glissSchedule(requestedCount - 1, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
 	var totalCount = 1 + slideTimes.length;
-	commitSieveWalk(totalCount, inst.faceMotion);
+	commitSieveWalk(totalCount, null);
 
 	var anchorPitch = pickPitch(6, inst);
 	var lastPitchRef = { p: anchorPitch };
@@ -3643,17 +3692,14 @@ function phraseC6(inst, vel, dur) {
 	scheduleRelease(inst, dur);
 }
 
-// C7: sustained + micro-drifts — deep breath-like floating. D43: first drift
-// fires at FIRST_GLISS_MS so the character reads as "anchor with breath-drift"
+// C7: sustained + micro-drifts — deep breath-like floating. D53: first drift
+// fires at FIRST_GLISS_MS_C7 so the character reads as "anchor with breath-drift"
 // immediately. D45: drifts spaced ≥ MIN_GLISS_SPACING_MS so SWAM completes
 // each slide before the next begins. D42: isSingle faces still produce ≥1
-// drift — the gliss invariant outranks envelope collapse. Face motion
-// up/down biases direction; burst's countMult thickens the drift count.
+// drift — the gliss invariant outranks envelope collapse. Burst's countMult
+// thickens the drift count; face motion does not force pitch direction.
 function phraseC7(inst, vel, dur) {
 	var isSingle = (inst.faceEnvProfile && inst.faceEnvProfile.isSingle) === true;
-	var cmx7 = COMPLEX[7];
-	var regLo = (cmx7 && cmx7.register) ? cmx7.register.lo : CELLO_MIN;
-	var regHi = (cmx7 && cmx7.register) ? cmx7.register.hi : CELLO_MAX;
 	var p1 = pickPitch(7, inst);
 	// D72.4 — anchor uses exact integer (no humanPitch) so first bendStep's
 	// heldSource lookup matches. Track lastPitchRef so subsequent drifts'
@@ -3676,7 +3722,6 @@ function phraseC7(inst, vel, dur) {
 	if (!isSingle) {
 		driftCount = Math.min(6, Math.max(2, Math.round(driftCount * rateDensityMultiplier(inst.activeComplex))));
 	}
-	var motionDir = (inst.faceMotion === 'up') ? 1 : (inst.faceMotion === 'down') ? -1 : 0;
 	var durMs = dur * 1000;
 	// D53 — C7 first drift fires at FIRST_GLISS_MS_C7 (= 30 ms) so the slide
 	// kicks in almost immediately after the anchor, distinguishing C7's
@@ -3691,12 +3736,10 @@ function phraseC7(inst, vel, dur) {
 	var tailEnd = Math.max(FIRST_GLISS_MS_C7 + 250, durMs * 0.88);
 	var times = wildGlissSchedule(driftCount, FIRST_GLISS_MS_C7, tailEnd, MIN_GLISS_SPACING_MS);
 
-	// D53 — drift sign alternates per drift index (when face motion is
-	// neutral) so the trajectory rocks around the anchor in zigzag, evoking
+	// D53 — drift sign alternates per drift index so the trajectory rocks
+	// around the anchor in zigzag, evoking
 	// inhale/exhale rather than C6's monotonic sieve walk. Random starting
-	// direction so phrases don't always begin the same way. When face motion
-	// has a bias (up/down), drifts go monotonically in that direction —
-	// face semantics override the rocking pattern. Magnitude rrand(1, 2)
+	// direction so phrases don't always begin the same way. Magnitude rrand(1, 2)
 	// (was rrand(-3, 3)): caps swings between consecutive drifts at 4
 	// semitones, reads as "drift" not "wandering slide", and average ±1.2
 	// keeps the character subtle. Targets are anchor-relative (p1 + sign *
@@ -3710,13 +3753,11 @@ function phraseC7(inst, vel, dur) {
 		var bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
 		(function(tMs, idx, bd) {
 			scheduleAt(inst, tMs, function() {
-				var sign = (motionDir !== 0)
-					? motionDir
-					: phraseStartSign * ((idx % 2 === 0) ? 1 : -1);
+				var sign = phraseStartSign * ((idx % 2 === 0) ? 1 : -1);
 				var mag = rrand(1, 2);
 				// Clamp only to SWAM's global cello pitch window. Per-complex
 				// register ranges are intentionally disabled in COMPLEX.
-				var p2 = clamp(p1 + sign * mag, regLo, regHi);
+				var p2 = clamp(p1 + sign * mag, CELLO_MIN, CELLO_MAX);
 				lastPitchRef.p = glissStep(inst, lastPitchRef.p, p2, 1, undefined, undefined, bd);
 			});
 		})(times[i], i, bendDur);
@@ -3792,7 +3833,7 @@ function handleFace(face) {
 	}
 	state.faceEnvelope = sig.envelope;
 	state.faceArticulation = sig.articulation;
-	state.faceMotion = sig.motion;
+	state.faceMotion = null;
 
 	var profile = ENV_PROFILE[sig.envelope] || null;
 	state.faceEnvProfile = profile;
@@ -3801,29 +3842,29 @@ function handleFace(face) {
 	var offVel = ART_OFF_VEL[sig.articulation];
 	state.faceOffVelOverride = (offVel != null) ? offVel : null;
 
-	var spread = 12;
-	var nudge = MOTION_NUDGE[sig.motion] || 0;
-	if (sig.motion === "oscillate") {
-		nudge = (state.turnCount % 2 === 0) ? 2 : -2;
-	}
-	state.faceTranspose = Math.round(sig.registerBias * spread) + nudge;
+	state.faceTranspose = 0;
 }
 
 // ================================================================
 // VOICE EVENT — allocates an instance, snapshots global state onto it,
 // runs the phrase generator inside that instance.
 // ================================================================
-function handleVoice(vtxIdx, complexType, density, intensity, duration) {
+function handleVoice(vtxIdx, complexType, density, intensity, duration, halfTurnFlag) {
 	var pendingPlanId = state.currentPlanId | 0;
 	state.currentPlanId = 0;  // consume once so manual /xk/voice cannot inherit a stale audit id
 	if (state.frozen) return;
+	var halfTurn = (halfTurnFlag | 0) === 1;
 
 	// K_i owns the base material duration. Face moves reshape it with a
 	// multiplier; complex floors protect identity-bearing gestures from being
 	// compressed into unreadable fragments.
 	var incomingDuration = duration;
 	var durationSource = "vertex";
-	if (state.face !== null) {
+	if (halfTurn) {
+		duration = HALF_TURN_GESTURE_DURATION_SEC;
+		durationSource = "half-turn";
+		intensity = HALF_TURN_GESTURE_INTENSITY;
+	} else if (state.face !== null) {
 		if (state.faceDurationMult != null && state.faceDurationMult > 0) {
 			duration = incomingDuration * state.faceDurationMult;
 			durationSource = "vertex*face";
@@ -3833,8 +3874,8 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 			    Number(incomingDuration).toFixed(2));
 		}
 	}
-	var durationFloor = durationFloorForComplex(complexType);
-	if (duration < durationFloor) {
+	var durationFloor = halfTurn ? 0 : durationFloorForComplex(complexType);
+	if (!halfTurn && duration < durationFloor) {
 		duration = durationFloor;
 		durationSource += "+floor";
 	}
@@ -3849,6 +3890,7 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	state.density = density;
 	state.duration = duration;
 	state.intensity = intensity;
+	state.halfTurn = halfTurn;
 	var now = Date.now();
 	state.lastTurnTime = now;
 	state.lastVoiceTime = now;
@@ -3871,6 +3913,7 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	inst.faceEnvProfile   = state.faceEnvProfile;
 	inst.faceOffVelOverride = state.faceOffVelOverride;
 	inst.faceReleaseMult    = state.faceReleaseMult;
+	inst.halfTurn = halfTurn;
 	inst.planId = pendingPlanId;
 
 	// Preserve tail note for SWAM portamento when the incoming complex
@@ -3882,15 +3925,17 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	// KS sync guard (D28) — first N voice events after reset force-write
 	// KS regardless of diff.
 	var forcing = inst.ksForceCount > 0;
+	var forceComplexSetup = inst.forceComplexSetup === true;
 	if (forcing) {
 		inst.ksForceCount--;
 		inst.forceKS = true;
 	}
 
 	// Technique change — diff-fire KS via setupComplex
-	if (complexType !== inst.activeComplex || forcing) {
+	if (complexType !== inst.activeComplex || forcing || forceComplexSetup) {
 		setupComplex(inst, complexType);
 	}
+	inst.forceComplexSetup = false;
 
 	inst.forceKS = false;
 
@@ -3949,6 +3994,21 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration) {
 	inst.bowPosWrites = 0;
 	inst.bowPosReversals = 0;
 	inst.bowPosLastDir = 0;
+
+	if (halfTurn) {
+		inst.glissExpected = false;
+		inst.glissCompanionExpected = false;
+		inst.c3BowMotionExpected = false;
+		setupHalfTurnGesture(inst);
+		log("inst " + inst.id + " half-turn punctuation C" + complexType +
+		    " face=" + (state.face || "-") +
+		    " dur=" + duration.toFixed(2) + "s(" + durationSource + ")" +
+		    " int=" + intensity +
+		    " expr=" + HALF_TURN_GESTURE_EXPR +
+		    " vel=" + HALF_TURN_GESTURE_VELOCITY);
+		phraseHalfTurn(inst, HALF_TURN_GESTURE_VELOCITY, duration);
+		return;
+	}
 
 	var intMap = INTENSITY_MAP[intensity] || INTENSITY_MAP["mf"];
 	inst.baseExpr = intMap.expr;
@@ -4380,11 +4440,13 @@ function handleAlgorithm(name) {
 // ================================================================
 // PHRASE PLAN - relay shadow-plan audit stamp
 // ================================================================
-function handlePhrasePlan(planId, complexType, face, durationSec, eventCount, noteOnCount, bendStepCount, companionNoteOnCount) {
+function handlePhrasePlan(planId, complexType, face, durationSec, eventCount, noteOnCount, bendStepCount, companionNoteOnCount, halfTurnFlag) {
 	state.currentPlanId = planId | 0;
+	var halfTurn = (halfTurnFlag | 0) === 1;
 	log("phrasePlan P" + planId +
 	    " C" + complexType +
 	    " face=" + face +
+	    (halfTurn ? " half-turn=1" : "") +
 	    " dur=" + Number(durationSec).toFixed(2) + "s" +
 	    " events=" + eventCount +
 	    " noteons=" + noteOnCount +
@@ -4453,7 +4515,7 @@ function anything() {
 	var addr = messagename;
 	var args = arrayfromargs(arguments);
 
-	if      (addr === OSC.VOICE)         { handleVoice(args[0], args[1], args[2], args[3], args[4]); }
+	if      (addr === OSC.VOICE)         { handleVoice(args[0], args[1], args[2], args[3], args[4], args[5]); }
 	else if (addr === OSC.FACE)          { handleFace(args[0]); }
 	else if (addr === OSC.EXPR_TILT)     { handleExprTilt(args[0]); }
 	else if (addr === OSC.EXPR_SPIN)     { handleExprSpin(args[0]); }
@@ -4464,7 +4526,7 @@ function anything() {
 	else if (addr === OSC.RATE)          { handleRate(args[0]); }
 	else if (addr === OSC.SIEVE)         { handleSieve.apply(this, args); }
 	else if (addr === OSC.ALGORITHM)     { handleAlgorithm(args[0]); }
-	else if (addr === OSC.PHRASE_PLAN)   { handlePhrasePlan(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7]); }
+	else if (addr === OSC.PHRASE_PLAN)   { handlePhrasePlan(args[0], args[1], args[2], args[3], args[4], args[5], args[6], args[7], args[8]); }
 	else if (addr === OSC.SCRAMBLE)      { handleExprScramble(args[0]); }
 	else if (addr === OSC.PANIC)         { handlePanic(); }
 	else if (addr === OSC.TREM_LEARN)    { handleTremLearn(args[0]); }
@@ -4512,6 +4574,8 @@ function resetInstance(inst) {
 	inst.faceEnvProfile = null;
 	inst.faceOffVelOverride = null;
 	inst.faceReleaseMult = 1.0;
+	inst.halfTurn = false;
+	inst.forceComplexSetup = false;
 	inst.phraseArcDir = null;
 	inst.phraseArcStart = 0;
 	inst.phraseArcEnd = 0;
@@ -4607,6 +4671,7 @@ function bang() {
 	state.faceEnvProfile = null;
 	state.faceOffVelOverride = null;
 	state.faceReleaseMult = 1.0;
+	state.halfTurn = false;
 	state.currentPlanId = 0;
 	state.lastAllocatedInstance = 0;
 

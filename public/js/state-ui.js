@@ -41,8 +41,7 @@ const COMPLEX_SHORT = {
 
 const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.75, 'fff': 0.92 };
 
-// FACE_SIG canonical mirror lives in `./face-glyph.js` (shared with
-// cube-scene's ghost-face glyph sprites). Source of truth is
+// FACE_SIG canonical mirror lives in `./face-glyph.js`. Source of truth is
 // src/face-gesture.ts; the JS mirror exists because the browser bundle
 // can't import the engine's TS module directly.
 
@@ -123,10 +122,6 @@ export function init() {
     permSlots.push(slot);
   }
 
-  // Last-turned face glyph slot — single canvas in .active-cards. Painted
-  // by `update()` on every state broadcast that carries a face move; idle
-  // before the first face turn (paintEmptyGlyph). Companion to the 6
-  // predictive ghost-cube face glyphs: this one is retrospective.
   activeFaceGlyphCanvas = document.getElementById('active-face-glyph');
   if (activeFaceGlyphCanvas) {
     activeFaceGlyphCtx = activeFaceGlyphCanvas.getContext('2d');
@@ -240,14 +235,10 @@ export function update(state, move) {
       }
     }
 
-    // K/C-area face-signature glyph slot. Glyph shows the paired CW+CCW
-    // gesture archetype for the just-turned face; the apostrophe row lights
-    // when the move was primed (already encoded in the paint, not a state
-    // here). Half-turns / non-face moves reset to the empty placeholder.
     if (activeFaceGlyphCtx) {
-      const face = move[0];  // 'U' / 'L' / 'R' / 'F' / 'B' / 'D'
-      if (FACE_SIG[face] || FACE_SIG[face + "'"]) {
-        paintFaceGlyph(activeFaceGlyphCtx, face, { faceLetter: true });
+      const face = move[0];
+      if (FACE_SIG[move]) {
+        paintFaceGlyph(activeFaceGlyphCtx, face, { activeMove: move });
       } else {
         paintEmptyGlyph(activeFaceGlyphCtx);
       }

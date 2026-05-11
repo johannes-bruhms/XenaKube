@@ -40,6 +40,7 @@ var OSC = {
   MIDI_PANIC: "/xk/midi/panic",
   MIDI_BENDSTEP: "/xk/midi/bendstep",
   MIDI_EXPR: "/xk/midi/expr",
+  SPECTRUM_FRAME: "/xk/spectrum/frame",
   GAN_TURN: "/gan/turn",
   GAN_GYRO: "/gan/gyro"
 };
@@ -244,11 +245,11 @@ var ART_OFF_VEL = {
   iterative: 95
 };
 
-// ---------------- Motion → semitone nudge ------------------------
+// ---------------- Motion metadata (neutral for pitch) ------------
 var MOTION_NUDGE = {
   static: 0,
-  up: 2,
-  down: -2,
+  up: 0,
+  down: 0,
   oscillate: 0
 };
 
@@ -256,28 +257,28 @@ var MOTION_NUDGE = {
 var FACE_MAP = {
   U: {
     durationMult: 0.7,
-    registerBias: 0.8,
+    registerBias: 0,
     envelope: "pluck",
     articulation: "attack",
     motion: "up"
   },
   "U'": {
     durationMult: 1.7,
-    registerBias: 0.8,
+    registerBias: 0,
     envelope: "fade",
     articulation: "release",
     motion: "down"
   },
   D: {
     durationMult: 0.6,
-    registerBias: -0.8,
+    registerBias: 0,
     envelope: "stab",
     articulation: "attack",
     motion: "down"
   },
   "D'": {
     durationMult: 2.5,
-    registerBias: -0.8,
+    registerBias: 0,
     envelope: "hairpin-up",
     articulation: "sustained",
     motion: "static"
@@ -312,28 +313,28 @@ var FACE_MAP = {
   },
   F: {
     durationMult: 1.45,
-    registerBias: 0.3,
+    registerBias: 0,
     envelope: "swell",
     articulation: "sustained",
     motion: "up"
   },
   "F'": {
     durationMult: 1.45,
-    registerBias: 0.3,
+    registerBias: 0,
     envelope: "swell",
     articulation: "sustained",
     motion: "down"
   },
   B: {
     durationMult: 0.9,
-    registerBias: -0.3,
+    registerBias: 0,
     envelope: "pluck",
     articulation: "attack",
     motion: "static"
   },
   "B'": {
     durationMult: 2.25,
-    registerBias: -0.3,
+    registerBias: 0,
     envelope: "hairpin-down",
     articulation: "sustained",
     motion: "oscillate"
@@ -362,6 +363,25 @@ var COMPLEX_DURATION_FLOOR_SEC = {
   "7": 1,
   "8": 0.8
 };
+
+// ---------------- Half-turn punctuation --------------------------
+var HALF_TURN_WINDOW_MS = 150;
+
+var HALF_TURN_GESTURE_DURATION_SEC = 0.28;
+
+var HALF_TURN_GESTURE_INTENSITY = "fff";
+
+var HALF_TURN_GESTURE_EXPR = 127;
+
+var HALF_TURN_GESTURE_VELOCITY = 124;
+
+var HALF_TURN_GESTURE_NOTE_MS = 150;
+
+var HALF_TURN_GESTURE_RELEASE_MS = 60;
+
+var HALF_TURN_GESTURE_BOW_PRESSURE = 118;
+
+var HALF_TURN_GESTURE_BOW_POSITION = 18;
 
 // ---------------- Regime → attack/expr ramp multipliers ----------
 var REGIME_ATTACK_MULT = {

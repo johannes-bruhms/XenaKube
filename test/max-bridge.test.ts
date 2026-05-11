@@ -4,6 +4,10 @@ import { join } from 'node:path';
 
 describe('Max bridge invariants', () => {
   const source = readFileSync(join(process.cwd(), 'max', 'xk_swam.js'), 'utf8');
+  const spectrumHelper = readFileSync(join(process.cwd(), 'max', 'xk_spectrum.js'), 'utf8');
+  const pfftTestPatch = readFileSync(join(process.cwd(), 'max', 'pfft-test.maxpat'), 'utf8');
+  const pfftSpectrumPatch = readFileSync(join(process.cwd(), 'max', 'xk_pfft_spectrum.maxpat'), 'utf8');
+  const performancePatch = readFileSync(join(process.cwd(), 'max', 'xenakube_swam.maxpat'), 'utf8');
   const relayController = readFileSync(join(process.cwd(), 'max', 'relay-controller.js'), 'utf8');
   const phrasePlanSource = readFileSync(join(process.cwd(), 'src', 'phrase-plan.ts'), 'utf8');
 
@@ -43,6 +47,39 @@ describe('Max bridge invariants', () => {
     expect(source).not.toMatch(/emitMidi\(inst,\s*0xE0\s*\+\s*MIDI_CH/);
   });
 
+  it('keeps the optional spectrum helper schema-backed', () => {
+    expect(spectrumHelper).toContain('include("gen_includes.js");');
+    expect(spectrumHelper).toContain('OSC.SPECTRUM_FRAME');
+    expect(spectrumHelper).toContain('function frame()');
+    expect(spectrumHelper).toContain('function bins()');
+    expect(spectrumHelper).toContain('function rawbins()');
+    expect(spectrumHelper).toContain('function rawconfig(');
+    expect(spectrumHelper).toContain('[udpsend 127.0.0.1 57122]');
+    expect(spectrumHelper).not.toContain('/xk/spectrum/frame');
+  });
+
+  it('keeps the pfft spectrum test patch on stock Max objects feeding rawbins', () => {
+    expect(pfftTestPatch).toContain('pfft~ xk_pfft_spectrum 1024 4');
+    expect(pfftTestPatch).toContain('buffer~ xk_fft_mag @samps 1024');
+    expect(pfftTestPatch).toContain('receive~ xk_spectrum_tap');
+    expect(pfftTestPatch).toContain('prepend rawbins');
+    expect(pfftTestPatch).toContain('v8 xk_spectrum.js @autowatch 1');
+    expect(pfftTestPatch).toContain('udpsend 127.0.0.1 57122');
+    expect(pfftSpectrumPatch).toContain('fftin~ 1');
+    expect(pfftSpectrumPatch).toContain('cartopol~');
+    expect(pfftSpectrumPatch).toContain('poke~ xk_fft_mag');
+    expect(pfftSpectrumPatch).not.toMatch(/pipo|mubu/i);
+  });
+
+  it('keeps the performance-host spectrum sender aligned with the test harness', () => {
+    expect(performancePatch).toContain('XenaKube pfft spectrogram sender');
+    expect(performancePatch).toContain('pfft~ xk_pfft_spectrum 1024 4');
+    expect(performancePatch).toContain('buffer~ xk_fft_mag @samps');
+    expect(performancePatch).toContain('prepend rawbins');
+    expect(performancePatch).toContain('v8 xk_spectrum.js');
+    expect(performancePatch).toContain('udpsend 127.0.0.1 57122');
+  });
+
   it('keeps per-complex pitch ranges commented out in Max and the TS phrase planner', () => {
     const uncommentedMax = stripComments(source);
     const uncommentedPlanner = stripComments(phrasePlanSource);
@@ -52,6 +89,52 @@ describe('Max bridge invariants', () => {
     expect(phrasePlanSource).toContain('/* previous register: { lo: 60, hi: 84 } */');
     expect(uncommentedMax).not.toMatch(/\bregister\s*:\s*\{/);
     expect(uncommentedPlanner).not.toMatch(/\bregister\s*:\s*\{/);
+    expect(source).not.toMatch(/\bs\s*\[\s*Math\.floor\s*\(\s*s\.length\s*\/\s*2\s*\)\s*\]/);
+    expect(phrasePlanSource).not.toMatch(/\bs\s*\[\s*Math\.floor\s*\(\s*s\.length\s*\/\s*2\s*\)\s*\]/);
+  });
+
+  it('keeps face grammar out of live pitch/register selection', () => {
+    const handleFace = extractLastFunction('handleFace');
+    const pickPitch = extractLastFunction('pickPitch');
+    const phraseC2 = extractLastFunction('phraseC2');
+    const phraseC6 = extractLastFunction('phraseC6');
+    const phraseC7 = extractLastFunction('phraseC7');
+
+    expect(handleFace).toContain('state.faceTranspose = 0;');
+    expect(handleFace).toContain('state.faceMotion = null;');
+    expect(handleFace).not.toMatch(/registerBias\s*\*/);
+    expect(pickPitch).not.toMatch(/faceTr|faceTranspose/);
+    expect(phrasePlanSource).not.toMatch(/faceTranspose\(/);
+    expect(phraseC2).toContain('commitSieveWalk(count, null)');
+    expect(phraseC6).toContain('commitSieveWalk(totalCount, null)');
+    expect(phraseC7).not.toMatch(/faceMotion|motionDir/);
+  });
+
+  it('routes half-turn punctuation through a dedicated short assertive gesture', () => {
+    const handleVoice = extractLastFunction('handleVoice');
+    const phraseHalfTurn = extractLastFunction('phraseHalfTurn');
+    const setupHalfTurnGesture = extractLastFunction('setupHalfTurnGesture');
+    const router = extractLastFunction('anything');
+    const handlePhrasePlan = extractLastFunction('handlePhrasePlan');
+
+    expect(source).toContain('HALF_TURN_GESTURE_DURATION_SEC');
+    expect(source).toContain('HALF_TURN_GESTURE_INTENSITY');
+    expect(router).toContain('handleVoice(args[0], args[1], args[2], args[3], args[4], args[5])');
+    expect(handlePhrasePlan).toContain('half-turn=1');
+    expect(handleVoice).toContain('var halfTurn = (halfTurnFlag | 0) === 1;');
+    expect(handleVoice).toContain('durationSource = "half-turn";');
+    expect(handleVoice).toContain('setupHalfTurnGesture(inst);');
+    expect(handleVoice).toContain('phraseHalfTurn(inst, HALF_TURN_GESTURE_VELOCITY, duration);');
+    expect(handleVoice).toContain('inst.forceComplexSetup === true');
+    expect(setupHalfTurnGesture).toContain('setPlayMode(inst, "bow")');
+    expect(setupHalfTurnGesture).toContain('setBowPolyphony(inst, BOW_POLY.DOUBLE_HOLD)');
+    expect(setupHalfTurnGesture).toContain('ccForce(inst, CC.EXPRESSION, HALF_TURN_GESTURE_EXPR)');
+    expect(setupHalfTurnGesture).toContain('inst.forceComplexSetup = true;');
+    expect(phraseHalfTurn).toContain('noteOn(inst, p, vel)');
+    expect(phraseHalfTurn).toContain('noteOn(inst, companion, Math.round(vel * 0.92), true)');
+    expect(phraseHalfTurn).toContain('scheduleRelease(inst, dur)');
+    expect(phrasePlanSource).toContain("durationSource: DurationSource = isHalfTurn ? 'half-turn'");
+    expect(phrasePlanSource).toContain('this.phraseHalfTurn(ctx);');
   });
 
   it('keeps C5 wild gliss bends active and prevents bend-target companion masking', () => {
@@ -153,13 +236,19 @@ describe('Max bridge invariants', () => {
   });
 
   it('keeps C2 tempo tunables mirrored between Max and the TS phrase planner', () => {
-    for (const name of ['C2_RATE_MIN', 'C2_RATE_MAX', 'C2_RATE_SPAN_RATIO', 'C2_CURVE_END_U']) {
+    for (const name of ['C2_RATE_MIN', 'C2_RATE_LOW_MAX', 'C2_RATE_FAST_MIN', 'C2_RATE_MAX', 'C2_CURVE_END_U']) {
       expect(extractNumber(source, name)).toBe(extractNumber(phrasePlanSource, name));
     }
-    expect(extractNumber(source, 'C2_RATE_MIN')).toBe(4);
-    expect(extractNumber(source, 'C2_RATE_MAX')).toBe(12);
-    expect(extractNumber(source, 'C2_RATE_SPAN_RATIO')).toBe(2);
+    expect(extractNumber(source, 'C2_RATE_MIN')).toBe(3);
+    expect(extractNumber(source, 'C2_RATE_LOW_MAX')).toBe(4);
+    expect(extractNumber(source, 'C2_RATE_FAST_MIN')).toBe(5);
+    expect(extractNumber(source, 'C2_RATE_MAX')).toBe(10);
     expect(extractNumber(source, 'C2_CURVE_END_U')).toBe(0.5);
+    expect(source).toContain('var loRate = C2_RATE_MIN + turnP * (C2_RATE_FAST_MIN - C2_RATE_MIN);');
+    expect(source).toContain('C2_RATE_LOW_MAX + turnP * (C2_RATE_MAX - C2_RATE_LOW_MAX)');
+    expect(extractLastFunction('phraseC2')).toContain('var noteOnBudget = Math.max(count, Math.floor(dur * C2_RATE_MAX));');
+    expect(extractLastFunction('phraseC2')).toContain('doubleSlotsRemaining > 0');
+    expect(extractLastFunction('phraseC2')).not.toContain('rateDensityMultiplier');
     expect(source).toContain('var w = Math.min(1, u / C2_CURVE_END_U);');
     expect(phrasePlanSource).toContain('const w = Math.min(1, u / C2_CURVE_END_U);');
   });

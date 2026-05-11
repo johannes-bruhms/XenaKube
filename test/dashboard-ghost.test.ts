@@ -7,6 +7,7 @@ describe('Dashboard ghost cube invariants', () => {
   const dashboard = readFileSync(join(process.cwd(), 'public', 'dashboard.html'), 'utf8');
   const main = readFileSync(join(process.cwd(), 'public', 'js', 'main.js'), 'utf8');
   const stateUi = readFileSync(join(process.cwd(), 'public', 'js', 'state-ui.js'), 'utf8');
+  const faceGlyph = readFileSync(join(process.cwd(), 'public', 'js', 'face-glyph.js'), 'utf8');
 
   function extractFunction(name: string): string {
     const marker = `function ${name}(`;
@@ -44,17 +45,47 @@ describe('Dashboard ghost cube invariants', () => {
     expect(source).toContain('[GHOST SNAP FAIL]');
   });
 
-  it('advances face glyph rotations from dashboard state move', () => {
-    const update = extractFunction('update');
-
+  it('mounts face-signature glyphs with side remap and through-cube visibility', () => {
     expect(main).toContain('transportOn(\'state\', (data, move) => {');
     expect(main).toContain('cubeScene.update(data, move);');
 
-    expect(update).toContain('applyFaceTurnGlyphRotation(move);');
-    expect(source).toContain('const _faceTurnStates');
-    expect(source).toContain('const state = _faceTurnStates[face];');
-    expect(source).toContain('state.twist.setFromAxisAngle');
-    expect(source).toContain('state.mesh.quaternion.copy(state.base).multiply(state.twist);');
+    expect(source).toContain("const FACE_GLYPH_DISPLAY_FACE = {");
+    expect(source).toContain("L: 'F'");
+    expect(source).toContain("U: 'U'");
+    expect(source).toContain("D: 'D'");
+    expect(source).toContain('const FACE_GLYPH_BASE_TURNS = {');
+    expect(source).toContain('D: 2');
+    expect(source).toContain('paintFaceGlyph(ctx, displayFace, { compact: true, background: false });');
+    expect(source).toContain('side: THREE.DoubleSide');
+    expect(source).toContain('depthTest: false');
+    expect(source).toContain('const FACE_GLYPH_OPACITY = 0.66;');
+    expect(source).toContain('function updateFaceGlyphVisibility()');
+    expect(source).toContain('g.mat.opacity = visible ? FACE_GLYPH_OPACITY : 0;');
+    expect(source).toContain('g.mesh.visible = visible;');
+    expect(source).not.toContain('const facing =');
+    expect(source).not.toContain('_faceGlyphLocalCamera');
+    expect(source).toContain('const ghostFaceGlyphs = [];');
+    expect(source).toContain('const _faceTurnStates = {};');
+    expect(source).toContain('_faceTurnStates[meshFace] = glyph;');
+    expect(source).not.toContain('_faceTurnStates[displayFace] = glyph;');
+    expect(source).toContain('function applyFaceTurnGlyphRotation(move)');
+    expect(source).toContain("let turns = suffix.includes('2') ? 2 : -1;");
+    expect(source).toContain('if (suffix.includes("\'")) turns = -turns;');
+    expect(source).toContain('g.mesh.quaternion.copy(g.base).multiply(_faceGlyphTwist);');
+    expect(source).toContain('function finishFaceGlyphTurn(g)');
+    expect(source).toContain('setFaceGlyphTurn(g, 0);');
+    expect(source).toContain('if (!g.turning) return;');
+    expect(source).toContain('g.targetTurns = turns;');
+    expect(source).not.toContain('g.targetTurns += turns;');
+    expect(source).toContain('g.turning = true;');
+    expect(source).toContain('g.turning = false;');
+    expect(source).toContain('applyFaceTurnGlyphRotation(move);');
+    expect(dashboard).toContain('active-face-glyph');
+    expect(stateUi).toContain('paintFaceGlyph(activeFaceGlyphCtx, face, { activeMove: move });');
+    expect(faceGlyph).not.toContain('faceLetter');
+    expect(faceGlyph).not.toContain('fillText(face');
+    expect(faceGlyph).toContain('bottom underline baked into the texture');
+    expect(faceGlyph).toContain('ctx.lineTo(rowX + rowW * 0.82, row.y + rowH - H * 0.045);');
   });
 
   it('exposes the alpha/beta cosmology switch through the dashboard', () => {

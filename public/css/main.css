@@ -47,6 +47,26 @@
     z-index: 2;
   }
 
+  /* Adaptive cube wireframe layer. cube-scene.js projects structural
+     live/ghost lines into this SVG; each white stroke uses CSS `difference`
+     blending so it inverts only the pixels under the stroke. */
+  #cube-contrast-layer {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    height: 100vh;
+    display: block;
+    pointer-events: none;
+    z-index: 1;
+    overflow: visible;
+  }
+  #cube-contrast-layer line {
+    stroke: #fff;
+    stroke-linecap: round;
+    mix-blend-mode: difference;
+    vector-effect: non-scaling-stroke;
+  }
+
   /* Full-viewport cube canvas — background layer.
      Explicit width/height matter: a <canvas> is a replaced element with
      intrinsic 300×150 HTML attrs, and `position: fixed` with only inset
@@ -595,17 +615,13 @@
   .ovl-tl .vertex-grid, .ovl-tl .complex-grid { display: block !important; }
   .active-cards { display: flex; flex-direction: column; gap: 6px; }
 
-  /* Last-turned face-signature glyph slot. Single canvas painted by
-     state-ui.js on every face move via paintFaceGlyph() (face-glyph.js).
-     CSS render size is independent of the canvas attribute resolution
-     (256×256) — high-DPR sampling stays crisp. */
   .active-face-glyph {
-    width: 88px;
-    height: 88px;
+    width: 92px;
+    height: 92px;
     align-self: flex-start;
-    border: 1px solid var(--border);
+    border: 1px solid rgba(150, 230, 255, 0.28);
     border-radius: 4px;
-    background: rgba(10, 10, 15, 0.55);
+    background: rgba(5, 12, 18, 0.62);
   }
 
   .move-log {
@@ -919,6 +935,72 @@
     text-shadow: 0 0 6px rgba(74, 222, 128, 0.5);
   }
 
+  .visual-layer-row {
+    gap: 5px;
+  }
+  .layer-toggle-group {
+    flex: 1;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    min-width: 0;
+  }
+  .layer-toggle,
+  .record-action,
+  .record-mode {
+    font-family: inherit;
+    font-size: 10px;
+    font-weight: 700;
+    line-height: 1.1;
+    color: var(--dim);
+    background: transparent;
+    border: 1px solid var(--border);
+    border-radius: 3px;
+  }
+  .layer-toggle,
+  .record-action {
+    padding: 4px 5px;
+    cursor: pointer;
+    transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
+  }
+  .layer-toggle:hover,
+  .record-action:hover:not(:disabled) {
+    color: var(--text);
+    border-color: var(--accent2);
+  }
+  .layer-toggle.active {
+    color: var(--accent2);
+    border-color: var(--accent2);
+    background: rgba(0, 204, 255, 0.10);
+  }
+  .spectrum-status {
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .record-row {
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .record-mode {
+    flex: 1 1 58px;
+    min-width: 56px;
+    height: 22px;
+    color: var(--text);
+  }
+  .record-action {
+    flex: 0 0 auto;
+  }
+  .record-action:disabled {
+    cursor: default;
+    opacity: 0.36;
+  }
+  .record-status {
+    flex: 1 1 44px;
+    min-width: 44px;
+  }
+
   /* Quality picker — three discrete tiers (Low / Med / High) toggling
      post-processing in cube-scene.js. Sits in .ovl-br alongside the other
      visual sliders. Active tier glows accent2 (cyan); inactive tiers stay
@@ -1003,11 +1085,9 @@
     50% { opacity: 1; }
   }
 
-  /* Phase E tier 2 rev C — rolling piano-roll as full-viewport background.
-   * Sits behind cube-canvas (which is alpha:true, so the cube + overlays
-   * float on top of the scrolling score). No frame, no grid, no octave
-   * lines — pure note rectangles + gliss curves on transparent ground.
-   * Resizes with the window; pitch range C2..C6 maps across full height. */
+  /* Rolling visual layers. The actual-audio spectrogram sits behind the
+   * MIDI brush piano-roll; both remain below cube-canvas. */
+  #spectrogram-score,
   #rolling-score {
     position: fixed;
     inset: 0;
@@ -1015,5 +1095,14 @@
     height: 100vh;
     display: block;
     pointer-events: none;
+  }
+  #spectrogram-score {
+    z-index: -2;
+  }
+  #rolling-score {
     z-index: -1;
+  }
+  #spectrogram-score.spectrum-disabled,
+  #rolling-score.midi-disabled {
+    visibility: hidden;
   }

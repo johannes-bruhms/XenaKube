@@ -26,13 +26,14 @@ This guide applies to the TypeScript engine and shared mapping/schema code under
 - `sieve.ts`: L(m,n) pitch set and metabola state.
 - `types.ts`: shared public types for engine state, modes, voices, and expressions.
 - `vertices.ts`: K_i density/intensity/base-duration material table.
-- `voice-engine.ts`: sequential/polyphonic voice selection and face-stamped voice events.
+- `voice-engine.ts`: sequential/polyphonic voice selection plus face and half-turn punctuation flags on voice events.
 - `index.ts`: public export surface consumed by `relay.js`.
 
 ## Rules
 
 - Do not add raw `/xk/*`, `/gan/*`, or `/xk/midi/*` string literals outside `osc-schema.ts`.
 - Keep shared helper logic in `swam-mapping.ts` pure and testable. Max-specific stateful wrappers belong in `max/xk_swam.js`, not here.
+- Keep `phrase-plan.ts` structurally mirrored with the active Max phrase generators while the migration boundary remains. C2's `C2_RATE_MAX` is the final post-factor note-on cap; C2 tempo edits must update `../max/xk_swam.js`, bridge invariants, and mirror/static tests together.
 - Preserve the alpha/beta cosmology boundary. In `beta-cosmo`, physical corner turns own visible K topology, the active read-head is direction-aware (`orientation.ts`: surrounding faces use CW top-right / CCW top-left; top/bottom faces use the user-facing edge and the endpoint the turn moves material into), and C identities are fixed local slots (`slot i -> C{i+1}`). K/C diagrams remain shadow metadata. In `alpha-cosmo`, the historical S4 walks deliberately drive K/C assignments.
 - Treat `reportCubeSolved()` as the solve anchor for that boundary: alpha-cosmo returns to beta-cosmo through the normal reset path, while an already-beta solve edge must not reset beta topology.
 - If you change orientation, visible-corner topology, canonical move semantics, or gyro snap semantics, audit `../relay.js`, `../public/js/cube-scene.js`, `../public/js/main.js`, and the matching dashboard invariant rows.

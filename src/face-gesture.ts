@@ -24,7 +24,7 @@ export type EnvelopeShape = 'pluck' | 'swell' | 'stab' | 'hairpin-up' | 'hairpin
 /** Articulation emphasis — where in time the gesture's energy lives. */
 export type Articulation = 'attack' | 'sustained' | 'release' | 'iterative';
 
-/** Pitch motion within the gesture. */
+/** Gestural contour metadata. Live pitch selection does not read it. */
 export type Motion = 'static' | 'up' | 'down' | 'oscillate';
 
 /** Per-face gesture signature — 6 scalar/categorical fields. */
@@ -43,9 +43,9 @@ export interface FaceSignature {
   articulation: Articulation;
   /** Stereo bias [-1..+1]. Reserved for future stereo routing; SWAM is mono. */
   panBias: number;
-  /** Register shift [-1..+1] → up to ±12 semitones. */
+  /** Reserved metadata; live pitch selection does not read it. */
   registerBias: number;
-  /** Pitch motion archetype. */
+  /** Contour label; live pitch selection does not force this direction. */
   motion: Motion;
 }
 
@@ -53,30 +53,31 @@ export interface FaceSignature {
  * The 12 first-draft face signatures.
  *
  * Organising intuition:
- *   • U / U'  — bright, treble; up gets a pluck, up' fades from high
- *   • D / D'  — dark, bass;    down stabs, down' is a `<>` hairpin (peak-in-middle)
- *   • L / L'  — left-panned legato; unprimed swells up, primed fades down
+ *   • U / U'  — top-family contrast: pluck vs fade
+ *   • D / D'  — bottom-family contrast: stab vs `<>` hairpin (peak-in-middle)
+ *   • L / L'  — left-panned legato; unprimed swells, primed fades
  *   • R / R'  — right-panned percussive; unprimed a stab, primed a burst
- *   • F / F'  — forward swells; unprimed ascending, primed descending
+ *   • F / F'  — forward swells; paired contour labels without pitch forcing
  *   • B / B'  — retreating; unprimed a short back-pluck, primed a `><` hairpin (trough-in-middle)
  *
- * Every primed/unprimed pair keeps a family resemblance (same pan / register
- * axis) but differs in articulation and motion, so the 12 are pairwise
- * distinguishable by ear while the 6 face-pairs still feel related.
+ * Every primed/unprimed pair keeps a family resemblance but differs in
+ * duration, envelope, and articulation, so the 12 are pairwise distinguishable
+ * by ear while the 6 face-pairs still feel related. Register and pitch
+ * direction stay with the sieve / phrase engine, not the face grammar.
  */
 export const FACE_SIGNATURES: Record<FaceMove, FaceSignature> = {
-  'U':  { face: 'U',  envelope: 'pluck', durationMult: 0.70, articulation: 'attack',    panBias:  0.0, registerBias:  0.8, motion: 'up' },
-  "U'": { face: "U'", envelope: 'fade',  durationMult: 1.70, articulation: 'release',   panBias:  0.0, registerBias:  0.8, motion: 'down' },
-  'D':  { face: 'D',  envelope: 'stab',  durationMult: 0.60, articulation: 'attack',    panBias:  0.0, registerBias: -0.8, motion: 'down' },
-  "D'": { face: "D'", envelope: 'hairpin-up',   durationMult: 2.50, articulation: 'sustained', panBias:  0.0, registerBias: -0.8, motion: 'static' },
+  'U':  { face: 'U',  envelope: 'pluck', durationMult: 0.70, articulation: 'attack',    panBias:  0.0, registerBias:  0.0, motion: 'up' },
+  "U'": { face: "U'", envelope: 'fade',  durationMult: 1.70, articulation: 'release',   panBias:  0.0, registerBias:  0.0, motion: 'down' },
+  'D':  { face: 'D',  envelope: 'stab',  durationMult: 0.60, articulation: 'attack',    panBias:  0.0, registerBias:  0.0, motion: 'down' },
+  "D'": { face: "D'", envelope: 'hairpin-up',   durationMult: 2.50, articulation: 'sustained', panBias:  0.0, registerBias:  0.0, motion: 'static' },
   'L':  { face: 'L',  envelope: 'swell', durationMult: 1.85, articulation: 'sustained', panBias: -0.7, registerBias:  0.0, motion: 'up' },
   "L'": { face: "L'", envelope: 'fade',  durationMult: 1.85, articulation: 'release',   panBias: -0.7, registerBias:  0.0, motion: 'down' },
   'R':  { face: 'R',  envelope: 'stab',  durationMult: 0.50, articulation: 'attack',    panBias:  0.7, registerBias:  0.0, motion: 'static' },
   "R'": { face: "R'", envelope: 'burst', durationMult: 0.95, articulation: 'iterative', panBias:  0.7, registerBias:  0.0, motion: 'oscillate' },
-  'F':  { face: 'F',  envelope: 'swell', durationMult: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'up' },
-  "F'": { face: "F'", envelope: 'swell', durationMult: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.3, motion: 'down' },
-  'B':  { face: 'B',  envelope: 'pluck', durationMult: 0.90, articulation: 'attack',    panBias:  0.0, registerBias: -0.3, motion: 'static' },
-  "B'": { face: "B'", envelope: 'hairpin-down', durationMult: 2.25, articulation: 'sustained', panBias:  0.0, registerBias: -0.3, motion: 'oscillate' },
+  'F':  { face: 'F',  envelope: 'swell', durationMult: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.0, motion: 'up' },
+  "F'": { face: "F'", envelope: 'swell', durationMult: 1.45, articulation: 'sustained', panBias:  0.0, registerBias:  0.0, motion: 'down' },
+  'B':  { face: 'B',  envelope: 'pluck', durationMult: 0.90, articulation: 'attack',    panBias:  0.0, registerBias:  0.0, motion: 'static' },
+  "B'": { face: "B'", envelope: 'hairpin-down', durationMult: 2.25, articulation: 'sustained', panBias:  0.0, registerBias:  0.0, motion: 'oscillate' },
 };
 
 /** Strict parse: returns the FaceMove if `move` is one of the 12, else null.
@@ -101,8 +102,8 @@ export function getFaceSignature(move: string): FaceSignature | null {
 //
 //   K_i vertex  → pitch-class offset (via perfect-5th spiral through 12)
 //   path        → intensity scalar    (V2 softens by 0.7)
-//   signature   → register modifier   (registerBias × 12 semis, halved on V2)
-//   tetra orbit → parity flip         (odd orbits invert the motion field)
+//   signature   → duration/envelope/articulation only; no register modifier
+//   tetra orbit → parity flip         (reserved; no live pitch-direction force)
 //
 // C_i (ComplexType) is already a "timbre modifier" via the existing
 // phraseC1..phraseC8 dispatch in max/xk_swam.js — documented there, not
@@ -120,19 +121,20 @@ export function pitchClassMod(vertexIdx: number): number {
 }
 
 /**
- * Face's registerBias [-1..+1] → semitone shift, full ±12 spread (the V1
- * value, kept after V2 retirement).
+ * Face register modulation is retired. Kept as a neutral helper for older
+ * imports while the face grammar stays out of pitch/register selection.
  */
 export function registerMod(sig: FaceSignature): number {
-  const spread = 12;
-  return Math.round(sig.registerBias * spread);
+  void sig;
+  return 0;
 }
 
 /**
- * Tetra orbit parity → motion direction multiplier.
- *   0 (even, preserves tetrahedra) → +1 (motion as written)
- *   1 (odd, swaps tetrahedra)      → -1 (up ↔ down, ascending ↔ descending)
- * Makes the tetra axis audible as an inversion of the face's built-in motion.
+ * Tetra orbit parity → reserved contour multiplier.
+ *   0 (even, preserves tetrahedra) → +1
+ *   1 (odd, swaps tetrahedra)      → -1
+ * Kept for callers that still display contour metadata; live pitch selection
+ * does not use this value.
  */
 export function parityInflection(tetraIdx: number): number {
   return tetraIdx === 1 ? -1 : 1;

@@ -3,9 +3,13 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 
 describe('Dashboard UI collapse behavior', () => {
+  const dashboardHtml = readFileSync(join(process.cwd(), 'public', 'dashboard.html'), 'utf8');
+  const mainCss = readFileSync(join(process.cwd(), 'public', 'css', 'main.css'), 'utf8');
   const main = readFileSync(join(process.cwd(), 'public', 'js', 'main.js'), 'utf8');
   const cubeScene = readFileSync(join(process.cwd(), 'public', 'js', 'cube-scene.js'), 'utf8');
   const rollingScore = readFileSync(join(process.cwd(), 'public', 'js', 'rolling-score.js'), 'utf8');
+  const spectrumScore = readFileSync(join(process.cwd(), 'public', 'js', 'spectrum-score.js'), 'utf8');
+  const performanceRecorder = readFileSync(join(process.cwd(), 'public', 'js', 'performance-recorder.js'), 'utf8');
 
   it('keeps live K-vertex telemetry labels visible when chrome is hidden', () => {
     expect(main).not.toContain('setVertexInfoVisible');
@@ -23,6 +27,32 @@ describe('Dashboard UI collapse behavior', () => {
     expect(cubeScene).toContain('renderSharpLabels();');
   });
 
+  it('keeps Med and High bloom visually distinct in the quality presets', () => {
+    expect(cubeScene).toContain("med:  { useComposer: true,  strength: 0.32, radius: 0.30, threshold: 0.90");
+    expect(cubeScene).toContain("high: { useComposer: true,  strength: 1.45, radius: 1.05, threshold: 0.42");
+    expect(cubeScene).toContain('halo.material.opacity = p.haloOpacity');
+    expect(cubeScene).toContain('activeRing.scale.set(p.activeScale, p.activeScale, 1);');
+  });
+
+  it('keeps the live cube edge wireframe on both base and adaptive passes', () => {
+    expect(cubeScene).toContain('const LIVE_EDGE_COLOR = 0xffffff;');
+    expect(cubeScene).toContain('const edgeMat = new THREE.LineBasicMaterial({');
+    expect(cubeScene).toContain('edgeOpacity: 0.28');
+    expect(cubeScene).toContain('contrastEdgeOpacity: 0.88');
+    expect(cubeScene).toContain('edgeMat.opacity = p.edgeOpacity;');
+  });
+
+  it('renders adaptive live and ghost wireframes on a contrast blend layer', () => {
+    expect(dashboardHtml).toContain('<svg id="cube-contrast-layer" aria-hidden="true"></svg>');
+    expect(mainCss).toContain('#cube-contrast-layer');
+    expect(mainCss).toContain('mix-blend-mode: difference;');
+    expect(cubeScene).toContain("document.getElementById('cube-contrast-layer')");
+    expect(cubeScene).toContain("document.createElementNS(SVG_NS, 'line')");
+    expect(cubeScene).toContain('strokeContrastEdges(ghostGroup, CUBE_EDGES, contrastGhostAlpha');
+    expect(cubeScene).toContain('function renderAdaptiveWireframes()');
+    expect(cubeScene).toContain('renderAdaptiveWireframes();');
+  });
+
   it('clips gliss companion overlays to the rolling-score pitch range', () => {
     expect(rollingScore).toContain('function _companionDyFromOffset(offsetSemis, mainPitch, mainY, canvasH)');
     expect(rollingScore).toContain('const companionPitch = mainPitch + offsetSemis;');
@@ -30,5 +60,45 @@ describe('Dashboard UI collapse behavior', () => {
     expect(rollingScore).toContain('return midiToY(companionPitch, canvasH) - mainY;');
     expect(rollingScore).toContain('if (a.compOffset !== b.compOffset) continue;');
     expect(rollingScore).not.toContain('chainCompOffsetSemis');
+  });
+
+  it('keeps the optional spectrogram below independently-toggleable MIDI brushes', () => {
+    expect(dashboardHtml.indexOf('id="spectrogram-score"')).toBeLessThan(dashboardHtml.indexOf('id="rolling-score"'));
+    expect(dashboardHtml).toContain('id="midiBrushToggle"');
+    expect(dashboardHtml).toContain('id="spectrogramToggle"');
+    expect(dashboardHtml).toContain('id="spectrumLatency"');
+    expect(dashboardHtml).toContain('id="spectrumNudge"');
+    expect(mainCss).toContain('#spectrogram-score');
+    expect(mainCss).toContain('z-index: -2;');
+    expect(mainCss).toContain('#rolling-score');
+    expect(main).toContain("import * as spectrumScore from './spectrum-score.js';");
+    expect(main).toContain("transportOn('spectrumFrame', spectrumScore.handleFrame);");
+    expect(main).toContain("wsSend({ type: 'set_spectrum_enabled', enabled: spectrumEnabled });");
+    expect(rollingScore).toContain('export function setVisible(value)');
+    expect(rollingScore).toContain('export function setVisualDelay(ms)');
+    expect(spectrumScore).toContain('MODALITY_PALETTES');
+    expect(spectrumScore).toContain('MODALITY_LABELS');
+    expect(spectrumScore).toContain('modalityStatus(prevDrawnFrame)');
+    expect(spectrumScore).toContain('handleFrame(raw)');
+    expect(spectrumScore).toContain('FRAME_RESET_GAP_MS');
+    expect(spectrumScore).toContain('resetSpectrumStream');
+    expect(spectrumScore).toContain('shouldAcceptFrameIdReset');
+    expect(spectrumScore).toContain('dropped out-of-order frame');
+    expect(spectrumScore).toContain('Do not synthesize new spectrum from stale data');
+    expect(spectrumScore).not.toContain('midiEcho');
+  });
+
+  it('records rolling visual layers from source canvases instead of screen capture', () => {
+    expect(dashboardHtml).toContain('id="recordBeginBtn"');
+    expect(dashboardHtml).toContain('id="recordEndBtn"');
+    expect(dashboardHtml).toContain('id="recordMode"');
+    expect(main).toContain("import * as performanceRecorder from './performance-recorder.js';");
+    expect(main).toContain('performanceRecorder.init({');
+    expect(performanceRecorder).toContain('function sampleSources(dxCss)');
+    expect(performanceRecorder).toContain('drawImage(c, sx, 0, sw, c.height');
+    expect(performanceRecorder).toContain("if (mode === 'visible' || mode === 'composite') return source.enabled !== false;");
+    expect(performanceRecorder).toContain("source.kind === 'spectrum' && source.enabled !== false");
+    expect(performanceRecorder).toContain("source.kind === 'midi' && source.enabled !== false");
+    expect(performanceRecorder).toContain('xenakube-performance-');
   });
 });

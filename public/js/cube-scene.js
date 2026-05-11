@@ -147,6 +147,20 @@ renderer.setPixelRatio(window.devicePixelRatio);
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
 renderer.toneMappingExposure = 1.0;
 
+// Separate adaptive wireframe SVG. It contains only white structural strokes;
+// CSS `mix-blend-mode:difference` on each stroke makes the final color invert
+// whatever is already behind that line: rolling score, cube bloom, labels, or
+// live-cube pixels under the ghost.
+const SVG_NS = 'http://www.w3.org/2000/svg';
+const contrastLayer = document.getElementById('cube-contrast-layer');
+const contrastLineEls = [];
+let contrastCssW = 0;
+let contrastCssH = 0;
+let contrastEdgeAlpha = 0.88;
+let contrastTetraAlpha = 0.30;
+let contrastGhostAlpha = 0.82;
+let contrastKcAlpha = 0.58;
+
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(40, 2, 0.1, 100);
 const DEFAULT_SCENE_LAYER = 0;
@@ -166,7 +180,9 @@ const CUBE_VIEW_AZIMUTH_RAD = -135 * Math.PI / 180;
 const _pristineCameraPos = camera.position.clone();
 let _cubeViewApplied = false;
 
-// Wireframe cube
+// Wireframe cube. The live outer frame is intentionally white: it is the
+// always-readable cube silhouette and, in Med/High quality, the bloom carrier.
+const LIVE_EDGE_COLOR = 0xffffff;
 const edgeGeo = new THREE.BufferGeometry();
 {
   const edgePositions = [];
@@ -176,7 +192,11 @@ const edgeGeo = new THREE.BufferGeometry();
   }
   edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
 }
-const edgeMat = new THREE.LineBasicMaterial({ color: 0x333355 });
+const edgeMat = new THREE.LineBasicMaterial({
+  color: LIVE_EDGE_COLOR,
+  transparent: true,
+  opacity: 0.95,
+});
 const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
 scene.add(edgeLines);
 
@@ -402,30 +422,27 @@ for (let i = 0; i < 8; i++) {
   ghostLabels.push(label);
 }
 
-// Face-signature glyph decals — one PlaneGeometry mesh pasted on each cube
-// face (6 total), parented to ghostGroup so they rotate rigidly with the
-// snapped ghost orientation. NOT billboarded: the glyph lies in the face's
-// plane, sharing its outward normal. DoubleSide rendering means the same
-// painted texture is visible from both sides of the cube — viewed from
-// outside it reads correctly; viewed from the cube interior (i.e., looking
-// at the opposite face's glyph through this face's transparent plane) it
-// appears horizontally mirrored, which is the natural single-sided-texture-
-// seen-from-behind effect. depthWrite is off so each plane's transparent
-// pixels don't depth-occlude the others — all six glyphs render and alpha-
-// composite, with back-of-cube glyphs visible through the alpha holes of
-// front-of-cube ones.
-//
-// Per-face Euler rotation orients PlaneGeometry's default +Z surface normal
-// to each face's outward normal:
-//   F (+Z): identity
-//   B (-Z): 180° around Y
-//   R (+X): +90° around Y    L (-X): -90° around Y
-//   U (+Y): -90° around X    D (-Y): +90° around X
-// Canvas-up maps to world +Y for F/B/L/R and to world -Z for U/D (no world
-// up/down on the top/bottom faces, so "back of cube" is the chosen
-// convention so the glyph reads consistently from a typical orbit camera).
-const FACE_GLYPH_SIZE = 256;          // canvas resolution (high-DPR friendly)
-const FACE_GLYPH_PLANE = 0.6;         // plane edge length (cube face is 2×2; tiny decal centered on face)
+// Face-signature decals. These are predictive marks on the ghost cube: each
+// face shows the clockwise / counter-clockwise gesture pair as two unlabeled
+// underlined marks. The side-ring textures are display-remapped so the current
+// L-position decal carries F; U/D stay fixed. A move twists its face decal as
+// a transient turn cue, then the decal snaps back to its canonical upright
+// orientation. Decals draw through the transparent cube and rely on
+// DoubleSide's natural back view when seen from behind; no camera-facing
+// flip/compensation is applied.
+const FACE_GLYPH_SIZE = 256;
+const FACE_GLYPH_PLANE = 0.52;
+const FACE_GLYPH_OFFSET = 1.08;
+const FACE_GLYPH_TURN_MS = 120;
+const FACE_GLYPH_OPACITY = 0.66;
+const FACE_GLYPH_DISPLAY_FACE = {
+  F: 'R',
+  R: 'B',
+  B: 'L',
+  L: 'F',
+  U: 'U',
+  D: 'D',
+};
 const FACE_PLANE_EULER = {
   F: new THREE.Euler(0,            0,             0),
   B: new THREE.Euler(0,            Math.PI,       0),
@@ -434,39 +451,60 @@ const FACE_PLANE_EULER = {
   U: new THREE.Euler(-Math.PI / 2, 0,             0),
   D: new THREE.Euler( Math.PI / 2, 0,             0),
 };
-const ghostFaceGlyphs = [];           // [{ face, mesh, mat, tex, canvas, ctx }]
+const FACE_GLYPH_BASE_TURNS = {
+  D: 2, // U and D read with the decal bottom toward F/user.
+};
+const ghostFaceGlyphs = [];
 const _faceGlyphGeo = new THREE.PlaneGeometry(FACE_GLYPH_PLANE, FACE_GLYPH_PLANE);
 const _faceGlyphAxis = new THREE.Vector3(0, 0, 1);
-const _faceTurnStates = {};          // face -> { turns: number, base: THREE.Quaternion, twist: THREE.Quaternion, mesh }
-for (const face of FACES) {
+const _faceGlyphTwist = new THREE.Quaternion();
+const _faceGlyphBaseTwist = new THREE.Quaternion();
+const _faceTurnStates = {};
+for (const meshFace of FACES) {
+  const displayFace = FACE_GLYPH_DISPLAY_FACE[meshFace] || meshFace;
   const c = document.createElement('canvas');
   c.width = FACE_GLYPH_SIZE;
   c.height = FACE_GLYPH_SIZE;
   const ctx = c.getContext('2d');
-  paintFaceGlyph(ctx, face, { color: '#e0f4ff' });
+  paintFaceGlyph(ctx, displayFace, { compact: true, background: false });
   const tex = new THREE.CanvasTexture(c);
   tex.anisotropy = 4;
   const mat = new THREE.MeshBasicMaterial({
     map: tex,
     transparent: true,
     side: THREE.DoubleSide,
+    depthTest: false,
     depthWrite: false,
-    opacity: 1.0,
+    opacity: FACE_GLYPH_OPACITY,
   });
   const mesh = new THREE.Mesh(_faceGlyphGeo, mat);
-  const n = FACE_GLYPH_NORMAL[face];
-  mesh.position.set(n[0], n[1], n[2]);
-  const baseRot = new THREE.Quaternion().setFromEuler(FACE_PLANE_EULER[face]);
-  mesh.quaternion.copy(baseRot);
-  _faceTurnStates[face] = {
-    turns: 0,
-    base: baseRot,
-    twist: new THREE.Quaternion(),
-    mesh,
-  };
+  const n = FACE_GLYPH_NORMAL[meshFace];
+  const normal = new THREE.Vector3(n[0], n[1], n[2]);
+  const base = new THREE.Quaternion().setFromEuler(FACE_PLANE_EULER[meshFace]);
+  const baseTurns = FACE_GLYPH_BASE_TURNS[meshFace] || 0;
+  if (baseTurns) {
+    _faceGlyphBaseTwist.setFromAxisAngle(_faceGlyphAxis, baseTurns * Math.PI * 0.5);
+    base.multiply(_faceGlyphBaseTwist);
+  }
+  mesh.position.copy(normal).multiplyScalar(FACE_GLYPH_OFFSET);
+  mesh.quaternion.copy(base);
   mesh.renderOrder = 3;
   ghostGroup.add(mesh);
-  ghostFaceGlyphs.push({ face, mesh, mat, tex, canvas: c, ctx });
+  const glyph = {
+    face: displayFace,
+    meshFace,
+    mesh,
+    mat,
+    normal,
+    base,
+    displayTurns: 0,
+    fromTurns: 0,
+    targetTurns: 0,
+    turnStart: 0,
+    turning: false,
+  };
+  ghostFaceGlyphs.push(glyph);
+  _faceTurnStates[meshFace] = glyph;
 }
 
 // K↔C connection line.
@@ -773,6 +811,9 @@ function resizeCube() {
   const rect = canvas.getBoundingClientRect();
   if (rect.width <= 0 || rect.height <= 0) return;
   renderer.setSize(rect.width, rect.height, false);
+  contrastCssW = rect.width;
+  contrastCssH = rect.height;
+  contrastLayer.setAttribute('viewBox', `0 0 ${rect.width} ${rect.height}`);
   composer.setSize(rect.width, rect.height);
   bloomPass.resolution.set(rect.width, rect.height);
   const aspect = rect.width / rect.height;
@@ -835,9 +876,9 @@ composer.addPass(new OutputPass());
 renderer.setClearColor(0x000000, 0);
 
 const QUALITY_PRESETS = {
-  low:  { useComposer: false, strength: 0,    radius: 0,    threshold: 1.0  },
-  med:  { useComposer: true,  strength: 0.5,  radius: 0.5,  threshold: 0.78 },
-  high: { useComposer: true,  strength: 0.8,  radius: 0.7,  threshold: 0.65 },
+  low:  { useComposer: false, strength: 0,    radius: 0,    threshold: 1.0,  haloOpacity: 0.55, edgeOpacity: 0.18, ghostEdgeOpacity: 0.16, contrastEdgeOpacity: 0.74, contrastTetraOpacity: 0.22, contrastGhostOpacity: 0.70, contrastKcOpacity: 0.46, activeScale: 0.50, ghostActiveScale: 0.40 },
+  med:  { useComposer: true,  strength: 0.32, radius: 0.30, threshold: 0.90, haloOpacity: 0.66, edgeOpacity: 0.28, ghostEdgeOpacity: 0.22, contrastEdgeOpacity: 0.88, contrastTetraOpacity: 0.30, contrastGhostOpacity: 0.82, contrastKcOpacity: 0.58, activeScale: 0.52, ghostActiveScale: 0.42 },
+  high: { useComposer: true,  strength: 1.45, radius: 1.05, threshold: 0.42, haloOpacity: 1.00, edgeOpacity: 0.46, ghostEdgeOpacity: 0.34, contrastEdgeOpacity: 1.00, contrastTetraOpacity: 0.42, contrastGhostOpacity: 0.94, contrastKcOpacity: 0.70, activeScale: 0.76, ghostActiveScale: 0.62 },
 };
 let _quality = 'med';
 
@@ -850,6 +891,15 @@ function applyQualityPreset(level) {
     bloomPass.radius = p.radius;
     bloomPass.threshold = p.threshold;
   }
+  for (const halo of vertexHalos) halo.material.opacity = p.haloOpacity;
+  edgeMat.opacity = p.edgeOpacity;
+  ghostEdgeMat.opacity = p.ghostEdgeOpacity;
+  contrastEdgeAlpha = p.contrastEdgeOpacity;
+  contrastTetraAlpha = p.contrastTetraOpacity;
+  contrastGhostAlpha = p.contrastGhostOpacity;
+  contrastKcAlpha = p.contrastKcOpacity;
+  activeRing.scale.set(p.activeScale, p.activeScale, 1);
+  ghostActiveRing.scale.set(p.ghostActiveScale, p.ghostActiveScale, 1);
   return true;
 }
 applyQualityPreset(_quality);
@@ -869,6 +919,79 @@ function renderSharpLabels() {
   } finally {
     camera.layers.mask = prevLayerMask;
     renderer.autoClear = prevAutoClear;
+  }
+}
+
+const _contrastWorldA = new THREE.Vector3();
+const _contrastWorldB = new THREE.Vector3();
+const _contrastProjA = new THREE.Vector3();
+const _contrastProjB = new THREE.Vector3();
+let contrastLineCount = 0;
+
+function projectToContrast(v, out) {
+  out.copy(v).project(camera);
+  return {
+    x: (out.x * 0.5 + 0.5) * contrastCssW,
+    y: (-out.y * 0.5 + 0.5) * contrastCssH,
+    visible: out.z >= -1 && out.z <= 1,
+  };
+}
+
+function strokeContrastWorld(a, b, alpha, width = 1.15) {
+  const pa = projectToContrast(a, _contrastProjA);
+  const pb = projectToContrast(b, _contrastProjB);
+  if (!pa.visible && !pb.visible) return;
+  let line = contrastLineEls[contrastLineCount++];
+  if (!line) {
+    line = document.createElementNS(SVG_NS, 'line');
+    contrastLayer.appendChild(line);
+    contrastLineEls.push(line);
+  }
+  line.setAttribute('x1', pa.x.toFixed(2));
+  line.setAttribute('y1', pa.y.toFixed(2));
+  line.setAttribute('x2', pb.x.toFixed(2));
+  line.setAttribute('y2', pb.y.toFixed(2));
+  line.setAttribute('stroke-opacity', alpha.toFixed(3));
+  line.setAttribute('stroke-width', width.toFixed(2));
+  line.style.display = '';
+}
+
+function strokeContrastLocal(group, aIdx, bIdx, alpha, width) {
+  _contrastWorldA.copy(CUBE_VERTS[aIdx]).applyMatrix4(group.matrixWorld);
+  _contrastWorldB.copy(CUBE_VERTS[bIdx]).applyMatrix4(group.matrixWorld);
+  strokeContrastWorld(_contrastWorldA, _contrastWorldB, alpha, width);
+}
+
+function strokeContrastEdges(group, edges, alpha, width) {
+  for (const [a, b] of edges) strokeContrastLocal(group, a, b, alpha, width);
+}
+
+function strokeContrastTetra(group, indices, alpha) {
+  for (let i = 0; i < indices.length; i++) {
+    for (let j = i + 1; j < indices.length; j++) {
+      strokeContrastLocal(group, indices[i], indices[j], alpha, 0.85);
+    }
+  }
+}
+
+function renderAdaptiveWireframes() {
+  if (!contrastCssW || !contrastCssH) return;
+  contrastLineCount = 0;
+
+  cubeGroup.updateMatrixWorld(true);
+  strokeContrastEdges(cubeGroup, CUBE_EDGES, contrastEdgeAlpha, 1.15);
+  strokeContrastTetra(cubeGroup, TETRA_A, contrastTetraAlpha);
+  strokeContrastTetra(cubeGroup, TETRA_B, contrastTetraAlpha);
+
+  if (ghostGroup.visible) {
+    ghostGroup.updateMatrixWorld(true);
+    strokeContrastEdges(ghostGroup, CUBE_EDGES, contrastGhostAlpha, 1.0);
+  }
+  if (kcLine.visible) {
+    strokeContrastWorld(_kcKWorld, _kcCWorld, contrastKcAlpha, 1.0);
+  }
+  for (let i = contrastLineCount; i < contrastLineEls.length; i++) {
+    contrastLineEls[i].style.display = 'none';
   }
 }
 
@@ -905,6 +1028,8 @@ function animateCube() {
   } else {
     ghostGroup.visible = false;
   }
+  updateFaceGlyphTurnAnimations(performance.now());
+  updateFaceGlyphVisibility();
 
   if (activeAnimReady) {
     const elapsed = performance.now() - activeAnimStart;
@@ -1001,26 +1126,67 @@ function animateCube() {
     renderer.render(scene, camera);
   }
   renderSharpLabels();
+  renderAdaptiveWireframes();
   gizmoRenderer.render(gizmoScene, gizmoCamera);
 }
 animateCube();
 
 // ---- Internal label paint helpers ------------------------------------------
 
+function setFaceGlyphTurn(g, turns) {
+  _faceGlyphTwist.setFromAxisAngle(_faceGlyphAxis, turns * Math.PI * 0.5);
+  g.mesh.quaternion.copy(g.base).multiply(_faceGlyphTwist);
+}
+
+function finishFaceGlyphTurn(g) {
+  g.displayTurns = 0;
+  g.fromTurns = 0;
+  g.targetTurns = 0;
+  g.turnStart = 0;
+  g.turning = false;
+  setFaceGlyphTurn(g, 0);
+}
+
+function syncFaceGlyphTurn(g, now) {
+  if (!g.turning) return;
+  const rawT = Math.max(0, Math.min(1, (now - g.turnStart) / FACE_GLYPH_TURN_MS));
+  if (rawT >= 1) {
+    finishFaceGlyphTurn(g);
+    return;
+  }
+  const t = rawT * rawT * (3 - 2 * rawT);
+  g.displayTurns = g.fromTurns + (g.targetTurns - g.fromTurns) * t;
+  setFaceGlyphTurn(g, g.displayTurns);
+}
+
+function updateFaceGlyphTurnAnimations(now) {
+  for (const g of ghostFaceGlyphs) syncFaceGlyphTurn(g, now);
+}
+
 function applyFaceTurnGlyphRotation(move) {
   if (typeof move !== 'string' || move.length < 1) return;
   const face = move[0];
-  const state = _faceTurnStates[face];
-  if (!state) return;
+  const g = _faceTurnStates[face];
+  if (!g) return;
 
-  const isPrime = move.includes("'");
-  const isHalf = move.includes('2');
-  let turns = isHalf ? 2 : 1;
-  if (isPrime) turns = -turns;
-  state.turns = (state.turns + turns) % 4;
-  if (state.turns < 0) state.turns += 4;
-  state.twist.setFromAxisAngle(_faceGlyphAxis, state.turns * Math.PI * 0.5);
-  state.mesh.quaternion.copy(state.base).multiply(state.twist);
+  const suffix = move.slice(1);
+  let turns = suffix.includes('2') ? 2 : -1;
+  if (suffix.includes("'")) turns = -turns;
+
+  const now = performance.now();
+  syncFaceGlyphTurn(g, now);
+  g.fromTurns = g.displayTurns;
+  g.targetTurns = turns;
+  g.turnStart = now;
+  g.turning = true;
+}
+
+function updateFaceGlyphVisibility() {
+  const visible = ghostGroup.visible;
+  for (const g of ghostFaceGlyphs) {
+    g.mat.opacity = visible ? FACE_GLYPH_OPACITY : 0;
+    g.mesh.visible = visible;
+  }
 }
 
 function paintActiveVertex(slot, activeK) {

@@ -17,6 +17,8 @@ export interface VoiceEvent {
 export interface VoiceOutput {
   mode: VoiceMode;
   active: VoiceEvent[];   // 1 event in sequential, 8 in polyphonic
+  /** True on the second rapid identical quarter-turn of a physical 180° flick. */
+  halfTurn?: boolean;
   /** Face identity of the turn that produced this output, or null on
    *  non-face triggers (diagram advance, gyro-only path). Downstream
    *  consumers (Max bridge) dispatch face-gesture shaping from this. */
@@ -27,7 +29,13 @@ export class VoiceEngine {
   mode: VoiceMode = 'sequential';
 
   /** Compute what should sound after a turn */
-  emit(vertices: VertexSet, activeIdx: number, complexes: ComplexType[], face: FaceMove | null = null): VoiceOutput {
+  emit(
+    vertices: VertexSet,
+    activeIdx: number,
+    complexes: ComplexType[],
+    face: FaceMove | null = null,
+    halfTurn = false,
+  ): VoiceOutput {
     if (this.mode === 'sequential') {
       return {
         mode: 'sequential',
@@ -36,6 +44,7 @@ export class VoiceEngine {
           params: vertices[activeIdx],
           complex: complexes[activeIdx],
         }],
+        halfTurn,
         face,
       };
     } else {
@@ -46,6 +55,7 @@ export class VoiceEngine {
           params,
           complex: complexes[i],
         })),
+        halfTurn,
         face,
       };
     }

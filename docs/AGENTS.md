@@ -12,13 +12,14 @@ This guide applies to the documentation tree under `docs/`.
 - `bridge-invariants.md`: full bridge invariant enforcement detail.
 - `dashboard-invariants.md`: full dashboard invariant enforcement detail.
 - `dashboard-architecture.md`: browser dashboard module layout, cross-module reads, overlay positioning, and brush rendering.
+- `spectrogram_roadmap.md`: optional actual-audio spectrogram feature roadmap.
 - `interruption-layer-plan.md`: optional interruption-layer design and first-draft verification notes.
 - `performance-model.md`: musical / structural model, core turn loop, voice / engine modes, algorithm book, expression mapping, and key math.
 - `osc-reference.md`: OSC address and routing reference.
 - `synthesis-bridge.md`: Max patch topology, bridge file roles, and routing notes.
 - `swam/swam_cello_reference.md`: authoritative SWAM parameter, CC, and keyswitch reference.
 - `xenakis_nomos_alpha_primary_source.md`: primary-source excerpt for Xenakis' cube model.
-- `xenakube-operator-manual.md`: performer-facing manual and face/complex behavior reference.
+- `xenakube-operation-manual.md`: performer-facing operation manual and face/complex behavior reference.
 - `xenakube-feedback-04302026.md`: dated artistic feedback/reference notes; do not treat as current behavior unless promoted into current docs.
 - `../README.md`: user-facing setup and project overview.
 

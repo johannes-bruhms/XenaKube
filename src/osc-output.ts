@@ -117,6 +117,7 @@ export function voiceToOsc(output: VoiceOutput, phrasePlans: PhrasePlan[] = []):
         ev.params.density,
         ev.params.intensity,
         ev.params.duration,
+        output.halfTurn ? 1 : 0,
       ],
     });
   });
@@ -138,6 +139,7 @@ export function phrasePlanToOsc(plan: PhrasePlan): OscMessage {
       plan.expected.noteOnCount,
       plan.expected.bendStepCount,
       plan.expected.companionNoteOnCount,
+      plan.halfTurn ? 1 : 0,
     ],
   };
 }

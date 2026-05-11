@@ -51,6 +51,8 @@ function _logBackpressure(kind, buffered, dropped) {
 //   phraseAudit    — `{ type: 'phrase_audit', data }` planned-vs-actual phrase echo result. (data).
 //   solve          — `{ type: 'solve' }` cube returned to identity. (no args).
 //   midiEcho       — `{ type: 'midi_echo', data }` from Max/SWAM. (data).
+//   spectrumFrame  — `{ type: 'spectrum_frame', data }` actual-audio FFT frame from Max. (data).
+//   spectrumStatus — `{ type: 'spectrum_status', data }` relay-side spectrum forwarding state. (data).
 const handlers = {
   open:          [],
   close:         [],
@@ -64,6 +66,8 @@ const handlers = {
   phraseAudit:   [],
   solve:         [],
   midiEcho:      [],
+  spectrumFrame: [],
+  spectrumStatus: [],
 };
 
 function emit(name, ...args) {
@@ -124,6 +128,8 @@ export function connect() {
         case 'phrase_audit':    emit('phraseAudit', msg.data);        break;
         case 'solve':           emit('solve');                        break;
         case 'midi_echo':       emit('midiEcho',  msg.data);          break;
+        case 'spectrum_frame':  emit('spectrumFrame', msg.data);      break;
+        case 'spectrum_status': emit('spectrumStatus', msg.data);     break;
       }
     } catch (e) {
       console.error('[transport] parse error:', e);

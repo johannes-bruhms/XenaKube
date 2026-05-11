@@ -28,12 +28,14 @@ Prefer editing `xk_swam.js` over growing patch logic. The patch is the host; `xk
 - If `../src/osc-schema.ts`, `../src/swam-mapping.ts`, or `../src/face-gesture.ts` change, run `npm run gen:max` from the repo root and reload the `v8` script.
 - Keep the single-instance SWAM model intact unless you are deliberately re-architecting polyphony. `POOL_SIZE = MAX_ACTIVE = 1` is an intentional musical and technical constraint, not an accident.
 - Treat gliss, selector state, bow polyphony, expression arcs, and pitchbend alignment as silent-failure surfaces. Preserve or add runtime telemetry when changing them.
+- Keep C2 tempo constants mirrored with `../src/phrase-plan.ts`. `C2_RATE_MAX` is the final post-factor note-on cap, so do not add a later C2 density multiplier after `buildC2Tempo()`.
 - `PITCHBEND_RANGE_SEMI` in `xk_swam.js` must exactly match the loaded SWAM preset.
 - If you change keyswitch numbers, CC mapping, or preset assumptions, update both the code and the relevant documentation.
 
 ## Files
 
 - `xk_swam.js`: main bridge logic and invariants.
+- `xk_spectrum.js`: optional v8 helper for formatting Max-side FFT analysis as `/xk/spectrum/frame`; used by `pfft-test.maxpat` and the toggle-gated analyzer block in `xenakube_swam.maxpat`.
 - `xenakube_swam.maxpat`: host patch.
 - `xenakube_main.swam`: SWAM preset expected by the patch (loaded by `xenakube_swam.maxpat` on `[loadbang]`).
 - `gen_includes.js`: generated shared data from `src/`.
@@ -42,7 +44,9 @@ Prefer editing `xk_swam.js` over growing patch logic. The patch is the host; `xk
 - `relay-controller.js`: Max-side helper for relay control workflows. `script start` launches only the controller; `relay` / `start relay` starts `relay.js` as a child process. It exposes explicit `kill process` / `kill_process` Max messages for killing a stale port-3000 listener; do not auto-start or auto-kill the relay from script start.
 - `package.json` / `package-lock.json`: local Node dependency metadata for Max support helpers.
 - `max_mcp.js`, `max_mcp_node.js`, `max_mcp_v8_add_on.js`: Max MCP bridge support files.
-- `demo.maxpat`, `derivations.maxpat`, `polish.maxpat`: reference/experimental Max patches, not the active performance host.
+- `demo.maxpat`, `derivations.maxpat`, `polish.maxpat`, `rave.maxpat`: reference/experimental Max patches, not the active performance host.
+- `pfft-test.maxpat`: live pfft spectrogram test patch; it mirrors the optional analyzer sender used by the performance host for local analyzer testing.
+- `xk_pfft_spectrum.maxpat`: `pfft~` subpatch loaded by `pfft-test.maxpat`; writes FFT magnitudes into `buffer~ xk_fft_mag`.
 - `erosion.gendsp`: supporting Gen patch/reference artifact.
 - `xenakube_2.swam`, `xenakube_main2.swam`: alternate SWAM presets; do not assume they are loaded by `xenakube_swam.maxpat`.
 

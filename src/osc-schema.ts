@@ -47,8 +47,8 @@ export const OSC = {
   // ── events ───────────────────────────────────────────────────
   ALGORITHM:     '/xk/algorithm',       // s:algorithmName (Rubik's cube algorithm match)
   FACE:          '/xk/face',            // s:"L"|"L'"|"R"|"R'"|"F"|"F'"|"B"|"B'"|"U"|"U'"|"D"|"D'"
-  VOICE:         '/xk/voice',           // i:vertexIdx, i:complexType, f:density, s:intensity, f:durationBase
-  PHRASE_PLAN:   '/xk/phrase/plan',     // i:planId, i:complexType, s:face|"-", f:durationSec, i:eventCount, i:noteOnCount, i:bendStepCount, i:companionNoteOnCount. Sent immediately before the matching /xk/voice.
+  VOICE:         '/xk/voice',           // i:vertexIdx, i:complexType, f:density, s:intensity, f:durationBase, i:halfTurn(0|1)
+  PHRASE_PLAN:   '/xk/phrase/plan',     // i:planId, i:complexType, s:face|"-", f:durationSec, i:eventCount, i:noteOnCount, i:bendStepCount, i:companionNoteOnCount, i:halfTurn(0|1). Sent immediately before the matching /xk/voice.
   PANIC:         '/xk/panic',           // (no args) — relay WS disconnect
 
   // ── Max-internal helper (not emitted by relay) ───────────────
@@ -66,6 +66,9 @@ export const OSC = {
   MIDI_PANIC:     '/xk/midi/panic',      // (no args) — clear pending notes on bang/panic
   MIDI_BENDSTEP:  '/xk/midi/bendstep',   // i:voice, i:fromPitch, i:toPitch, i:durMs, i:complex, i:planId — D59 cross-string slide via pitchbend wheel; held source note bends from fromPitch to toPitch over durMs, then noteOff(source)+noteOn(target) fires (echoed via MIDI_NOTEOFF/MIDI_NOTEON as usual). Dashboard interpolates the curve in its segment model and bridges the gap between source-end and target-start visually.
   MIDI_EXPR:      '/xk/midi/expr',       // i:voice, i:val (0..127), i:complex, i:planId — emitted from cc()/ccForce() on every CC 11 (Expression) write so the dashboard can size brushes by audible dynamics rather than per-note velocity (which is a poor proxy: SWAM Cello drives ongoing loudness via CC 11 ramps per the D47 phrase-arc invariant). Pure additive telemetry; no synthesis state depends on it.
+
+  // audio analysis: Max bridge -> relay (port 57122, reverse direction)
+  SPECTRUM_FRAME: '/xk/spectrum/frame',  // i:frameId, f:audioTimeMs, f:analysisLatencyMs, i:complex(0|1..8), i:binCount, f:minHz, f:maxHz, f:rmsDb, f:peakDb, f:centroidHz, f:flux, f:stereoWidth, f...:binPowersDb. Actual post-audio spectrogram frame for dashboard rendering.
 
   // ── raw pass-through to TouchDesigner (port 8000) ────────────
   GAN_TURN:      '/gan/turn',           // s:moveString ("R","U'","F2",...)

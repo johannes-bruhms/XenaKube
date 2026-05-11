@@ -311,6 +311,7 @@ function startVoiceLatencyProbe(output, phrasePlans = []) {
     moveT0: lastMoveReceivedAt || Date.now(),
     move: lastMove || '-',
     face: output.face || '-',
+    halfTurn: output.halfTurn === true,
     mode: output.mode || 'unknown',
     expectedComplex: complexes[0],
     complexes,
@@ -343,7 +344,8 @@ function completeVoiceLatencyProbe(data) {
   if (stats.samples.length > LATENCY_WINDOW) stats.samples.shift();
 
   const planText = `planFirst=${pending.expectedFirstNoteOnMs}ms planOverrun=${planOverrunMs}ms planNoteons=${pending.plannedNoteOnCount ?? '?'} planBends=${pending.plannedBendStepCount ?? '?'} planCompanions=${pending.plannedCompanionNoteOnCount ?? '?'}`;
-  const base = `[LATENCY] voice->noteon ${dt}ms move->noteon ${moveDt}ms ${planText} move=${pending.move} C${complex} face=${pending.face} expected=C${pending.expectedComplex} mode=${pending.mode} ${exprText}`;
+  const halfText = pending.halfTurn ? ' half-turn=1' : '';
+  const base = `[LATENCY] voice->noteon ${dt}ms move->noteon ${moveDt}ms ${planText} move=${pending.move} C${complex} face=${pending.face}${halfText} expected=C${pending.expectedComplex} mode=${pending.mode} ${exprText}`;
   if (dt >= LATENCY_FAIL_MS) {
     console.error(`[LATENCY FAIL] ${base} | ${summarizeLatency(complex, stats)}`);
   } else if (dt >= LATENCY_WARN_MS) {
@@ -358,7 +360,7 @@ function completeVoiceLatencyProbe(data) {
 function expireVoiceLatencyProbes(now) {
   while (pendingVoiceLatency.length > 0 && now - pendingVoiceLatency[0].t0 >= LATENCY_MISSING_MS) {
     const stale = pendingVoiceLatency.shift();
-    console.error(`[LATENCY FAIL] no noteon echo within ${LATENCY_MISSING_MS}ms for voice id=${stale.id} move=${stale.move} C${stale.expectedComplex} face=${stale.face} mode=${stale.mode} planFirst=${stale.expectedFirstNoteOnMs}ms planNoteons=${stale.plannedNoteOnCount ?? '?'}`);
+    console.error(`[LATENCY FAIL] no noteon echo within ${LATENCY_MISSING_MS}ms for voice id=${stale.id} move=${stale.move} C${stale.expectedComplex} face=${stale.face}${stale.halfTurn ? ' half-turn=1' : ''} mode=${stale.mode} planFirst=${stale.expectedFirstNoteOnMs}ms planNoteons=${stale.plannedNoteOnCount ?? '?'}`);
   }
 }
 
@@ -657,12 +659,107 @@ const midiEchoServer = new OscServer(MIDI_ECHO_PORT, '127.0.0.1', () => {
   console.log(`[MIDI-ECHO] listening on ${MIDI_ECHO_PORT}`);
 });
 
+const SPECTRUM_FRAME_MIN_ATOMS = 13; // address + 12 header atoms
+const SPECTRUM_MAX_BINS = 256;
+const SPECTRUM_LOG_INTERVAL_MS = 5000;
+let _spectrumNoClientDrops = 0;
+let _spectrumFrameDrops = 0;
+let _spectrumLastLogMs = 0;
+
+function activeComplexFromState() {
+  const activeIdx = Math.max(0, Math.min(7, latestEngineState?.activeVertex ?? 0));
+  const assignments = latestEngineState?.cAssignments;
+  const cmx = Array.isArray(assignments) ? assignments[activeIdx] : activeIdx + 1;
+  return Math.max(1, Math.min(8, cmx | 0));
+}
+
+function finiteNumber(v, fallback = 0) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+
+function clampDb(v) {
+  const n = finiteNumber(v, -120);
+  return Math.max(-160, Math.min(24, n));
+}
+
+function parseSpectrumFrame(msg) {
+  if (!Array.isArray(msg) || msg.length < SPECTRUM_FRAME_MIN_ATOMS) return null;
+  const declaredBins = Math.max(0, Math.min(SPECTRUM_MAX_BINS, msg[5] | 0));
+  const atoms = msg.slice(13);
+  const binCount = Math.min(declaredBins || atoms.length, atoms.length, SPECTRUM_MAX_BINS);
+  if (binCount <= 0) return null;
+  const rawComplex = msg[4] | 0;
+  const binsDb = new Array(binCount);
+  for (let i = 0; i < binCount; i++) binsDb[i] = clampDb(atoms[i]);
+  return {
+    frameId: msg[1] | 0,
+    audioTimeMs: finiteNumber(msg[2], Date.now()),
+    analysisLatencyMs: Math.max(0, Math.min(2000, finiteNumber(msg[3], 0))),
+    complex: rawComplex >= 1 && rawComplex <= 8 ? rawComplex : activeComplexFromState(),
+    binCount,
+    minHz: Math.max(1, finiteNumber(msg[6], 40)),
+    maxHz: Math.max(2, finiteNumber(msg[7], 6000)),
+    rmsDb: clampDb(msg[8]),
+    peakDb: clampDb(msg[9]),
+    centroidHz: Math.max(0, finiteNumber(msg[10], 0)),
+    flux: Math.max(0, finiteNumber(msg[11], 0)),
+    stereoWidth: Math.max(0, Math.min(1, finiteNumber(msg[12], 0))),
+    relayReceivedAtMs: Date.now(),
+    binsDb,
+  };
+}
+
+function spectrumClientCount() {
+  let count = 0;
+  wss?.clients?.forEach((client) => {
+    if (client.readyState === WebSocket.OPEN && client._xkSpectrumEnabled === true) count++;
+  });
+  return count;
+}
+
+function maybeLogSpectrumDrops() {
+  const now = Date.now();
+  if (now - _spectrumLastLogMs < SPECTRUM_LOG_INTERVAL_MS) return;
+  if (_spectrumNoClientDrops === 0 && _spectrumFrameDrops === 0) return;
+  console.warn(
+    `[SPECTRUM] dropped noClient=${_spectrumNoClientDrops} invalid=${_spectrumFrameDrops} ` +
+    `enabledClients=${spectrumClientCount()}`
+  );
+  _spectrumNoClientDrops = 0;
+  _spectrumFrameDrops = 0;
+  _spectrumLastLogMs = now;
+}
+
+function broadcastSpectrumFrame(frame) {
+  const payload = JSON.stringify({ type: 'spectrum_frame', data: frame });
+  let sent = 0;
+  wss?.clients?.forEach((client) => {
+    if (client._xkSpectrumEnabled !== true) return;
+    if (sendWs(client, payload, { kind: 'spectrum_frame', lowPriority: true, dropIfBuffered: true })) sent++;
+  });
+  if (sent === 0) {
+    _spectrumNoClientDrops++;
+    maybeLogSpectrumDrops();
+  }
+}
+
 midiEchoServer.on('message', (msg) => {
   // node-osc delivers [address, ...args]. Map to our WS schema.
   // Newer Max bridges append companion/plan metadata after `complex`; older
   // reloaded patches leave those atoms undefined, which resolves to 0 and
   // keeps dashboard rendering backwards-compatible during one reload window.
   const address = msg[0];
+  if (address === OSC.SPECTRUM_FRAME) {
+    const frame = parseSpectrumFrame(msg);
+    if (frame) broadcastSpectrumFrame(frame);
+    else {
+      _spectrumFrameDrops++;
+      maybeLogSpectrumDrops();
+    }
+    return;
+  }
+
   let data = null;
   if (address === OSC.MIDI_NOTEON)        data = { kind: 'noteon',   voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0, isCompanion: (msg[5]|0) === 1, planId: msg[6]|0 };
   else if (address === OSC.MIDI_NOTEOFF)  data = { kind: 'noteoff',  voice: msg[1]|0, pitch: msg[2]|0, velocity: msg[3]|0, complex: msg[4]|0, planId: msg[6]|0 };
@@ -829,6 +926,11 @@ wss.on('connection', function connection(ws) {
         effect: a.effect,
       })),
     }), { kind: 'algorithm_book' });
+    ws._xkSpectrumEnabled = false;
+    sendWs(ws, JSON.stringify({
+      type: 'spectrum_status',
+      data: { enabled: false, clients: spectrumClientCount() },
+    }), { kind: 'spectrum_status' });
 
     ws.on('close', () => {
       console.log("Client disconnected.");
@@ -906,6 +1008,14 @@ wss.on('connection', function connection(ws) {
             else if (data.type === 'set_still_threshold') {
                 const v = parseFloat(data.value);
                 if (Number.isFinite(v)) engine.motion.setThreshold(v);
+            }
+            else if (data.type === 'set_spectrum_enabled') {
+                ws._xkSpectrumEnabled = data.enabled === true;
+                console.log(`[SPECTRUM] client=${wsClientId(ws)} enabled=${ws._xkSpectrumEnabled}`);
+                sendWs(ws, JSON.stringify({
+                  type: 'spectrum_status',
+                  data: { enabled: ws._xkSpectrumEnabled, clients: spectrumClientCount() },
+                }), { kind: 'spectrum_status' });
             }
             else if (data.type === 'get_diagrams') {
                 const diagrams = engine.getDiagrams().map(d => ({

@@ -6,6 +6,7 @@ import {
 } from '../src/face-gesture.js';
 import { XenaKubeEngine } from '../src/engine.js';
 import { voiceToOsc } from '../src/osc-output.js';
+import { ComplexType } from '../src/types.js';
 
 const ALL_FACES: FaceMove[] = ['L', "L'", 'R', "R'", 'F', "F'", 'B', "B'", 'U', "U'", 'D', "D'"];
 
@@ -106,16 +107,16 @@ describe('face-gesture framework (Phase A1)', () => {
       expect(results.size).toBe(8);
     });
 
-    it('registerMod uses ±12 spread', () => {
-      const sig = FACE_SIGNATURES.U;  // registerBias = 0.8
-      // round(0.8 * 12) = 10
-      expect(registerMod(sig)).toBe(10);
+    it('registerMod is neutral because faces do not prescribe register', () => {
+      expect(registerMod(FACE_SIGNATURES.U)).toBe(0);
+      expect(registerMod(FACE_SIGNATURES["U'"])).toBe(0);
+      expect(registerMod(FACE_SIGNATURES.D)).toBe(0);
     });
 
-    it('registerMod gives 0 for faces with neutral register', () => {
-      // L / L' / R / R' all have registerBias 0
-      expect(registerMod(FACE_SIGNATURES.L)).toBe(0);
-      expect(registerMod(FACE_SIGNATURES.R)).toBe(0);
+    it('face registerBias values are neutral metadata', () => {
+      for (const face of ALL_FACES) {
+        expect(FACE_SIGNATURES[face].registerBias).toBe(0);
+      }
     });
 
     it('parityInflection flips on odd tetra orbit', () => {
@@ -170,6 +171,26 @@ describe('face-gesture framework (Phase A1)', () => {
       expect(captured![0].address).toBe('/xk/face');
       expect(captured![0].args[0]).toBe('R');
       expect(captured![1].address).toBe('/xk/voice');
+      expect(captured![1].args[5]).toBe(0);
+    });
+
+    it('voiceToOsc marks half-turn punctuation on /xk/voice', () => {
+      const output = {
+        mode: 'sequential' as const,
+        face: "U'" as const,
+        halfTurn: true,
+        active: [{
+          vertexIndex: 0,
+          complex: ComplexType.AtaxicCloud,
+          params: { density: 1, intensity: 'mf', duration: 2 },
+        }],
+      };
+      const captured = voiceToOsc(output);
+
+      expect(captured[0].address).toBe('/xk/face');
+      expect(captured[0].args[0]).toBe("U'");
+      expect(captured[1].address).toBe('/xk/voice');
+      expect(captured[1].args[5]).toBe(1);
     });
 
     it('voiceToOsc emits a /xk/face reset sentinel when face is null', () => {

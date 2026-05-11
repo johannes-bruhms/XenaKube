@@ -62,6 +62,9 @@ let rollCanvas = null;
 let rollCtx    = null;
 let rollDpr    = 1;
 let rollRowH   = 19;     // device-px per semitone — recomputed each frame
+let rollVisible = true;
+let ROLL_VISUAL_DELAY_MS = 0;
+let rollClearedWhileHidden = false;
 
 // Optional cross-module getter wired by main.js. Returns
 // `{ voice, complex, pitch }` for the current active gliss line, or null.
@@ -1398,11 +1401,21 @@ function drawRollingScore() {
   }
   const w = rollCanvas.width;
   const h = rollCanvas.height;
-  const nowMs = performance.now();
+  const nowMs = performance.now() - ROLL_VISUAL_DELAY_MS;
   const innerHDev = Math.max(48 * rollDpr, h - (ROLL_TOP_INSET_PX + ROLL_BOTTOM_INSET_PX) * rollDpr);
   rollRowH = Math.max(4 * rollDpr, innerHDev / ROLL_PITCH_RANGE);
   const visibleSec = (w / rollDpr) / ROLL_PX_PER_SEC;
   const horizonMs = nowMs - visibleSec * 1000;
+
+  if (!rollVisible) {
+    if (!rollClearedWhileHidden) {
+      rollCtx.clearRect(0, 0, w, h);
+      rollClearedWhileHidden = true;
+    }
+    requestAnimationFrame(drawRollingScore);
+    return;
+  }
+  rollClearedWhileHidden = false;
 
   rollCtx.clearRect(0, 0, w, h);
 
@@ -1655,6 +1668,7 @@ export function init({ onForceFinalise, getActiveGlissLineDisplay } = {}) {
 export function noteOn(data) {
   const cmx = data.complex | 0;
   const key = `${data.voice}:${data.pitch}`;
+  const noteNow = performance.now();
   // D72.6 — companion short-circuit. A companion noteon is NOT a chain
   // participant, NOT a brush, NOT a sieve highlight, NOT a triangle line.
   // It's recorded as a fixed offset against the current main pitch and
@@ -1668,7 +1682,7 @@ export function noteOn(data) {
     const mainPitch = _findCurrentMainPitch(data.voice, cmx);
     if (mainPitch != null) {
       const offset = data.pitch - mainPitch;
-      const now = performance.now();
+      const now = noteNow;
       // D73 — close any prior open segment for the same (voice, complex)
       // before pushing a fresh one. C5/C6 re-voice companions at bend
       // boundaries, so adjacent segments are expected and should not overlap.
@@ -1719,7 +1733,7 @@ export function noteOn(data) {
       const vk = data.voice + ':' + cmx;
       const until = bendChainUntilMs.get(vk) || 0;
       const expectedPitch = bendChainTargetPitch.get(vk);
-      if (until > performance.now() && expectedPitch != null &&
+      if (until > noteNow && expectedPitch != null &&
           Math.abs(expectedPitch - data.pitch) <= 1) {
         chainStart = false;
         bendChainUntilMs.delete(vk);
@@ -1770,7 +1784,7 @@ export function noteOn(data) {
     velocity: data.velocity,
     voice:    data.voice,
     complex:  cmx,
-    onsetMs:  performance.now(),
+    onsetMs:  noteNow,
     // Snapshot CC 11 (Expression) at noteon time. Used as the legacy-fallback
     // start value in `sampleScaleAtT` when the per-voice trace buffer is
     // empty (pre-init, panic recovery). C0/C1 are velocity-driven and ignore
@@ -2023,22 +2037,39 @@ export function exprChanged(data) {
 export function bendStep(data) {
   const cmx = data.complex | 0;
   const dur = (data.durMs | 0);
+  const now = performance.now();
   bendSegments.push({
     voice:   data.voice,
     complex: cmx,
-    t0:      performance.now(),
+    t0:      now,
     dur:     dur,
     p0:      data.fromPitch,
     p1:      data.toPitch,
   });
   const vk = data.voice + ':' + cmx;
-  bendChainUntilMs.set(vk, performance.now() + dur + BEND_CHAIN_GRACE_TAIL_MS);
+  bendChainUntilMs.set(vk, now + dur + BEND_CHAIN_GRACE_TAIL_MS);
   bendChainTargetPitch.set(vk, data.toPitch);
 }
 
 /** Slider-driven scroll speed (CSS px / sec). */
 export function setScrollSpeed(val) {
   ROLL_PX_PER_SEC = val;
+}
+
+/** Show/hide the MIDI brush canvas without touching MIDI state. */
+export function setVisible(value) {
+  rollVisible = value !== false;
+  if (rollCanvas) rollCanvas.classList.toggle('midi-disabled', !rollVisible);
+  rollClearedWhileHidden = false;
+}
+
+/** Optional shared visual delay used only while the spectrogram layer is on. */
+export function setVisualDelay(ms) {
+  ROLL_VISUAL_DELAY_MS = Number.isFinite(ms) ? Math.max(0, Math.min(500, ms)) : 0;
+}
+
+export function getCanvas() {
+  return rollCanvas;
 }
 
 /**

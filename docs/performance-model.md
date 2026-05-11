@@ -8,17 +8,18 @@ Each physical cube turn:
 
 1. Move -> **cube-algorithm detector** (168 rotation variants of 7 canonical algorithms).
 2. If algorithm matched -> **mode manager** records the event. Effect handlers are currently stubs.
-3. Cosmology advances:
+3. **Half-turn punctuation detector** compares the move with the previous unpaired move. If the same move repeats inside `HALF_TURN_WINDOW_MS`, the second turn carries `halfTurn=1`.
+4. Cosmology advances:
    - `beta-cosmo`: visible K_i topology advances by the **physical corner permutation** for that face turn. A position `i` contains K corner `kPermutation[i]`, and the sounding read-head is the direction-aware collision endpoint for the quarter-move: surrounding faces use CW top-right / CCW top-left relative to the current top face; top/bottom faces use the user-facing edge.
    - `alpha-cosmo`: K_i and C_i use the historical S4 walks; K/C assignments are derived from their S4 group elements.
-4. Kinematic diagrams drive alpha-cosmo walks and remain shadow metadata in beta-cosmo.
-5. C_i assignment advances only in alpha-cosmo. Beta-cosmo keeps C1..C8 fixed to local slots (`slot i -> C{i+1}`) and treats C S4 as shadow metadata.
-6. If the move is one of the 12 face-moves -> emit `/xk/face` before voice dispatch.
-7. **Voice engine** emits active voices (1 in sequential, 8 in polyphonic); each voice carries its `face`.
-8. **Phrase planner** computes a TypeScript shadow plan for C1-C8: intended note-ons, note-offs, bend steps, release, K-duration × face-multiplier span, first-onset timing, and companion counts.
-9. **Phrase echo auditor** attaches that plan id to the matching Max-rendered voice and compares the planned structure against `/xk/midi/*` echoes.
-10. **Expression processor** supplies continuous gyro-derived controls; the turn-rate tracker supplies both a discrete regime and a continuous pressure scalar.
-11. State broadcasts to Max (OSC) + dashboard (WS).
+5. Kinematic diagrams drive alpha-cosmo walks and remain shadow metadata in beta-cosmo.
+6. C_i assignment advances only in alpha-cosmo. Beta-cosmo keeps C1..C8 fixed to local slots (`slot i -> C{i+1}`) and treats C S4 as shadow metadata.
+7. If the move is one of the 12 face-moves -> emit `/xk/face` before voice dispatch.
+8. **Voice engine** emits active voices (1 in sequential, 8 in polyphonic); each voice carries its `face` and `halfTurn` flag.
+9. **Phrase planner** computes a TypeScript shadow plan for C1-C8, or the half-turn punctuation plan when `halfTurn=1`: intended note-ons, note-offs, bend steps, release, K-duration × face-multiplier span, first-onset timing, and companion counts.
+10. **Phrase echo auditor** attaches that plan id to the matching Max-rendered voice and compares the planned structure against `/xk/midi/*` echoes.
+11. **Expression processor** supplies continuous gyro-derived controls; the turn-rate tracker supplies both a discrete regime and a continuous pressure scalar.
+12. State broadcasts to Max (OSC) + dashboard (WS).
 
 Current migration boundary: Max still renders live audio with the legacy `phraseC1`...`phraseC8` functions. The relay-side `PhrasePlanner` plus `PhraseEchoAuditor` are the auditable shadow source of truth used to compare intent against `/xk/midi/*` echoes before flipping Max into a pure VST/MIDI adapter.
 
@@ -55,6 +56,8 @@ Rubik's cube algorithms detected from the move stream currently fire **detection
 Detection still fires and the dashboard logs the match; effect rebinding is tracked in `docs/todo.md` Phase B (algorithms-as-phrase-vocabulary).
 
 **Half-turn convention (CCW)**: GAN hardware only reports 90-degree clicks, so `U2`/`R2` are stored as two CCW quarter-turns. Performers must flick half-turns CCW (speedcube default); CW flicks won't trigger the algorithm. Required technique: the cost of a lean algorithm book.
+
+**Half-turn punctuation**: for performance, two identical move strings made inside `HALF_TURN_WINDOW_MS` are also treated as a physical half-turn gesture. This does not replace the two quarter-turn topology updates; it marks the second turn's voice with `halfTurn=1`. The synthesis bridge then ignores the normal K/C/face phrase shape and renders a short, loud, assertive bowed accent dyad. The detector forms non-overlapping pairs, so a rapid triple marks only the second turn as punctuation and starts a new candidate on the third.
 
 **Overlap suppression**: after an algorithm fires, algorithms whose buffer **partially overlaps** are suppressed. **Full containment** (for example, a T-perm sequence starting with a sexy-move prefix) remains allowed. Buffer timeout 2 s, max 20 moves.
 

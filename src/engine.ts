@@ -23,6 +23,7 @@ import { TurnRateTracker } from './turn-rate.js';
 import { parseFace, getFaceSignature, type FaceMove } from './face-gesture.js';
 import { activeCornerForTurn, upFace, type Face } from './orientation.js';
 import { MotionTracker } from './motion.js';
+import { HALF_TURN_WINDOW_MS, HALF_TURN_GESTURE_DURATION_SEC } from './swam-mapping.js';
 
 export type StateListener = (state: XenaKubeState) => void;
 export type CubeAlgorithmListener = (match: CubeAlgorithmMatch) => void;
@@ -73,6 +74,8 @@ export class XenaKubeEngine {
   private trackedK = 0;
   private lastTurnedFace: Face | null = null;
   private lastTurnedMove: FaceMove | null = null;
+  private lastHalfTurn = false;
+  private halfTurnCandidate: { move: MoveString; tMs: number } | null = null;
   // Phrase-lock window: while Date.now() < voiceLockUntilMs, the current
   // (K, C) at activeVertex stays frozen — gyro tilt cannot drift the
   // read-head or rotate the C-assignments mid-phrase. Set on every onTurn
@@ -185,7 +188,10 @@ export class XenaKubeEngine {
     const nextCornerPermutation = applyCornerMove(this.cornerPermutation, move);
     if (el === null || !nextCornerPermutation) return null;
 
-    this.turnRateTracker.push(Date.now());
+    const now = Date.now();
+    const halfTurn = this.detectHalfTurn(move, now);
+    this.lastHalfTurn = halfTurn;
+    this.turnRateTracker.push(now);
 
     const algorithmMatches = this.algorithmDetector.pushAll(move);
     for (let i = algorithmMatches.length - 1; i >= 0; i--) {
@@ -239,7 +245,7 @@ export class XenaKubeEngine {
 
     const vertices = permuteVertexSet(getBaseVertices(), this.currentKPermutation());
     const complexes = this.complexCube.getAssignments(this.mode.cosmology);
-    const voiceOutput = this.voiceEngine.emit(vertices, this.activeVertex, complexes, face);
+    const voiceOutput = this.voiceEngine.emit(vertices, this.activeVertex, complexes, face, halfTurn);
 
     // Lock phrase materials (activeVertex slot + C-rotation) for the
     // estimated phrase duration: K-vertex base × face durationMult. While
@@ -249,8 +255,10 @@ export class XenaKubeEngine {
     const lockedK = vertices[this.activeVertex];
     const sig = getFaceSignature(move);
     const faceMul = sig?.durationMult ?? 1;
-    const phraseSec = (lockedK?.duration ?? 1) * faceMul;
-    this.voiceLockUntilMs = Date.now() + phraseSec * 1000;
+    const phraseSec = halfTurn
+      ? HALF_TURN_GESTURE_DURATION_SEC
+      : (lockedK?.duration ?? 1) * faceMul;
+    this.voiceLockUntilMs = now + phraseSec * 1000;
 
     const state = this.getState();
     this.emitState(state);
@@ -343,6 +351,7 @@ export class XenaKubeEngine {
       scrambleFactor: scrambleFactor(this.cornerPermutation),
       turnRate: this.turnRateTracker.getRate(),
       regime: this.turnRateTracker.getRegime(),
+      lastHalfTurn: this.lastHalfTurn,
       expression: this.expressionState,
       lastTurnedFace: this.lastTurnedFace,
       upFace: upFace(this.gyro),
@@ -364,6 +373,8 @@ export class XenaKubeEngine {
     this.substitutionCount = 0;
     this.lastTurnedFace = null;
     this.lastTurnedMove = null;
+    this.lastHalfTurn = false;
+    this.halfTurnCandidate = null;
     this.voiceLockUntilMs = 0;
     this.activeVertex = this.nextActiveVertexAfterStep(0);
     this.gyro = [0, 0, 0, 1];
@@ -417,5 +428,15 @@ export class XenaKubeEngine {
   private positionOfTrackedK(): number {
     const idx = this.cornerPermutation.indexOf(this.trackedK);
     return idx >= 0 ? idx : 0;
+  }
+
+  private detectHalfTurn(move: MoveString, now: number): boolean {
+    const prev = this.halfTurnCandidate;
+    const hit = !!prev &&
+      prev.move === move &&
+      now - prev.tMs >= 0 &&
+      now - prev.tMs <= HALF_TURN_WINDOW_MS;
+    this.halfTurnCandidate = hit ? null : { move, tMs: now };
+    return hit;
   }
 }

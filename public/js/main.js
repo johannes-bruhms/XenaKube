@@ -22,6 +22,8 @@ import {
 
 import * as cubeScene from './cube-scene.js';
 import * as rollingScore from './rolling-score.js';
+import * as spectrumScore from './spectrum-score.js';
+import * as performanceRecorder from './performance-recorder.js';
 import * as triangle from './triangle.js';
 import * as stateUi from './state-ui.js';
 import { initInterruptionLayer } from '../interruption/index.js';
@@ -42,6 +44,15 @@ cubeScene.init({
   // same rest pose the visual just adopted (otherwise snap thresholds
   // stay anchored to the raw sensor frame and feel asymmetric).
   onAutoZero: () => wsSend({ type: 'zero_gyro' }),
+});
+
+function setSpectrumStatusText(text) {
+  const el = document.getElementById('spectrumStatus');
+  if (el) el.textContent = text || 'off';
+}
+
+spectrumScore.init({
+  onStatus: setSpectrumStatusText,
 });
 
 rollingScore.init({
@@ -98,11 +109,17 @@ const wsStatusEl = { set textContent(_v) {} };
 let gyroThrottleFrame = null;
 let pendingGyroState = null;
 let currentCosmology = 'beta-cosmo';
+let spectrumEnabled = false;
+let midiBrushEnabled = true;
+let currentScoreSpeed = 360;
+let currentSpectrumLatencyMs = 120;
+let currentSpectrumNudgeMs = 0;
 
 transportOn('open', () => {
   dot.classList.add('connected');
   wsStatusEl.textContent = 'connected';
   wsSend({ type: 'get_diagrams' });
+  wsSend({ type: 'set_spectrum_enabled', enabled: spectrumEnabled });
 });
 transportOn('close', () => {
   dot.classList.remove('connected');
@@ -111,6 +128,7 @@ transportOn('close', () => {
 });
 transportOn('state', (data, move) => {
   if (data.cosmology) currentCosmology = data.cosmology;
+  spectrumScore.updateState(data);
   cubeScene.update(data, move);
   stateUi.update(data, move);
   updateMotionHUD(data.motion);
@@ -127,6 +145,7 @@ transportOn('gyroState', (data) => {
   if (!gyroThrottleFrame) {
     gyroThrottleFrame = requestAnimationFrame(() => {
       if (pendingGyroState) {
+        spectrumScore.updateState(pendingGyroState);
         cubeScene.update(pendingGyroState, null);
         stateUi.update(pendingGyroState, null);
         if (pendingGyroState.cosmology) currentCosmology = pendingGyroState.cosmology;
@@ -155,6 +174,10 @@ transportOn('solve',        () => {
   interruptionLayer.onSolve();
 });
 transportOn('midiEcho',     handleMidiEcho);
+transportOn('spectrumFrame', spectrumScore.handleFrame);
+transportOn('spectrumStatus', (data) => {
+  if (data?.enabled === false && spectrumEnabled) setSpectrumStatusText('relay');
+});
 
 transportConnect();
 
@@ -373,7 +396,9 @@ function updateMotionHUD(motion) {
 const scoreSpeedSlider = document.getElementById('scoreSpeed');
 const scoreSpeedValEl  = document.getElementById('scoreSpeedVal');
 function applyScoreSpeed(val) {
+  currentScoreSpeed = val;
   rollingScore.setScrollSpeed(val);
+  spectrumScore.setScrollSpeed(val);
   scoreSpeedValEl.textContent = String(val | 0);
 }
 const savedScoreSpeed = parseFloat(localStorage.getItem('scoreSpeed'));
@@ -385,6 +410,238 @@ scoreSpeedSlider.addEventListener('input', () => {
   const val = parseFloat(scoreSpeedSlider.value);
   applyScoreSpeed(val);
   localStorage.setItem('scoreSpeed', String(val));
+});
+
+const midiBrushToggle = document.getElementById('midiBrushToggle');
+const spectrogramToggle = document.getElementById('spectrogramToggle');
+const spectrumLatencySlider = document.getElementById('spectrumLatency');
+const spectrumLatencyValEl = document.getElementById('spectrumLatencyVal');
+const spectrumNudgeSlider = document.getElementById('spectrumNudge');
+const spectrumNudgeValEl = document.getElementById('spectrumNudgeVal');
+const spectrumGainSlider = document.getElementById('spectrumGain');
+const spectrumGainValEl = document.getElementById('spectrumGainVal');
+const spectrumFloorSlider = document.getElementById('spectrumFloor');
+const spectrumFloorValEl = document.getElementById('spectrumFloorVal');
+const spectrumBgSlider = document.getElementById('spectrumBg');
+const spectrumBgValEl = document.getElementById('spectrumBgVal');
+const spectrumSmoothSlider = document.getElementById('spectrumSmooth');
+const spectrumSmoothValEl = document.getElementById('spectrumSmoothVal');
+const spectrumBlurSlider = document.getElementById('spectrumBlur');
+const spectrumBlurValEl = document.getElementById('spectrumBlurVal');
+const spectrumTimeSlider = document.getElementById('spectrumTime');
+const spectrumTimeValEl = document.getElementById('spectrumTimeVal');
+const spectrumPaletteEl = document.getElementById('spectrumPalette');
+const recordModeEl = document.getElementById('recordMode');
+const recordBeginBtn = document.getElementById('recordBeginBtn');
+const recordEndBtn = document.getElementById('recordEndBtn');
+const recordStatusEl = document.getElementById('recordStatus');
+
+function setLayerButton(btn, active) {
+  if (!btn) return;
+  btn.classList.toggle('active', active);
+  btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+}
+
+function applySpectrumTiming() {
+  spectrumScore.setTiming({
+    latencyMs: currentSpectrumLatencyMs,
+    nudgeMs: currentSpectrumNudgeMs,
+  });
+  rollingScore.setVisualDelay(spectrumEnabled ? currentSpectrumLatencyMs : 0);
+}
+
+function applyMidiBrushEnabled(enabled, persist = true) {
+  midiBrushEnabled = enabled === true;
+  rollingScore.setVisible(midiBrushEnabled);
+  setLayerButton(midiBrushToggle, midiBrushEnabled);
+  if (persist) localStorage.setItem('midiBrushEnabled', midiBrushEnabled ? '1' : '0');
+}
+
+function applySpectrogramEnabled(enabled, persist = true) {
+  spectrumEnabled = enabled === true;
+  spectrumScore.setEnabled(spectrumEnabled);
+  applySpectrumTiming();
+  setLayerButton(spectrogramToggle, spectrumEnabled);
+  wsSend({ type: 'set_spectrum_enabled', enabled: spectrumEnabled });
+  if (persist) localStorage.setItem('spectrogramEnabled', spectrumEnabled ? '1' : '0');
+}
+
+function readBoolSetting(key, fallback) {
+  const v = localStorage.getItem(key);
+  if (v === '1') return true;
+  if (v === '0') return false;
+  return fallback;
+}
+
+const visualParams = new URLSearchParams(window.location.search);
+const urlSpectrum = visualParams.get('spectrogram');
+const urlMidi = visualParams.get('midi');
+applyMidiBrushEnabled(urlMidi === '0' ? false : readBoolSetting('midiBrushEnabled', true), false);
+applySpectrogramEnabled(urlSpectrum === '1' ? true : (urlSpectrum === '0' ? false : readBoolSetting('spectrogramEnabled', false)), false);
+
+const savedSpectrumLatency = parseFloat(localStorage.getItem('spectrumLatencyMs'));
+if (isFinite(savedSpectrumLatency) && savedSpectrumLatency >= 0 && savedSpectrumLatency <= 250) {
+  currentSpectrumLatencyMs = savedSpectrumLatency;
+  spectrumLatencySlider.value = String(savedSpectrumLatency | 0);
+}
+spectrumLatencyValEl.textContent = String(currentSpectrumLatencyMs | 0);
+
+const savedSpectrumNudge = parseFloat(localStorage.getItem('spectrumNudgeMs'));
+if (isFinite(savedSpectrumNudge) && savedSpectrumNudge >= -200 && savedSpectrumNudge <= 200) {
+  currentSpectrumNudgeMs = savedSpectrumNudge;
+  spectrumNudgeSlider.value = String(savedSpectrumNudge | 0);
+}
+spectrumNudgeValEl.textContent = String(currentSpectrumNudgeMs | 0);
+applySpectrumTiming();
+
+midiBrushToggle?.addEventListener('click', () => {
+  applyMidiBrushEnabled(!midiBrushEnabled);
+});
+spectrogramToggle?.addEventListener('click', () => {
+  applySpectrogramEnabled(!spectrumEnabled);
+});
+spectrumLatencySlider?.addEventListener('input', () => {
+  currentSpectrumLatencyMs = parseFloat(spectrumLatencySlider.value) || 0;
+  spectrumLatencyValEl.textContent = String(currentSpectrumLatencyMs | 0);
+  localStorage.setItem('spectrumLatencyMs', String(currentSpectrumLatencyMs));
+  applySpectrumTiming();
+});
+spectrumNudgeSlider?.addEventListener('input', () => {
+  currentSpectrumNudgeMs = parseFloat(spectrumNudgeSlider.value) || 0;
+  spectrumNudgeValEl.textContent = String(currentSpectrumNudgeMs | 0);
+  localStorage.setItem('spectrumNudgeMs', String(currentSpectrumNudgeMs));
+  applySpectrumTiming();
+});
+
+const savedSpectrumGain = parseFloat(localStorage.getItem('spectrumGainDb'));
+const initialSpectrumGain = isFinite(savedSpectrumGain) ? clampInt(savedSpectrumGain, -30, 30) : 0;
+if (spectrumGainSlider) spectrumGainSlider.value = String(initialSpectrumGain);
+if (spectrumGainValEl) spectrumGainValEl.textContent = String(initialSpectrumGain);
+spectrumScore.setGainOffset(initialSpectrumGain);
+spectrumGainSlider?.addEventListener('input', () => {
+  const v = clampInt(parseFloat(spectrumGainSlider.value), -30, 30);
+  spectrumGainValEl.textContent = String(v);
+  spectrumScore.setGainOffset(v);
+  localStorage.setItem('spectrumGainDb', String(v));
+});
+
+const savedSpectrumFloor = parseFloat(localStorage.getItem('spectrumFloorDb'));
+const initialSpectrumFloor = isFinite(savedSpectrumFloor) ? clampInt(savedSpectrumFloor, -130, -50) : -95;
+if (spectrumFloorSlider) spectrumFloorSlider.value = String(initialSpectrumFloor);
+if (spectrumFloorValEl) spectrumFloorValEl.textContent = String(initialSpectrumFloor);
+spectrumScore.setFloorDb(initialSpectrumFloor);
+spectrumFloorSlider?.addEventListener('input', () => {
+  const v = clampInt(parseFloat(spectrumFloorSlider.value), -130, -50);
+  spectrumFloorValEl.textContent = String(v);
+  spectrumScore.setFloorDb(v);
+  localStorage.setItem('spectrumFloorDb', String(v));
+});
+
+const savedSpectrumBg = parseFloat(localStorage.getItem('spectrumBgPct'));
+const initialSpectrumBg = isFinite(savedSpectrumBg) ? clampInt(savedSpectrumBg, 0, 40) : 10;
+if (spectrumBgSlider) spectrumBgSlider.value = String(initialSpectrumBg);
+if (spectrumBgValEl) spectrumBgValEl.textContent = String(initialSpectrumBg);
+spectrumScore.setMinUnit(initialSpectrumBg / 100);
+spectrumBgSlider?.addEventListener('input', () => {
+  const v = clampInt(parseFloat(spectrumBgSlider.value), 0, 40);
+  spectrumBgValEl.textContent = String(v);
+  spectrumScore.setMinUnit(v / 100);
+  localStorage.setItem('spectrumBgPct', String(v));
+});
+
+const savedSpectrumSmooth = parseFloat(localStorage.getItem('spectrumSmoothPct'));
+const initialSpectrumSmooth = isFinite(savedSpectrumSmooth) ? clampInt(savedSpectrumSmooth, 0, 120) : 67;
+if (spectrumSmoothSlider) spectrumSmoothSlider.value = String(initialSpectrumSmooth);
+if (spectrumSmoothValEl) spectrumSmoothValEl.textContent = String(initialSpectrumSmooth);
+spectrumScore.setSmoothDensity(initialSpectrumSmooth / 100);
+spectrumSmoothSlider?.addEventListener('input', () => {
+  const v = clampInt(parseFloat(spectrumSmoothSlider.value), 0, 120);
+  spectrumSmoothValEl.textContent = String(v);
+  spectrumScore.setSmoothDensity(v / 100);
+  localStorage.setItem('spectrumSmoothPct', String(v));
+});
+
+const savedSpectrumBlur = parseFloat(localStorage.getItem('spectrumBlurTenths'));
+const initialSpectrumBlur = isFinite(savedSpectrumBlur) ? clampInt(savedSpectrumBlur, 0, 40) : 8;
+if (spectrumBlurSlider) spectrumBlurSlider.value = String(initialSpectrumBlur);
+if (spectrumBlurValEl) spectrumBlurValEl.textContent = String(initialSpectrumBlur);
+spectrumScore.setBlurPx(initialSpectrumBlur / 10);
+spectrumBlurSlider?.addEventListener('input', () => {
+  const v = clampInt(parseFloat(spectrumBlurSlider.value), 0, 40);
+  spectrumBlurValEl.textContent = String(v);
+  spectrumScore.setBlurPx(v / 10);
+  localStorage.setItem('spectrumBlurTenths', String(v));
+});
+
+const savedSpectrumTime = parseFloat(localStorage.getItem('spectrumTimePct'));
+const initialSpectrumTime = isFinite(savedSpectrumTime) ? clampInt(savedSpectrumTime, 0, 95) : 65;
+if (spectrumTimeSlider) spectrumTimeSlider.value = String(initialSpectrumTime);
+if (spectrumTimeValEl) spectrumTimeValEl.textContent = String(initialSpectrumTime);
+spectrumScore.setTemporalSmoothing(initialSpectrumTime / 100);
+spectrumTimeSlider?.addEventListener('input', () => {
+  const v = clampInt(parseFloat(spectrumTimeSlider.value), 0, 95);
+  spectrumTimeValEl.textContent = String(v);
+  spectrumScore.setTemporalSmoothing(v / 100);
+  localStorage.setItem('spectrumTimePct', String(v));
+});
+
+const savedSpectrumPalette = localStorage.getItem('spectrumPalette');
+const paletteNames = spectrumScore.getPaletteNames();
+const initialPalette = paletteNames.includes(savedSpectrumPalette) ? savedSpectrumPalette : 'auto';
+if (spectrumPaletteEl) spectrumPaletteEl.value = initialPalette;
+spectrumScore.setPalette(initialPalette);
+spectrumPaletteEl?.addEventListener('change', () => {
+  const v = spectrumPaletteEl.value;
+  spectrumScore.setPalette(v);
+  localStorage.setItem('spectrumPalette', v);
+});
+
+function clampInt(v, lo, hi) {
+  if (!isFinite(v)) return lo;
+  return Math.max(lo, Math.min(hi, Math.round(v)));
+}
+
+if (recordModeEl) {
+  const savedRecordMode = localStorage.getItem('recordMode');
+  if (['visible', 'composite', 'spectrum', 'midi'].includes(savedRecordMode)) recordModeEl.value = savedRecordMode;
+  recordModeEl.addEventListener('change', () => {
+    localStorage.setItem('recordMode', recordModeEl.value);
+  });
+}
+
+function currentRightInsetCss() {
+  const sieve = document.querySelector('.ovl-sieve-right');
+  const rect = sieve?.getBoundingClientRect();
+  return rect?.width || 0;
+}
+
+function setRecordingUi(active) {
+  if (recordBeginBtn) recordBeginBtn.disabled = active;
+  if (recordEndBtn) recordEndBtn.disabled = !active;
+}
+
+performanceRecorder.init({
+  getSources: () => {
+    const rightInsetCss = currentRightInsetCss();
+    return [
+      { kind: 'spectrum', canvas: spectrumScore.getCanvas(), enabled: spectrumEnabled, rightInsetCss },
+      { kind: 'midi', canvas: rollingScore.getCanvas(), enabled: midiBrushEnabled, rightInsetCss },
+    ];
+  },
+  getMode: () => recordModeEl?.value || 'visible',
+  getScrollSpeed: () => currentScoreSpeed,
+  onStatus: (text) => {
+    if (recordStatusEl) recordStatusEl.textContent = text;
+  },
+});
+setRecordingUi(false);
+recordBeginBtn?.addEventListener('click', () => {
+  performanceRecorder.begin();
+  setRecordingUi(true);
+});
+recordEndBtn?.addEventListener('click', () => {
+  performanceRecorder.end();
+  setRecordingUi(false);
 });
 
 const ghostSizeSlider = document.getElementById('ghostSize');
@@ -425,27 +682,25 @@ cubeDepthSlider.addEventListener('input', () => {
 
 // Background color swatch — overrides CSS `--bg` at runtime so every rule
 // referencing var(--bg) (body fill, panel backers, etc.) updates live.
-// Persisted in localStorage so the picked colour survives reloads. The
-// swatch lives inside .ovl-br which is hidden by `body.ui-hidden`, so
-// clicking the title to collapse the chrome hides the picker too.
-const bgColorEl    = document.getElementById('bgColor');
-const bgColorValEl = document.getElementById('bgColorVal');
-function applyBgColor(hex) {
-  document.documentElement.style.setProperty('--bg', hex);
-  bgColorValEl.textContent = hex;
-}
-const savedBgColor = localStorage.getItem('bgColor');
-if (savedBgColor && /^#[0-9a-fA-F]{6}$/.test(savedBgColor)) {
-  bgColorEl.value = savedBgColor;
-  applyBgColor(savedBgColor);
-} else {
-  applyBgColor(bgColorEl.value);
-}
-bgColorEl.addEventListener('input', () => {
-  const hex = bgColorEl.value;
-  applyBgColor(hex);
-  localStorage.setItem('bgColor', hex);
-});
+// Legacy manual background colour path, kept commented for easy revert.
+// const bgColorEl    = document.getElementById('bgColor');
+// const bgColorValEl = document.getElementById('bgColorVal');
+// function applyBgColor(hex) {
+//   document.documentElement.style.setProperty('--bg', hex);
+//   bgColorValEl.textContent = hex;
+// }
+// const savedBgColor = localStorage.getItem('bgColor');
+// if (savedBgColor && /^#[0-9a-fA-F]{6}$/.test(savedBgColor)) {
+//   bgColorEl.value = savedBgColor;
+//   applyBgColor(savedBgColor);
+// } else {
+//   applyBgColor(bgColorEl.value);
+// }
+// bgColorEl.addEventListener('input', () => {
+//   const hex = bgColorEl.value;
+//   applyBgColor(hex);
+//   localStorage.setItem('bgColor', hex);
+// });
 
 // Quality picker — Phase 3 post-processing tier (low / med / high). Toggles
 // the bloom + tone-mapping composer in cube-scene.js. Med is the default for

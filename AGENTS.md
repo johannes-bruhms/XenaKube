@@ -61,13 +61,14 @@ npm run dev
 - `docs/bridge-invariants.md`: full bridge invariant enforcement detail.
 - `docs/dashboard-invariants.md`: full dashboard invariant enforcement detail.
 - `docs/dashboard-architecture.md`: browser dashboard module layout, cross-module reads, overlay positioning, and brush rendering.
+- `docs/spectrogram_roadmap.md`: optional actual-audio spectrogram feature roadmap.
 - `docs/interruption-layer-plan.md`: optional interruption-layer design and first-draft verification notes.
 - `docs/performance-model.md`: musical / structural model, core turn loop, modes, algorithm book, expression mapping, and key math.
 - `docs/osc-reference.md`: OSC address table and routing notes.
 - `docs/synthesis-bridge.md`: Max patch topology, bridge file roles, and SWAM routing notes.
 - `docs/swam/swam_cello_reference.md`: authoritative SWAM parameter, CC, and keyswitch reference.
 - `docs/xenakis_nomos_alpha_primary_source.md`: Xenakis primary source excerpt for the cube model.
-- `docs/xenakube-operator-manual.md`: performer-facing manual and face/complex behavior reference.
+- `docs/xenakube-operation-manual.md`: performer-facing operation manual and face/complex behavior reference.
 - `docs/xenakube-feedback-04302026.md`: dated artistic feedback/reference notes; not a current-behavior spec unless another doc promotes a point from it.
 - `README.md`: user-facing setup and overview.
 

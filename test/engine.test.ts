@@ -1,9 +1,20 @@
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, vi } from 'vitest';
 import { XenaKubeEngine } from '../src/engine.js';
 import { getBaseVertices } from '../src/vertices.js';
 import { getPermutation, parseMoveToElement } from '../src/group.js';
 import { ComplexType } from '../src/types.js';
+import { HALF_TURN_WINDOW_MS } from '../src/swam-mapping.js';
 import type { VoiceOutput } from '../src/voice-engine.js';
+
+function withMockNow<T>(startMs: number, fn: (setNow: (ms: number) => void) => T): T {
+  let now = startMs;
+  const spy = vi.spyOn(Date, 'now').mockImplementation(() => now);
+  try {
+    return fn((ms: number) => { now = ms; });
+  } finally {
+    spy.mockRestore();
+  }
+}
 
 describe('XenaKubeEngine', () => {
   it('starts at identity with correct initial state', () => {
@@ -121,6 +132,46 @@ describe('XenaKubeEngine', () => {
       complex: ComplexType.IonizedAtom,
     });
   });
+
+  it('flags the second rapid identical quarter-turn as half-turn punctuation', () => withMockNow(10_000, setNow => {
+    const engine = new XenaKubeEngine();
+    const emitted: VoiceOutput[] = [];
+    engine.onVoice(output => { emitted.push(output); });
+
+    let state = engine.onTurn("U'")!;
+    expect(state.lastHalfTurn).toBe(false);
+    expect(emitted.at(-1)?.halfTurn).toBe(false);
+
+    setNow(10_000 + HALF_TURN_WINDOW_MS - 1);
+    state = engine.onTurn("U'")!;
+    expect(state.lastHalfTurn).toBe(true);
+    expect(emitted.at(-1)?.halfTurn).toBe(true);
+    expect(emitted.at(-1)?.face).toBe("U'");
+
+    setNow(10_000 + HALF_TURN_WINDOW_MS + 20);
+    state = engine.onTurn("U'")!;
+    expect(state.lastHalfTurn).toBe(false);
+    expect(emitted.at(-1)?.halfTurn).toBe(false);
+  }));
+
+  it('does not overlap half-turn pairs or match opposite directions', () => withMockNow(20_000, setNow => {
+    const engine = new XenaKubeEngine();
+    const emitted: VoiceOutput[] = [];
+    engine.onVoice(output => { emitted.push(output); });
+
+    engine.onTurn('R');
+    setNow(20_100);
+    engine.onTurn("R'");
+    expect(emitted.at(-1)?.halfTurn).toBe(false);
+
+    setNow(20_180);
+    engine.onTurn("R'");
+    expect(emitted.at(-1)?.halfTurn).toBe(true);
+
+    setNow(20_240);
+    engine.onTurn("R'");
+    expect(emitted.at(-1)?.halfTurn).toBe(false);
+  }));
 
   it('keeps C_i S4 state non-permuting in algorithmic mode', () => {
     const engine = new XenaKubeEngine({ cCube: 'algorithmic' });
