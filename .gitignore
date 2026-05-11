@@ -17,6 +17,14 @@ TD/
 backups/
 docs/*.png
 docs/temp-screenshots/
+XenaKube-from-mac/
+
+# Local browser/test artifacts
+.tmp-chrome-xk/
+AUDIT_REPORT.txt
+
+# Local neural model payloads; keep project patches/config separate from these assets
+Rave_Models/
 
 # Local interruption-layer footage (use generated placeholders in committed code)
 media/
