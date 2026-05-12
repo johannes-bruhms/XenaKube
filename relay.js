@@ -870,6 +870,14 @@ try {
   console.warn('Dashboard not found at', DASHBOARD_PATH);
 }
 
+// Portable dashboard settings: GET/POST /api/dashboard-settings round-trips a
+// flat string map (mirror of the dashboard's localStorage allowlist) to a
+// project-tracked JSON file so settings travel with the repo across machines
+// instead of being trapped in per-browser Chrome User Data.
+const DATA_DIR = path.join(__dirname, 'data');
+const DASHBOARD_SETTINGS_PATH = path.join(DATA_DIR, 'dashboard-settings.json');
+const DASHBOARD_SETTINGS_MAX_BYTES = 256 * 1024;
+
 const STATIC_MIME = {
   '.js':   'text/javascript; charset=utf-8',
   '.mjs':  'text/javascript; charset=utf-8',
@@ -895,6 +903,85 @@ function serveDashboard(res) {
     }
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
     res.end(data);
+  });
+}
+
+function getDashboardSettings(res) {
+  fs.readFile(DASHBOARD_SETTINGS_PATH, 'utf8', (err, data) => {
+    res.writeHead(200, { 'Content-Type': 'application/json; charset=utf-8' });
+    if (err) {
+      res.end(JSON.stringify({ version: 1, settings: {} }));
+      return;
+    }
+    res.end(data);
+  });
+}
+
+function saveDashboardSettings(req, res) {
+  let total = 0;
+  const chunks = [];
+  let aborted = false;
+  req.on('data', (chunk) => {
+    if (aborted) return;
+    total += chunk.length;
+    if (total > DASHBOARD_SETTINGS_MAX_BYTES) {
+      aborted = true;
+      res.writeHead(413, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('settings payload too large');
+      req.destroy();
+      return;
+    }
+    chunks.push(chunk);
+  });
+  req.on('end', () => {
+    if (aborted) return;
+    const body = Buffer.concat(chunks).toString('utf8');
+    let parsed;
+    try {
+      parsed = JSON.parse(body);
+    } catch (e) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('invalid JSON: ' + e.message);
+      return;
+    }
+    if (!parsed || typeof parsed !== 'object' || typeof parsed.settings !== 'object' || parsed.settings === null) {
+      res.writeHead(400, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('invalid shape: expected { version, settings: {} }');
+      return;
+    }
+    const safe = { version: 1, settings: {} };
+    for (const [k, v] of Object.entries(parsed.settings)) {
+      if (typeof k !== 'string' || k.length === 0 || k.length > 128) continue;
+      if (v == null) continue;
+      const s = String(v);
+      if (s.length > 32 * 1024) continue;
+      safe.settings[k] = s;
+    }
+    const out = JSON.stringify(safe, null, 2) + '\n';
+    fs.mkdir(DATA_DIR, { recursive: true }, (mkErr) => {
+      if (mkErr) {
+        res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('mkdir failed: ' + mkErr.message);
+        return;
+      }
+      const tmp = DASHBOARD_SETTINGS_PATH + '.tmp';
+      fs.writeFile(tmp, out, 'utf8', (wErr) => {
+        if (wErr) {
+          res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+          res.end('write failed: ' + wErr.message);
+          return;
+        }
+        fs.rename(tmp, DASHBOARD_SETTINGS_PATH, (rErr) => {
+          if (rErr) {
+            res.writeHead(500, { 'Content-Type': 'text/plain; charset=utf-8' });
+            res.end('rename failed: ' + rErr.message);
+            return;
+          }
+          res.writeHead(204);
+          res.end();
+        });
+      });
+    });
   });
 }
 
@@ -927,6 +1014,13 @@ const server = http.createServer((req, res) => {
   const urlPath = (req.url || '/').split('?')[0].split('#')[0];
   if (urlPath === '/' || urlPath === '/dashboard.html' || urlPath === '/index.html') {
     serveDashboard(res);
+    return;
+  }
+  if (urlPath === '/api/dashboard-settings') {
+    if (req.method === 'GET') { getDashboardSettings(res); return; }
+    if (req.method === 'POST') { saveDashboardSettings(req, res); return; }
+    res.writeHead(405, { 'Allow': 'GET, POST', 'Content-Type': 'text/plain; charset=utf-8' });
+    res.end('method not allowed');
     return;
   }
   serveStatic(urlPath, res);

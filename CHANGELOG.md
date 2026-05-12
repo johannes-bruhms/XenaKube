@@ -4,6 +4,11 @@ All notable changes to XenaKube are documented here.
 
 **Entry format**: dated section per release/working-day; under it, `### Added / Changed / Fixed` headers; under each header, **terse bullets** — one or two sentences naming the user-visible change and the file(s) touched. Long rationale, root-cause analyses, and D-coded design narratives belong in `docs/revision_roadmap.md` (bridge / SWAM) or `docs/research_notes.md` (engine / dashboard). When in doubt, link rather than copy. Older entries below predate this discipline and are kept as-is.
 
+## 2026-05-12
+
+### Added
+- Portable dashboard settings: `relay.js` now exposes `GET/POST /api/dashboard-settings`, the dashboard's `localStorage` allowlist is bootstrapped synchronously from that endpoint before `main.js` loads, and every change to a synced key is debounced-POST'd back. Settings live at repo-tracked `data/dashboard-settings.json`, so the spectrogram + cube-color panel state (and all other UI persists) travels across machines through git instead of being trapped in per-browser Chrome User Data (`relay.js`, `public/dashboard.html`, `public/js/main.js`, `public/js/settings-sync.js`, `data/dashboard-settings.json`, `test/dashboard-settings-sync.test.ts`).
+
 ## 2026-05-11
 
 ### Added

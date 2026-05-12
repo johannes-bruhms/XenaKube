@@ -357,6 +357,43 @@
 }
 </script>
 
+<!-- Portable-settings bootstrap. Runs BEFORE main.js so the synchronous
+     localStorage reads inside main.js see the file's saved values. The
+     allowlist mirrors SYNCED_KEYS in ./js/settings-sync.js — keep them in
+     sync. See public/AGENTS.md for the role and the full failure mode. -->
+<script>
+(function bootstrapDashboardSettings() {
+  var ALLOWED = ['uiHidden','scoreSpeed','midiBrushEnabled','spectrogramEnabled',
+    'spectrumLatencyMs','spectrumNudgeMs','spectrumGainDb','spectrumCeilingDb',
+    'spectrumFloorDb','spectrumBgPct','spectrumSmoothPct','spectrumBlurTenths',
+    'spectrumTimePct','spectrumPalette','spectrumModalityPalettes',
+    'spectrumModalityTransfer','cubeColorSettings','ghostSize','cubeDepth',
+    'quality','recordMode'];
+  try {
+    var xhr = new XMLHttpRequest();
+    xhr.open('GET', '/api/dashboard-settings', false);
+    xhr.send();
+    if (xhr.status !== 200) return;
+    var data = JSON.parse(xhr.responseText);
+    var settings = (data && data.settings) || {};
+    var allow = {};
+    for (var i = 0; i < ALLOWED.length; i++) allow[ALLOWED[i]] = true;
+    var loaded = 0;
+    for (var key in settings) {
+      if (!Object.prototype.hasOwnProperty.call(settings, key)) continue;
+      if (!allow[key]) continue;
+      var v = settings[key];
+      if (v == null) continue;
+      localStorage.setItem(key, String(v));
+      loaded++;
+    }
+    if (loaded > 0) console.log('[settings-sync] seeded', loaded, 'keys from /api/dashboard-settings');
+  } catch (e) {
+    console.warn('[settings-sync] bootstrap failed:', e);
+  }
+})();
+</script>
+
 <!-- Phase 2.9 — single module entry. Every dashboard JS module is imported
      by ./js/main.js, which then wires transport events to module update
      entry points + DOM controls to module setters. The pre-Phase-2

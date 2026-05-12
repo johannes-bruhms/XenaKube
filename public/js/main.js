@@ -33,6 +33,13 @@ import {
   panic         as sievePanic,
   getCellRect   as getSieveCellRect,
 } from './sieve.js';
+import { install as installSettingsSync } from './settings-sync.js';
+
+// Bootstrap-from-server already ran synchronously in dashboard.html (so the
+// localStorage reads below see the file's values); this installs the push
+// side — debounced POST to /api/dashboard-settings on every change touching
+// a synced key, so settings persist across machines through the repo.
+installSettingsSync();
 
 const wsSend = transportSend;
 
