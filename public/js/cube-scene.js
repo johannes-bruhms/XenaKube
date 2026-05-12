@@ -134,6 +134,63 @@ const COMPLEX_ABBR = {
 
 const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.75, 'fff': 0.92 };
 
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const CUBE_APPEARANCE_DEFAULTS = {
+  kVertexColors: K_VERT_COLORS_HEX.slice(),
+  cVertexColors: GHOST_VERT_COLORS_HEX.slice(),
+  kLabelsFollowVertex: true,
+  cLabelsFollowVertex: true,
+  kLabelColor: '#ffffff',
+  cLabelColor: '#ffffff',
+  activeLabelColor: '#ffffff',
+  detailLabelColor: '#cccccc',
+  liveWireColor: '#ffffff',
+  ghostWireColor: '#00ccff',
+  kcLineColor: '#ffffff',
+  tetraAColor: '#00ff88',
+  tetraBColor: '#ff6644',
+  activeHaloColor: '#ffffff',
+  ghostActiveHaloColor: '#ffffff',
+  topMarkerColor: '#ffcc00',
+  adaptiveWireColor: '#ffffff',
+  baseLineWidth: 1.0,
+  liveWireWidth: 1.15,
+  tetraWireWidth: 0.85,
+  ghostWireWidth: 1.0,
+  kcWireWidth: 1.0,
+};
+let cubeAppearance = cloneCubeAppearance(CUBE_APPEARANCE_DEFAULTS);
+
+function cloneCubeAppearance(src) {
+  return {
+    ...src,
+    kVertexColors: (src.kVertexColors || []).slice(0, 8),
+    cVertexColors: (src.cVertexColors || []).slice(0, 8),
+  };
+}
+
+function normalizeHexColor(value, fallback) {
+  return HEX_COLOR_RE.test(String(value || '')) ? String(value).toLowerCase() : fallback;
+}
+
+function hexToNumber(hex) {
+  return parseInt(String(hex).slice(1), 16);
+}
+
+function clampNumber(value, lo, hi, fallback) {
+  const n = Number(value);
+  if (!isFinite(n)) return fallback;
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function dimHexColor(hex, factor = 0.68) {
+  const n = hexToNumber(hex);
+  const r = Math.max(0, Math.min(255, Math.round(((n >> 16) & 255) * factor)));
+  const g = Math.max(0, Math.min(255, Math.round(((n >> 8) & 255) * factor)));
+  const b = Math.max(0, Math.min(255, Math.round((n & 255) * factor)));
+  return '#' + ((r << 16) | (g << 8) | b).toString(16).padStart(6, '0');
+}
+
 // ---- Three.js scene state (internal) ---------------------------------------
 
 const canvas = document.getElementById('cube-canvas');
@@ -193,9 +250,10 @@ const edgeGeo = new THREE.BufferGeometry();
   edgeGeo.setAttribute('position', new THREE.Float32BufferAttribute(edgePositions, 3));
 }
 const edgeMat = new THREE.LineBasicMaterial({
-  color: LIVE_EDGE_COLOR,
+  color: cubeAppearance.liveWireColor,
   transparent: true,
   opacity: 0.95,
+  linewidth: cubeAppearance.baseLineWidth,
 });
 const edgeLines = new THREE.LineSegments(edgeGeo, edgeMat);
 scene.add(edgeLines);
@@ -210,10 +268,15 @@ function makeTetraLines(indices, color) {
     }
   }
   geo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
-  return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({ color, transparent: true, opacity: 0.3 }));
+  return new THREE.LineSegments(geo, new THREE.LineBasicMaterial({
+    color,
+    transparent: true,
+    opacity: 0.3,
+    linewidth: cubeAppearance.baseLineWidth,
+  }));
 }
-const tetraALines = makeTetraLines(TETRA_A, 0x00ff88);
-const tetraBLines = makeTetraLines(TETRA_B, 0xff6644);
+const tetraALines = makeTetraLines(TETRA_A, cubeAppearance.tetraAColor);
+const tetraBLines = makeTetraLines(TETRA_B, cubeAppearance.tetraBColor);
 scene.add(tetraALines);
 scene.add(tetraBLines);
 
@@ -253,7 +316,7 @@ const HALO_TEX = makeHaloTexture(256);
 // halo, and the existing pulsing-opacity logic still drives the visible flux.
 const activeRingMat = new THREE.SpriteMaterial({
   map: HALO_TEX,
-  color: 0xffffff,
+  color: cubeAppearance.activeHaloColor,
   transparent: true,
   opacity: 0.7,
   blending: THREE.AdditiveBlending,
@@ -272,7 +335,7 @@ const liveTopMarkers = [];
 // which when both are near each other (locked snap, deviation ≈ 0).
 const ghostActiveRingMat = new THREE.SpriteMaterial({
   map: HALO_TEX,
-  color: 0xffffff,
+  color: cubeAppearance.ghostActiveHaloColor,
   transparent: true,
   opacity: 0.7,
   blending: THREE.AdditiveBlending,
@@ -349,7 +412,7 @@ for (let i = 0; i < 8; i++) {
   const marker = new THREE.Mesh(
     topMarkerGeo.clone(),
     new THREE.MeshBasicMaterial({
-      color: 0xffcc00,
+      color: cubeAppearance.topMarkerColor,
       transparent: true,
       opacity: 0,
       depthTest: false,
@@ -372,7 +435,12 @@ const ghostGroup = new THREE.Group();
 ghostGroup.visible = false;
 scene.add(ghostGroup);
 
-const ghostEdgeMat = new THREE.LineBasicMaterial({ color: 0x00ccff, transparent: true, opacity: 0.7 });
+const ghostEdgeMat = new THREE.LineBasicMaterial({
+  color: cubeAppearance.ghostWireColor,
+  transparent: true,
+  opacity: 0.7,
+  linewidth: cubeAppearance.baseLineWidth,
+});
 const ghostEdges = new THREE.LineSegments(edgeGeo.clone(), ghostEdgeMat);
 ghostGroup.add(ghostEdges);
 ghostGroup.add(ghostActiveRing);
@@ -380,7 +448,7 @@ for (let i = 0; i < 8; i++) {
   const marker = new THREE.Mesh(
     topMarkerGeo.clone(),
     new THREE.MeshBasicMaterial({
-      color: 0xffcc00,
+      color: cubeAppearance.topMarkerColor,
       transparent: true,
       opacity: 0,
       depthTest: false,
@@ -512,10 +580,11 @@ const kcLineGeo = new THREE.BufferGeometry();
 const kcLinePositions = new Float32Array(6);
 kcLineGeo.setAttribute('position', new THREE.BufferAttribute(kcLinePositions, 3));
 const kcLineMat = new THREE.LineBasicMaterial({
-  color: 0xffffff,
+  color: cubeAppearance.kcLineColor,
   transparent: true,
   opacity: 0.7,
   depthTest: false,
+  linewidth: cubeAppearance.baseLineWidth,
 });
 const kcLine = new THREE.Line(kcLineGeo, kcLineMat);
 kcLine.renderOrder = 1;
@@ -779,6 +848,9 @@ let ghostVertAnimStart = 0;
 let ghostVertAnimReady = false;
 let lastCAssignKey = '__init__';
 let lastCAssignCosmology = 'beta-cosmo';
+let lastKLabelPerm = null;
+let lastKLabelVertices = null;
+let lastKLabelActiveIdx = 0;
 
 // Gyro zero calibration
 const gyroZeroInv = new THREE.Quaternion(0, 0, 0, 1);
@@ -953,6 +1025,8 @@ function strokeContrastWorld(a, b, alpha, width = 1.15) {
   line.setAttribute('y2', pb.y.toFixed(2));
   line.setAttribute('stroke-opacity', alpha.toFixed(3));
   line.setAttribute('stroke-width', width.toFixed(2));
+  line.style.stroke = cubeAppearance.adaptiveWireColor;
+  line.style.mixBlendMode = 'difference';
   line.style.display = '';
 }
 
@@ -966,10 +1040,10 @@ function strokeContrastEdges(group, edges, alpha, width) {
   for (const [a, b] of edges) strokeContrastLocal(group, a, b, alpha, width);
 }
 
-function strokeContrastTetra(group, indices, alpha) {
+function strokeContrastTetra(group, indices, alpha, width) {
   for (let i = 0; i < indices.length; i++) {
     for (let j = i + 1; j < indices.length; j++) {
-      strokeContrastLocal(group, indices[i], indices[j], alpha, 0.85);
+      strokeContrastLocal(group, indices[i], indices[j], alpha, width);
     }
   }
 }
@@ -979,16 +1053,16 @@ function renderAdaptiveWireframes() {
   contrastLineCount = 0;
 
   cubeGroup.updateMatrixWorld(true);
-  strokeContrastEdges(cubeGroup, CUBE_EDGES, contrastEdgeAlpha, 1.15);
-  strokeContrastTetra(cubeGroup, TETRA_A, contrastTetraAlpha);
-  strokeContrastTetra(cubeGroup, TETRA_B, contrastTetraAlpha);
+  strokeContrastEdges(cubeGroup, CUBE_EDGES, contrastEdgeAlpha, cubeAppearance.liveWireWidth);
+  strokeContrastTetra(cubeGroup, TETRA_A, contrastTetraAlpha, cubeAppearance.tetraWireWidth);
+  strokeContrastTetra(cubeGroup, TETRA_B, contrastTetraAlpha, cubeAppearance.tetraWireWidth);
 
   if (ghostGroup.visible) {
     ghostGroup.updateMatrixWorld(true);
-    strokeContrastEdges(ghostGroup, CUBE_EDGES, contrastGhostAlpha, 1.0);
+    strokeContrastEdges(ghostGroup, CUBE_EDGES, contrastGhostAlpha, cubeAppearance.ghostWireWidth);
   }
   if (kcLine.visible) {
-    strokeContrastWorld(_kcKWorld, _kcCWorld, contrastKcAlpha, 1.0);
+    strokeContrastWorld(_kcKWorld, _kcCWorld, contrastKcAlpha, cubeAppearance.kcWireWidth);
   }
   for (let i = contrastLineCount; i < contrastLineEls.length; i++) {
     contrastLineEls[i].style.display = 'none';
@@ -1255,11 +1329,27 @@ function paintTopMarkers(upFaceName, activeSlot) {
   }
 }
 
+function labelMainColor(kind, index, isActive) {
+  if (isActive) return cubeAppearance.activeLabelColor;
+  if (kind === 'k') {
+    return cubeAppearance.kLabelsFollowVertex ? K_VERT_COLORS_HEX[index] : cubeAppearance.kLabelColor;
+  }
+  return cubeAppearance.cLabelsFollowVertex ? GHOST_VERT_COLORS_HEX[index] : cubeAppearance.cLabelColor;
+}
+
+function labelDetailColor(kind, index, isActive) {
+  if (isActive) return cubeAppearance.detailLabelColor;
+  if (kind === 'k') {
+    return cubeAppearance.kLabelsFollowVertex ? K_VERT_COLORS_DIM[index] : dimHexColor(cubeAppearance.kLabelColor);
+  }
+  return cubeAppearance.cLabelsFollowVertex ? GHOST_VERT_COLORS_DIM[index] : dimHexColor(cubeAppearance.cLabelColor);
+}
+
 function paintGhostVertexLabels(activeC) {
   for (let c = 0; c < 8; c++) {
     const isActive = c === activeC;
-    const color    = isActive ? '#ffffff' : GHOST_VERT_COLORS_HEX[c];
-    const dimColor = isActive ? '#cccccc' : GHOST_VERT_COLORS_DIM[c];
+    const color = labelMainColor('c', c, isActive);
+    const dimColor = labelDetailColor('c', c, isActive);
     const label = ghostLabels[c];
     const ctx = label.ctx;
     ctx.clearRect(0, 0, 128, 80);
@@ -1335,8 +1425,8 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
   for (let k = 0; k < 8; k++) {
     const slot = perm ? perm.indexOf(k) : k;
     const isActive = k === activeK;
-    const color    = isActive ? '#ffffff' : K_VERT_COLORS_HEX[k];
-    const dimColor = isActive ? '#cccccc' : K_VERT_COLORS_DIM[k];
+    const color = labelMainColor('k', k, isActive);
+    const dimColor = labelDetailColor('k', k, isActive);
     const label = vertexLabels[k];
     const ctx = label.ctx;
     const W = 128, H = 80;
@@ -1360,6 +1450,79 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
   }
 }
 
+function coerceCubeAppearance(settings = {}) {
+  const next = cloneCubeAppearance(cubeAppearance);
+  const kColors = Array.isArray(settings.kVertexColors) ? settings.kVertexColors : next.kVertexColors;
+  const cColors = Array.isArray(settings.cVertexColors) ? settings.cVertexColors : next.cVertexColors;
+  for (let i = 0; i < 8; i++) {
+    next.kVertexColors[i] = normalizeHexColor(kColors[i], next.kVertexColors[i] || CUBE_APPEARANCE_DEFAULTS.kVertexColors[i]);
+    next.cVertexColors[i] = normalizeHexColor(cColors[i], next.cVertexColors[i] || CUBE_APPEARANCE_DEFAULTS.cVertexColors[i]);
+  }
+  for (const key of [
+    'kLabelColor', 'cLabelColor', 'activeLabelColor', 'detailLabelColor',
+    'liveWireColor', 'ghostWireColor', 'kcLineColor', 'tetraAColor', 'tetraBColor',
+    'activeHaloColor', 'ghostActiveHaloColor', 'topMarkerColor', 'adaptiveWireColor',
+  ]) {
+    if (Object.prototype.hasOwnProperty.call(settings, key)) {
+      next[key] = normalizeHexColor(settings[key], next[key]);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'kLabelsFollowVertex')) {
+    next.kLabelsFollowVertex = settings.kLabelsFollowVertex !== false;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'cLabelsFollowVertex')) {
+    next.cLabelsFollowVertex = settings.cLabelsFollowVertex !== false;
+  }
+  const numberRanges = {
+    baseLineWidth: [0.5, 6],
+    liveWireWidth: [0.4, 8],
+    tetraWireWidth: [0.3, 6],
+    ghostWireWidth: [0.4, 8],
+    kcWireWidth: [0.4, 8],
+  };
+  for (const [key, [lo, hi]] of Object.entries(numberRanges)) {
+    if (Object.prototype.hasOwnProperty.call(settings, key)) {
+      next[key] = clampNumber(settings[key], lo, hi, next[key]);
+    }
+  }
+  return next;
+}
+
+function applyCubeAppearance(settings = {}) {
+  cubeAppearance = coerceCubeAppearance(settings);
+
+  for (let i = 0; i < 8; i++) {
+    K_VERT_COLORS_HEX[i] = cubeAppearance.kVertexColors[i];
+    K_VERT_COLORS[i] = hexToNumber(K_VERT_COLORS_HEX[i]);
+    K_VERT_COLORS_DIM[i] = dimHexColor(K_VERT_COLORS_HEX[i]);
+    GHOST_VERT_COLORS_HEX[i] = cubeAppearance.cVertexColors[i];
+    GHOST_VERT_COLORS[i] = hexToNumber(GHOST_VERT_COLORS_HEX[i]);
+    GHOST_VERT_COLORS_DIM[i] = dimHexColor(GHOST_VERT_COLORS_HEX[i]);
+
+    vertexMeshes[i].material.color.set(K_VERT_COLORS_HEX[i]);
+    vertexHalos[i].material.color.set(K_VERT_COLORS_HEX[i]);
+    ghostVertMeshes[i].material.color.set(GHOST_VERT_COLORS_HEX[i]);
+  }
+
+  edgeMat.color.set(cubeAppearance.liveWireColor);
+  edgeMat.linewidth = cubeAppearance.baseLineWidth;
+  tetraALines.material.color.set(cubeAppearance.tetraAColor);
+  tetraALines.material.linewidth = cubeAppearance.baseLineWidth;
+  tetraBLines.material.color.set(cubeAppearance.tetraBColor);
+  tetraBLines.material.linewidth = cubeAppearance.baseLineWidth;
+  ghostEdgeMat.color.set(cubeAppearance.ghostWireColor);
+  ghostEdgeMat.linewidth = cubeAppearance.baseLineWidth;
+  kcLineMat.color.set(cubeAppearance.kcLineColor);
+  kcLineMat.linewidth = cubeAppearance.baseLineWidth;
+  activeRingMat.color.set(cubeAppearance.activeHaloColor);
+  ghostActiveRingMat.color.set(cubeAppearance.ghostActiveHaloColor);
+  for (const marker of liveTopMarkers) marker.material.color.set(cubeAppearance.topMarkerColor);
+  for (const marker of ghostTopMarkers) marker.material.color.set(cubeAppearance.topMarkerColor);
+
+  paintVertexLabels(lastKLabelPerm, lastKLabelVertices, null, lastKLabelActiveIdx);
+  paintGhostVertexLabels(currentActiveC);
+}
+
 // ---- Public API ------------------------------------------------------------
 
 /**
@@ -1369,6 +1532,23 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
  */
 export function init({ onAutoZero } = {}) {
   _onAutoZero = onAutoZero || null;
+}
+
+/** Apply runtime cube/label/wire colour and line-width settings. */
+export function setAppearance(settings = {}) {
+  applyCubeAppearance(settings);
+  return getAppearance();
+}
+
+/** Restore dashboard-editable cube appearance to the built-in palette. */
+export function resetAppearance() {
+  applyCubeAppearance(CUBE_APPEARANCE_DEFAULTS);
+  return getAppearance();
+}
+
+/** Snapshot of dashboard-editable cube appearance settings. */
+export function getAppearance() {
+  return cloneCubeAppearance(cubeAppearance);
 }
 
 /**
@@ -1542,12 +1722,10 @@ export function update(state, move) {
     }
   }
 
-  paintVertexLabels(
-    state.kPermutation,
-    state.kVertices || null,
-    state.cAssignments || null,
-    activeIdx
-  );
+  lastKLabelPerm = state.kPermutation ? state.kPermutation.slice(0, 8) : null;
+  lastKLabelVertices = state.kVertices || null;
+  lastKLabelActiveIdx = activeIdx;
+  paintVertexLabels(lastKLabelPerm, lastKLabelVertices, state.cAssignments || null, lastKLabelActiveIdx);
   paintActiveVertex(activeIdx, activeKIdx);
   paintTopMarkers(state.upFace, activeIdx);
 

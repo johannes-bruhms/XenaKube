@@ -17,7 +17,7 @@ import {
   RATE_TREMOLO_GAIN_BY_COMPLEX, RATE_ACCENT_GAIN_BY_COMPLEX,
   // helpers
   clamp, harmonicsForC4,
-  phraseCountBounds, applyEnvelopeCount, stepVelScale,
+  phraseCountBounds, stepVelScale,
   commitSieveWalk, faceTranspose, resolvePhraseDuration,
   buildFaceMap,
   turnRatePressure, rateDensityMultiplier, rateVelocityMultiplier,
@@ -205,26 +205,6 @@ describe('swam-mapping — helpers', () => {
     it('raises C5 accent value but leaves non-accent complexes unchanged', () => {
       expect(rateAccentValue(80, 5, RATE_PRESSURE_FULL_TPS)).toBe(Math.round(80 * (1 + RATE_ACCENT_GAIN_BY_COMPLEX[5])));
       expect(rateAccentValue(80, 6, RATE_PRESSURE_FULL_TPS)).toBe(80);
-    });
-  });
-
-  describe('applyEnvelopeCount', () => {
-    const pluckProfile = ENV_PROFILE.pluck;
-    const burstProfile = ENV_PROFILE.burst;
-    const swellProfile = ENV_PROFILE.swell;
-
-    it('isSingle collapses to 1, or 0 when forGliss', () => {
-      expect(applyEnvelopeCount(pluckProfile, 5, 2, false)).toBe(1);
-      expect(applyEnvelopeCount(pluckProfile, 5, 2, true)).toBe(0);
-    });
-    it('burst thickens by countMult, clamped to [baseLo, 12]', () => {
-      expect(applyEnvelopeCount(burstProfile, 5, 2, false)).toBe(Math.round(5 * 1.8));
-      expect(applyEnvelopeCount(burstProfile, 10, 2, false)).toBe(12);   // clamp to 12
-      expect(applyEnvelopeCount(burstProfile, 1, 3, false)).toBe(3);     // clamp to baseLo
-    });
-    it('non-modifying profiles pass through', () => {
-      expect(applyEnvelopeCount(swellProfile, 4, 2, false)).toBe(4);
-      expect(applyEnvelopeCount(null, 4, 2, false)).toBe(4);
     });
   });
 

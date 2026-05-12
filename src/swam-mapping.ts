@@ -458,24 +458,6 @@ export function phraseCountBounds(
 }
 
 /**
- * Apply face envelope's isSingle / countMult overrides to a raw phrase
- * count. `forGliss` (C5–C7) routes isSingle → 0 so the anchor note
- * still fires once and the gliss-salvo collapses to zero.
- */
-export function applyEnvelopeCount(
-  profile: EnvProfile | null,
-  rawCount: number,
-  baseLo: number,
-  forGliss: boolean,
-): number {
-  if (profile && profile.isSingle) return forGliss ? 0 : 1;
-  if (profile && profile.countMult && profile.countMult !== 1.0) {
-    return clamp(Math.round(rawCount * profile.countMult), baseLo, 12);
-  }
-  return rawCount;
-}
-
-/**
  * Per-step velocity scalar across a multi-note phrase.
  *   `cresc`        0.72 → 1.27 (swell)
  *   `dim`          1.27 → 0.72 (fade)

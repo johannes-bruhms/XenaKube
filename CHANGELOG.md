@@ -4,6 +4,17 @@ All notable changes to XenaKube are documented here.
 
 **Entry format**: dated section per release/working-day; under it, `### Added / Changed / Fixed` headers; under each header, **terse bullets** — one or two sentences naming the user-visible change and the file(s) touched. Long rationale, root-cause analyses, and D-coded design narratives belong in `docs/revision_roadmap.md` (bridge / SWAM) or `docs/research_notes.md` (engine / dashboard). When in doubt, link rather than copy. Older entries below predate this discipline and are kept as-is.
 
+## 2026-05-11
+
+### Added
+- Added a toggleable `spectrogram settings` dashboard panel. The bottom-right cluster now shows a compact settings switch where the inline spectrogram controls were, and the panel contains spectrogram timing/look controls, per-modality gain/floor/ceiling, a shared modality-background swatch, and editable C1-C8 palette stops (`public/dashboard.html`, `public/css/main.css`, `public/js/main.js`, `public/js/spectrum-score.js`).
+- Added a toggleable `cube colors` dashboard panel for K/C vertex colors, label colors, cube wire colors and widths, active halos/top markers, and K/C-to-sieve triangle line colors, dot size, width, and opacity (`public/dashboard.html`, `public/css/main.css`, `public/js/main.js`, `public/js/cube-scene.js`, `public/js/triangle.js`).
+
+### Fixed
+- Removed first-event scheduler jitter from normal phrase onsets so C1-C4/C6/C8 first audible events align with the cube turn, and shortened C6's first ordered slide to its immediate-slide constant (`max/xk_swam.js`, `src/phrase-plan.ts`, `test/phrase-plan.test.ts`, `test/max-bridge.test.ts`).
+- Fixed spectrogram modality timing for Max frames with `complex=0`; relay now fills the frame complex from the latest audio-side MIDI noteon instead of the already-advanced engine state, so old audio tails are not recolored as the next phrase (`relay.js`, `test/transport-backpressure.test.ts`).
+- Fixed the raw GAN `U'`x4 zero-gyro shortcut so it no longer depends on calibrated `state.upFace`. The shortcut now mirrors the Zero Gyro button from the raw move stream before the engine gyro frame has been initialized (`public/js/main.js`, `test/dashboard-ui.test.ts`).
+
 ## 2026-05-09
 
 ### Added
@@ -63,7 +74,7 @@ All notable changes to XenaKube are documented here.
 ### Added
 - Added Phase 3 post-processing pipeline (bloom + tone mapping) to the cube scene. `public/js/cube-scene.js` builds an `EffectComposer` chain (`RenderPass` → `UnrealBloomPass` → `OutputPass`) with `ACESFilmicToneMapping` on the renderer; new `setQuality('low'|'med'|'high')` API toggles between direct render (Low) and the composer chain with progressively stronger bloom. Discrete 3-button picker in the bottom-right cluster (`public/dashboard.html`, `public/css/main.css`), wired in `public/js/main.js` with localStorage persistence, defaults to Med. Full pipeline reference in `docs/dashboard-architecture.md` § Post-processing pipeline.
 - Added optional interruption dashboard overlay behind `?intrusions=1`. `public/interruption/` owns the pressure state machine, generated placeholder clip playback, separate targeting canvas, debug keys, and scoped DOM/CSS; `public/js/main.js` is the only wiring point and keeps the layer detachable.
-- Added canonical-top CCW-quadruple zero-gyro shortcut. With the cube held white-up, turning U counterclockwise four times within 1500 ms fires the same Zero Gyro action as the dashboard button. Detector lives in `public/js/main.js` (`checkTopFaceZeroGesture`); gated on `move === "U'"` AND `state.upFace === 'U'` so it cannot trigger in non-canonical holds.
+- Added a physical CCW-quadruple zero-gyro shortcut. Turning the raw GAN U face counterclockwise four times within 1500 ms fires the same Zero Gyro action as the dashboard button; the detector lives in `public/js/main.js`.
 - Added a visible dashboard alpha/beta cosmology toggle. `public/dashboard.html` exposes a `mode-cosmology` badge, `public/js/main.js` posts `set_mode.cosmology`, and `public/js/state-ui.js` mirrors the engine-reported mode.
 
 ### Fixed
@@ -99,7 +110,7 @@ All notable changes to XenaKube are documented here.
 ## 2026-05-04
 
 ### Added
-- Added a relay-side TypeScript `PhrasePlanner` shadow path for C1-C8. `relay.js` now computes a phrase plan per `engine.onVoice`, sends `/xk/phrase/plan` summaries to Max for audit logging, broadcasts full plans to the dashboard, and tests assert face-owned duration, near-immediate planned first note, C7 single-voice behavior, and C5 companion planning.
+- Added a relay-side TypeScript `PhrasePlanner` shadow path for C1-C8. `relay.js` now computes a phrase plan per `engine.onVoice`, sends `/xk/phrase/plan` summaries to Max for audit logging, broadcasts full plans to the dashboard, and tests assert face-owned duration, immediate planned first note, C7 single-voice behavior, and C5 companion planning.
 - Added plan-id phrase echo auditing for dropped/late Max events. `/xk/phrase/plan` now precedes the matching `/xk/voice`, Max stamps `/xk/midi/*` echoes with `planId`, `relay.js` logs `[PHRASE ECHO ...]` planned-vs-actual results, and the dashboard exposes a `phrase audit` state row.
 - Added `src/corner-topology.ts` for the performer-visible 8-corner K_i permutation plus exact precomputed quarter-turn distance across all 40,320 visible corner states.
 

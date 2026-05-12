@@ -40,6 +40,7 @@ const CELLO_MAX = 89;
 const SIEVE_BASE = 36;
 const LEGATO_OVERLAP_MS = 20;
 const FIRST_GLISS_MS = 150;
+const FIRST_GLISS_MS_C6 = 30;
 const FIRST_GLISS_MS_C7 = 30;
 const MIN_GLISS_SPACING_MS = 200;
 const WILD_MIN_COUNT = 12;
@@ -427,7 +428,7 @@ export class PhrasePlanner {
     const spacing = ctx.durationMs / count;
     for (let i = 0; i < count; i++) {
       const jitter = (this.rng() - 0.5) * spacing * 0.6;
-      const t = Math.max(0, Math.round(i * spacing + jitter));
+      const t = i === 0 ? 0 : Math.max(0, Math.round(i * spacing + jitter));
       const clusterSize = this.rng() < 0.25 ? this.rrand(2, 3) : 1;
       for (let k = 0; k < clusterSize; k++) {
         const tt = t + k * 8;
@@ -457,7 +458,7 @@ export class PhrasePlanner {
     this.commitSieveWalk(tempo.count, null);
     const noteOnAbs: number[] = new Array(tempo.count);
     for (let i = 0; i < tempo.count; i++) {
-      noteOnAbs[i] = Math.round(tempo.noteTimes[i]) + this.humanDelay();
+      noteOnAbs[i] = i === 0 ? 0 : Math.round(tempo.noteTimes[i]) + this.humanDelay();
     }
     const noteOnBudget = Math.max(tempo.count, Math.floor(ctx.durationSec * C2_RATE_MAX));
     let doubleSlotsRemaining = noteOnBudget - tempo.count;
@@ -493,7 +494,7 @@ export class PhrasePlanner {
     const spacing = Math.max(110, Math.round(durMs / (count + 1)));
     const center = this.pickPitch(3, ctx);
     for (let i = 0; i < count; i++) {
-      const t = i * spacing + this.humanDelay();
+      const t = i === 0 ? 0 : i * spacing + this.humanDelay();
       const jitter = this.rng() < 0.5 ? 0 : (this.rng() < 0.5 ? -1 : 1);
       const p = clamp(center + jitter, CELLO_MIN, CELLO_MAX);
       const v = this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, i, count));
@@ -513,7 +514,7 @@ export class PhrasePlanner {
     const maxMs = Math.max(400, Math.round(avgMs * 1.4));
     for (let i = 0; i < count; i++) {
       const jitter = (this.rng() - 0.5) * spacing * 0.5;
-      const t = Math.max(0, Math.round(i * spacing + jitter));
+      const t = i === 0 ? 0 : Math.max(0, Math.round(i * spacing + jitter));
       const clusterSize = this.rng() < 0.50 ? 2 : 1;
       for (let k = 0; k < clusterSize; k++) {
         const pjitter = this.rrand(-2, 2) + (k > 0 ? this.rrand(2, 5) : 0);
@@ -575,8 +576,8 @@ export class PhrasePlanner {
   private phraseC6(ctx: VoiceContext): void {
     let requestedCount = this.faceShapedCount(ctx, 3, 6, false);
     if (requestedCount < 2) requestedCount = 2;
-    const tailEnd = Math.max(FIRST_GLISS_MS + 200, ctx.durationMs * 0.9);
-    const slideTimes = glissSchedule(requestedCount - 1, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
+    const tailEnd = Math.max(FIRST_GLISS_MS_C6 + 200, ctx.durationMs * 0.9);
+    const slideTimes = glissSchedule(requestedCount - 1, FIRST_GLISS_MS_C6, tailEnd, MIN_GLISS_SPACING_MS);
     const totalCount = 1 + slideTimes.length;
     this.commitSieveWalk(totalCount, null);
     let lastPitch = this.pickPitch(6, ctx);
@@ -589,14 +590,14 @@ export class PhrasePlanner {
       pathMin = Math.min(pathMin, p);
       pathMax = Math.max(pathMax, p);
     }
-    const anchorT = this.humanDelay();
+    const anchorT = 0;
     const v = this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, 0, totalCount));
     this.legatoNote(ctx, anchorT, lastPitch, v);
     this.maybeGlissDoubleStop(ctx, anchorT, lastPitch, v, 0.50, pathMin, pathMax);
 
     const phraseEndMs = ctx.durationMs - 100;
     for (let i = 0; i < slideTimes.length; i++) {
-      const t = slideTimes[i] + this.humanDelay();
+      const t = slideTimes[i] + (i === 0 ? 0 : this.humanDelay());
       const nextEventMs = i + 1 < slideTimes.length ? slideTimes[i + 1] : phraseEndMs;
       const gapMs = nextEventMs - slideTimes[i];
       const bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
@@ -641,7 +642,7 @@ export class PhrasePlanner {
   private phraseC8(ctx: VoiceContext): void {
     const mainPitch = this.pickPitch(8, ctx);
     const companion = this.rng() < 0.50 ? doubleStopCompanion(mainPitch, this.rng) : null;
-    const t = this.humanDelay();
+    const t = 0;
     const v = clamp(this.humanVel(ctx, ctx.baseVel * stepVelScale(ctx.velCurve, 0, 1)) + 8, 40, 120);
     const main = this.humanPitch(mainPitch);
     this.legatoNote(ctx, t, main, v);
@@ -760,8 +761,29 @@ export class PhrasePlanner {
     }
     const overRange = Math.abs(p - sourcePitch) > PITCHBEND_RANGE_SEMI;
     if (overRange) {
+      // Mirror max/xk_swam.js `leapStep`: at the leap instant, every active
+      // note (source main + any active gliss companion) is noteOff'd. The
+      // target main fires +50ms (LEAP_GAP_MS) later so SWAM cleanly sees a
+      // discrete note change with no portamento attempt. The companion is
+      // either revoiced at its same semitone offset on the target string (if
+      // still in range) or terminated. Pre-fix this branch only handled the
+      // source main, so the companion lingered in activeNotes through the
+      // leap, breaking the dashboard's companion overlay timing and
+      // diverging from Max's emitted MIDI structure.
       ctx.plan.warnings.push(`over-range gliss planned as leap C${ctx.plan.complex} ${sourcePitch}->${p}`);
       this.noteOff(ctx, tMs, sourcePitch);
+      const gc = ctx.glissCompanion;
+      if (gc) {
+        this.noteOff(ctx, tMs, gc.currentPitch, true);
+        const newCompanion = p + gc.offsetSemis;
+        if (newCompanion >= DOUBLE_STOP_ROLL_MIN && newCompanion <= DOUBLE_STOP_ROLL_MAX) {
+          this.noteOn(ctx, tMs + 50, newCompanion, gc.velocity, true);
+          gc.currentPitch = newCompanion;
+        } else {
+          ctx.plan.warnings.push(`gliss companion target out of range C${ctx.plan.complex} ${newCompanion} (after leap)`);
+          ctx.glissCompanion = null;
+        }
+      }
       this.noteOn(ctx, tMs + 50, p, this.humanVel(ctx, ctx.baseVel));
       return p;
     }

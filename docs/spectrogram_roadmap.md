@@ -139,7 +139,7 @@ band emphasis
 feature modulators
 ```
 
-Complex changes should instantly select a modality. The audio data stays continuous, but the rendering interpretation can switch sharply at the complex boundary.
+Complex changes should select a modality at the audio-side complex boundary. If Max sends `complex=0`, the relay attaches the latest MIDI noteon complex so a previous phrase's audio tail keeps its old modality until the new phrase actually sounds.
 
 Possible first complex mapping:
 
@@ -274,7 +274,7 @@ Tests should cover:
 ### Phase 6 - Modality Engine
 
 - Add declarative modality definitions.
-- Switch modality instantly on complex change.
+- Switch modality from the frame complex, with unknown-complex fallback tied to audio-side MIDI noteon timing.
 - Add first complex-to-modality map.
 - Add feature modulation from centroid, flux, RMS, and optional stereo data.
 - Add a minimal debug display for active modality and frame freshness.
@@ -298,7 +298,7 @@ Tests should cover:
 - Exact Max audio tap point: fully post-reverb, pre-master, or both dry and wet.
 - First frame rate and bin count.
 - Whether stereo width is useful enough for the first payload.
-- Whether complex should be sampled at audio-analysis time in Max or attached in relay from latest engine state.
+- Whether complex should be sampled at audio-analysis time in Max or attached in relay from latest audio-side MIDI noteon.
 - Whether MIDI visual delay should be automatic, user-tunable, or both.
 - Whether recording defaults to visible composite or asks for a stem mode.
 
@@ -310,4 +310,4 @@ Tests should cover:
 - With both off, no rolling visual layer draws.
 - No spectrogram pixels are generated from MIDI alone.
 - Stale or missing spectrum frames fail loudly enough to diagnose during rehearsal.
-- Complex changes switch color modality instantly without interrupting the audio-derived timeline.
+- Complex changes switch color modality on the audio-side frame complex without interrupting the audio-derived timeline or recoloring the previous phrase tail.

@@ -40,9 +40,22 @@ const STATUS_MIN_INTERVAL_MS = 160;
 // always shows a dim base color, like spectroscope~ resting on its noise
 // floor. Tuned for SWAM Cello with rawGainDb=45.
 let FLOOR_DB = -95;
-const CEILING_DB = -15;
+let CEILING_DB = -15;
 let MIN_UNIT = 0.10;
 let gainOffsetDb = 0;
+
+const DEFAULT_MODALITY_TRANSFER = {};
+for (let i = 1; i <= 8; i++) {
+  DEFAULT_MODALITY_TRANSFER[i] = {
+    gainOffsetDb: 0,
+    floorDb: FLOOR_DB,
+    ceilingDb: CEILING_DB,
+  };
+}
+const MODALITY_TRANSFER = {};
+for (let i = 1; i <= 8; i++) {
+  MODALITY_TRANSFER[i] = { ...DEFAULT_MODALITY_TRANSFER[i] };
+}
 
 // Sub-columns per device pixel for temporal interpolation. 0 disables
 // blending entirely (sharp time-grid look); ~0.5 gives mild blending;
@@ -145,7 +158,7 @@ const MODALITY_LABELS = {
   8: 'C8 chalk',
 };
 
-const MODALITY_PALETTES = {
+const DEFAULT_MODALITY_PALETTES = {
   1: [ // transient speckle — amber/warm pizz
     [0.00, MODALITY_BG[0], MODALITY_BG[1], MODALITY_BG[2]],
     [0.20, 90,  44,  16  ],
@@ -204,6 +217,18 @@ const MODALITY_PALETTES = {
   ],
 };
 
+function clonePalette(palette) {
+  return palette.map((stop) => stop.slice());
+}
+
+function clonePaletteMap(map) {
+  const out = {};
+  for (const key of Object.keys(map)) out[key] = clonePalette(map[key]);
+  return out;
+}
+
+const MODALITY_PALETTES = clonePaletteMap(DEFAULT_MODALITY_PALETTES);
+
 let paletteMode = 'auto';
 
 // Precomputed RGB lookup tables, 256 entries per palette. Built once at
@@ -243,13 +268,68 @@ function buildAllLUTs() {
 }
 buildAllLUTs();
 
+function rebuildModalityLut(complex) {
+  const cmx = clamp(complex | 0, 1, 8);
+  PALETTE_LUTS['mod:' + cmx] = buildLUT(MODALITY_PALETTES[cmx]);
+}
+
+function rgbToHex(r, g, b) {
+  const toHex = (v) => clamp(v | 0, 0, 255).toString(16).padStart(2, '0');
+  return '#' + toHex(r) + toHex(g) + toHex(b);
+}
+
+function parseHexColor(value) {
+  if (Array.isArray(value) && value.length >= 3) {
+    return [
+      clamp(Number(value[0]) | 0, 0, 255),
+      clamp(Number(value[1]) | 0, 0, 255),
+      clamp(Number(value[2]) | 0, 0, 255),
+    ];
+  }
+  if (typeof value !== 'string') return null;
+  const m = value.trim().match(/^#?([0-9a-fA-F]{6})$/);
+  if (!m) return null;
+  const h = m[1];
+  return [
+    parseInt(h.slice(0, 2), 16),
+    parseInt(h.slice(2, 4), 16),
+    parseInt(h.slice(4, 6), 16),
+  ];
+}
+
+function complexForFrame(frame) {
+  return clamp((frame && frame.complex) || activeComplex || 1, 1, 8);
+}
+
+function sanitizeTransfer(settings, fallback = {}) {
+  const floorFallback = Number.isFinite(fallback.floorDb) ? fallback.floorDb : FLOOR_DB;
+  const ceilingFallback = Number.isFinite(fallback.ceilingDb) ? fallback.ceilingDb : CEILING_DB;
+  const gain = clamp(finite(settings?.gainOffsetDb, finite(settings?.gainDb, fallback.gainOffsetDb || 0)), -60, 60);
+  const floor = clamp(finite(settings?.floorDb, floorFallback), -160, 14);
+  const ceiling = clamp(finite(settings?.ceilingDb, ceilingFallback), floor + 10, 24);
+  return {
+    gainOffsetDb: gain,
+    floorDb: floor,
+    ceilingDb: ceiling,
+  };
+}
+
+function transferForFrame(frame) {
+  if (paletteMode !== 'auto') {
+    return {
+      gainOffsetDb,
+      floorDb: FLOOR_DB,
+      ceilingDb: CEILING_DB,
+    };
+  }
+  return MODALITY_TRANSFER[complexForFrame(frame)] || MODALITY_TRANSFER[1];
+}
+
 function lutForFrame(frame) {
   if (paletteMode !== 'auto') {
     return PALETTE_LUTS['named:' + paletteMode] || PALETTE_LUTS['named:inferno'];
   }
-  let cmx = (frame && frame.complex) || 1;
-  if (cmx < 1) cmx = 1; else if (cmx > 8) cmx = 8;
-  return PALETTE_LUTS['mod:' + cmx];
+  return PALETTE_LUTS['mod:' + complexForFrame(frame)];
 }
 
 // History canvas (offscreen) — accumulates painted columns. The visible
@@ -380,6 +460,14 @@ function currentFloorColor() {
   return paletteColor(MIN_UNIT, resolvePalette(prevDrawnFrame));
 }
 
+function setAllModalityTransferField(field, value) {
+  for (let cmx = 1; cmx <= 8; cmx++) {
+    const current = MODALITY_TRANSFER[cmx] || DEFAULT_MODALITY_TRANSFER[cmx];
+    MODALITY_TRANSFER[cmx] = sanitizeTransfer({ ...current, [field]: value }, current);
+  }
+  invalidateHistory();
+}
+
 function msPerHistoryPx() {
   return 1000 / (ROLL_PX_PER_SEC * dpr);
 }
@@ -504,15 +592,18 @@ function paintColumnImageData(xStart, colW, prevFrame, currFrame) {
   if (n <= 0) return;
 
   const lut = lutForFrame(currFrame);
+  const transfer = transferForFrame(currFrame);
   const prevBins = prevFrame.binsDb;
   const currBins = currFrame.binsDb;
   const usingBlend = smoothDensity > 0.001 && prevFrame !== currFrame;
   const blendAmount = Math.min(1, smoothDensity);
 
-  const dbRange = CEILING_DB - FLOOR_DB;
+  const floorDb = transfer.floorDb;
+  const ceilingDb = transfer.ceilingDb;
+  const dbRange = ceilingDb - floorDb;
   const minU = MIN_UNIT;
   const oneMinusMinU = 1 - MIN_UNIT;
-  const gain = gainOffsetDb;
+  const gain = transfer.gainOffsetDb;
 
   const imgData = historyCtx.createImageData(totalPx, innerH);
   const data32 = new Uint32Array(imgData.data.buffer);
@@ -558,9 +649,9 @@ function paintColumnImageData(xStart, colW, prevFrame, currFrame) {
       const db = dbA * (1 - beta) + dbB * beta + gain;
 
       let t;
-      if (db <= FLOOR_DB) t = 0;
-      else if (db >= CEILING_DB) t = 1;
-      else t = (db - FLOOR_DB) / dbRange;
+      if (db <= floorDb) t = 0;
+      else if (db >= ceilingDb) t = 1;
+      else t = (db - floorDb) / dbRange;
       const u = minU + oneMinusMinU * t;
 
       let lutIdx = (u * 255 + 0.5) | 0;
@@ -937,8 +1028,10 @@ export function setGainOffset(offsetDb) {
   const next = clamp(offsetDb, -60, 60);
   if (next !== gainOffsetDb) {
     gainOffsetDb = next;
-    invalidateHistory();
   }
+  setAllModalityTransferField('gainOffsetDb', next);
+  invalidateHistory();
+  return gainOffsetDb;
 }
 
 // Quietest dB rendered above the palette floor. Lower (e.g. -120) reveals
@@ -949,8 +1042,23 @@ export function setFloorDb(db) {
   const next = clamp(db, -160, CEILING_DB - 10);
   if (next !== FLOOR_DB) {
     FLOOR_DB = next;
-    invalidateHistory();
   }
+  setAllModalityTransferField('floorDb', next);
+  invalidateHistory();
+  return FLOOR_DB;
+}
+
+// Loudest dB rendered at the palette peak. Keep at least 10 dB above the
+// floor so the transfer curve cannot collapse into a flat block.
+export function setCeilingDb(db) {
+  if (!Number.isFinite(db)) return CEILING_DB;
+  const next = clamp(db, FLOOR_DB + 10, 24);
+  if (next !== CEILING_DB) {
+    CEILING_DB = next;
+  }
+  setAllModalityTransferField('ceilingDb', next);
+  invalidateHistory();
+  return CEILING_DB;
 }
 
 // Background brightness — the minimum palette position even when audio is
@@ -1012,11 +1120,98 @@ export function getPaletteNames() {
   return ['auto', ...Object.keys(PALETTES)];
 }
 
+export function getModalityPaletteSettings() {
+  const out = {};
+  for (let cmx = 1; cmx <= 8; cmx++) {
+    const transfer = MODALITY_TRANSFER[cmx] || DEFAULT_MODALITY_TRANSFER[cmx];
+    out[cmx] = {
+      label: MODALITY_LABELS[cmx] || ('C' + cmx),
+      gainOffsetDb: transfer.gainOffsetDb,
+      floorDb: transfer.floorDb,
+      ceilingDb: transfer.ceilingDb,
+      stops: MODALITY_PALETTES[cmx].map((stop, idx) => ({
+        index: idx,
+        stop: stop[0],
+        r: stop[1],
+        g: stop[2],
+        b: stop[3],
+        hex: rgbToHex(stop[1], stop[2], stop[3]),
+      })),
+    };
+  }
+  return out;
+}
+
+export function getModalityBackgroundColor() {
+  const first = MODALITY_PALETTES[1]?.[0];
+  return first ? rgbToHex(first[1], first[2], first[3]) : '#08080e';
+}
+
+export function setAllModalityBackgroundColors(color) {
+  const rgb = parseHexColor(color);
+  if (!rgb) return false;
+  let changed = false;
+  for (let cmx = 1; cmx <= 8; cmx++) {
+    const stop = MODALITY_PALETTES[cmx]?.[0];
+    if (!stop) continue;
+    if (stop[1] !== rgb[0] || stop[2] !== rgb[1] || stop[3] !== rgb[2]) {
+      stop[1] = rgb[0];
+      stop[2] = rgb[1];
+      stop[3] = rgb[2];
+      changed = true;
+      rebuildModalityLut(cmx);
+    }
+  }
+  if (changed) invalidateHistory();
+  return true;
+}
+
+export function setModalityPaletteStop(complex, stopIndex, color) {
+  const cmx = clamp(complex | 0, 1, 8);
+  const idx = stopIndex | 0;
+  const palette = MODALITY_PALETTES[cmx];
+  if (!palette || idx < 0 || idx >= palette.length) return false;
+  const rgb = parseHexColor(color);
+  if (!rgb) return false;
+  const stop = palette[idx];
+  if (stop[1] === rgb[0] && stop[2] === rgb[1] && stop[3] === rgb[2]) return true;
+  stop[1] = rgb[0];
+  stop[2] = rgb[1];
+  stop[3] = rgb[2];
+  rebuildModalityLut(cmx);
+  invalidateHistory();
+  return true;
+}
+
+export function setModalityTransfer(complex, settings = {}) {
+  const cmx = clamp(complex | 0, 1, 8);
+  const current = MODALITY_TRANSFER[cmx] || DEFAULT_MODALITY_TRANSFER[cmx];
+  const next = sanitizeTransfer({ ...current, ...settings }, current);
+  MODALITY_TRANSFER[cmx] = next;
+  invalidateHistory();
+  return { ...next };
+}
+
+export function resetModalityPalettes() {
+  const defaults = clonePaletteMap(DEFAULT_MODALITY_PALETTES);
+  for (let cmx = 1; cmx <= 8; cmx++) {
+    MODALITY_PALETTES[cmx] = defaults[cmx];
+    MODALITY_TRANSFER[cmx] = { ...DEFAULT_MODALITY_TRANSFER[cmx] };
+    rebuildModalityLut(cmx);
+  }
+  invalidateHistory();
+}
+
 export function getLookSettings() {
   return {
     gainOffsetDb,
     floorDb: FLOOR_DB,
+    ceilingDb: CEILING_DB,
     minUnit: MIN_UNIT,
     palette: paletteMode,
+    smoothDensity,
+    blurPx,
+    temporalSmoothing,
+    modalityPalettes: getModalityPaletteSettings(),
   };
 }

@@ -7,6 +7,7 @@ describe('Dashboard UI collapse behavior', () => {
   const mainCss = readFileSync(join(process.cwd(), 'public', 'css', 'main.css'), 'utf8');
   const main = readFileSync(join(process.cwd(), 'public', 'js', 'main.js'), 'utf8');
   const cubeScene = readFileSync(join(process.cwd(), 'public', 'js', 'cube-scene.js'), 'utf8');
+  const triangle = readFileSync(join(process.cwd(), 'public', 'js', 'triangle.js'), 'utf8');
   const rollingScore = readFileSync(join(process.cwd(), 'public', 'js', 'rolling-score.js'), 'utf8');
   const spectrumScore = readFileSync(join(process.cwd(), 'public', 'js', 'spectrum-score.js'), 'utf8');
   const performanceRecorder = readFileSync(join(process.cwd(), 'public', 'js', 'performance-recorder.js'), 'utf8');
@@ -66,18 +67,35 @@ describe('Dashboard UI collapse behavior', () => {
     expect(dashboardHtml.indexOf('id="spectrogram-score"')).toBeLessThan(dashboardHtml.indexOf('id="rolling-score"'));
     expect(dashboardHtml).toContain('id="midiBrushToggle"');
     expect(dashboardHtml).toContain('id="spectrogramToggle"');
+    expect(dashboardHtml).toContain('id="spectrogramSettingsToggle"');
+    expect(dashboardHtml).toContain('id="spectrogramSettingsPanel"');
     expect(dashboardHtml).toContain('id="spectrumLatency"');
     expect(dashboardHtml).toContain('id="spectrumNudge"');
+    expect(dashboardHtml).toContain('id="spectrumCeiling"');
+    expect(dashboardHtml).toContain('id="spectrumBgColor"');
+    expect(dashboardHtml).toContain('id="modalityPaletteEditor"');
+    expect(dashboardHtml).toContain('id="resetModalityPalettes"');
     expect(mainCss).toContain('#spectrogram-score');
     expect(mainCss).toContain('z-index: -2;');
     expect(mainCss).toContain('#rolling-score');
+    expect(mainCss).toContain('.spectrogram-settings-panel');
     expect(main).toContain("import * as spectrumScore from './spectrum-score.js';");
     expect(main).toContain("transportOn('spectrumFrame', spectrumScore.handleFrame);");
     expect(main).toContain("wsSend({ type: 'set_spectrum_enabled', enabled: spectrumEnabled });");
+    expect(main).toContain('setSpectrogramSettingsOpen');
+    expect(main).toContain('renderModalityPaletteEditor');
+    expect(main).toContain('spectrumModalityPalettes');
+    expect(main).toContain('spectrumModalityTransfer');
     expect(rollingScore).toContain('export function setVisible(value)');
     expect(rollingScore).toContain('export function setVisualDelay(ms)');
     expect(spectrumScore).toContain('MODALITY_PALETTES');
     expect(spectrumScore).toContain('MODALITY_LABELS');
+    expect(spectrumScore).toContain('export function setCeilingDb');
+    expect(spectrumScore).toContain('export function getModalityPaletteSettings');
+    expect(spectrumScore).toContain('export function setModalityPaletteStop');
+    expect(spectrumScore).toContain('export function setModalityTransfer');
+    expect(spectrumScore).toContain('export function setAllModalityBackgroundColors');
+    expect(spectrumScore).toContain('export function resetModalityPalettes');
     expect(spectrumScore).toContain('modalityStatus(prevDrawnFrame)');
     expect(spectrumScore).toContain('handleFrame(raw)');
     expect(spectrumScore).toContain('FRAME_RESET_GAP_MS');
@@ -86,6 +104,37 @@ describe('Dashboard UI collapse behavior', () => {
     expect(spectrumScore).toContain('dropped out-of-order frame');
     expect(spectrumScore).toContain('Do not synthesize new spectrum from stale data');
     expect(spectrumScore).not.toContain('midiEcho');
+  });
+
+  it('wires the cube colors panel to cube and triangle appearance setters', () => {
+    expect(dashboardHtml).toContain('id="cubeColorsToggle"');
+    expect(dashboardHtml).toContain('id="cubeColorsPanel"');
+    expect(dashboardHtml).toContain('id="cubeColorsEditor"');
+    expect(dashboardHtml).toContain('id="resetCubeColors"');
+    expect(mainCss).toContain('.cube-colors-panel');
+    expect(mainCss).toContain('.cube-swatch-grid');
+    expect(main).toContain('setCubeColorsOpen');
+    expect(main).toContain('renderCubeColorsEditor');
+    expect(main).toContain('cubeColorSettings');
+    expect(main).toContain('cubeScene.setAppearance');
+    expect(main).toContain('triangle.setAppearance');
+    expect(cubeScene).toContain('export function setAppearance(settings = {})');
+    expect(cubeScene).toContain('export function resetAppearance()');
+    expect(cubeScene).toContain('adaptiveWireColor');
+    expect(cubeScene).toContain('cubeAppearance.liveWireWidth');
+    expect(cubeScene).toContain('cubeAppearance.kcWireWidth');
+    expect(triangle).toContain('export function setAppearance(settings = {})');
+    expect(triangle).toContain('kLegColor');
+    expect(triangle).toContain('endpointRadius');
+  });
+
+  it('keeps the physical U-prime zero gesture independent of engine upFace calibration', () => {
+    expect(main).toContain('function checkZeroGestureFromGanMove(move)');
+    expect(main).toContain('raw GAN `U\'`');
+    expect(main).toMatch(/wsSend\(\{ type: 'move', value: event\.move \}\);\s*checkZeroGestureFromGanMove\(event\.move\);/);
+    expect(main).toContain("moveStr !== \"U'\"");
+    expect(main).not.toContain('checkTopFaceZeroGesture');
+    expect(main).not.toMatch(/upFace\s*!==\s*['"]U['"]/);
   });
 
   it('records rolling visual layers from source canvases instead of screen capture', () => {

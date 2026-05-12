@@ -84,7 +84,7 @@ describe('PhrasePlanner', () => {
     expect(plan.expected.bendStepCount).toBeGreaterThanOrEqual(1);
   });
 
-  it('keeps first planned audible note near-immediate for every complex', () => {
+  it('keeps first planned audible note immediate for every complex', () => {
     const planner = new PhrasePlanner({ rng: () => 0.5, now: () => 1000 });
 
     for (const complex of [
@@ -99,7 +99,7 @@ describe('PhrasePlanner', () => {
     ]) {
       const plan = planner.planVoiceOutput(voice(complex, 'R'), state())[0];
       expect(plan.expected.firstNoteOnMs, `C${complex}`).not.toBeNull();
-      expect(plan.expected.firstNoteOnMs!, `C${complex}`).toBeLessThanOrEqual(30);
+      expect(plan.expected.firstNoteOnMs!, `C${complex}`).toBe(0);
     }
   });
 
@@ -183,6 +183,68 @@ describe('PhrasePlanner', () => {
     expect(companionNoteOffs.length).toBeGreaterThan(0);
     expect(companionNoteOns.every(e => e.kind === 'noteOn' && e.pitch >= 36 && e.pitch <= 84)).toBe(true);
     expect(plan.expected.companionNoteOnCount).toBe(companionNoteOns.length);
+  });
+
+  it('over-range gliss step terminates or revoices active companion (mirrors Max leapStep)', () => {
+    // Force C5 wild-gliss into the over-range branch with a wide sieve. The
+    // pre-fix planner emitted only `noteOff(source) + noteOn(target+50ms)`
+    // for over-range steps, with no companion accounting — so any phrase with
+    // a gliss companion + over-range step under-reported companion noteOff and
+    // (if companionTarget stays in range) companion noteOn. Mirror Max's
+    // leapStep: kill all activeNotes (including any active companion),
+    // schedule target +50ms, then revoice or terminate companion based on
+    // range. The test sweeps seeds until it finds a phrase with BOTH an active
+    // gliss companion AND at least one over-range step — that's the
+    // intersection where the old planner's bug actually mattered.
+    const wide = stateWithSieve([0, 4, 18, 22, 28, 32, 36, 44, 48]);
+    let foundCase = false;
+    for (let trial = 0; trial < 200 && !foundCase; trial++) {
+      let seed = trial * 7919 + 1;
+      const rng = () => {
+        seed = (seed * 9301 + 49297) % 233280;
+        return seed / 233280;
+      };
+      const planner = new PhrasePlanner({ rng, now: () => 1000 });
+      const plan = planner.planVoiceOutput(voice(ComplexType.AtaxicSliding, 'R'), wide)[0];
+      const overRangeWarn = plan.warnings.find(w => w.startsWith('over-range gliss'));
+      const companionNoteOns = plan.events.filter(e => e.kind === 'noteOn' && e.isCompanion === true);
+      if (!overRangeWarn) continue;
+      if (companionNoteOns.length === 0) continue;
+      foundCase = true;
+
+      // Locate every over-range leap event in the plan: a source noteOff
+      // immediately followed by a target noteOn 50ms later (LEAP_GAP_MS).
+      // For each, assert the simultaneous companion noteOff. Pre-fix code
+      // omitted the companion noteOff at the leap; the old companion lingered
+      // in activeNotes until the next bendStep emitted a noteOff at a much
+      // later tMs — the visual chain freezes on the old companion pitch
+      // through the leap. Max's leapStep noteOff every activeNote at the
+      // same instant.
+      const mainOffs = plan.events.filter(
+        e => e.kind === 'noteOff' && e.isCompanion !== true,
+      );
+      const mainOns = plan.events.filter(
+        e => e.kind === 'noteOn' && e.isCompanion !== true,
+      );
+      const leapOffTimes: number[] = [];
+      for (const off of mainOffs) {
+        const targetOn = mainOns.find(
+          on => on.tMs === off.tMs + 50 && on.kind === 'noteOn' && off.kind === 'noteOff' && on.pitch !== off.pitch,
+        );
+        if (targetOn) leapOffTimes.push(off.tMs);
+      }
+      expect(leapOffTimes.length).toBeGreaterThan(0);
+      for (const tMs of leapOffTimes) {
+        const companionOffAtSameTime = plan.events.some(
+          e => e.kind === 'noteOff' && e.isCompanion === true && e.tMs === tMs,
+        );
+        expect(
+          companionOffAtSameTime,
+          `companion noteOff missing at over-range leap tMs=${tMs} (Max's leapStep kills every activeNote at the leap instant)`,
+        ).toBe(true);
+      }
+    }
+    expect(foundCase, 'expected at least one phrase with both an active companion and an over-range gliss step across 200 trials').toBe(true);
   });
 
   it('turn-rate pressure increases planned density and expression without changing complex identity', () => {

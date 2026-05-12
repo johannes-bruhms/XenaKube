@@ -53,6 +53,44 @@ const lineOverlay = document.getElementById('line-overlay');
 const lineCtx = lineOverlay.getContext('2d');
 let lineDpr = 1;
 
+const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
+const TRIANGLE_APPEARANCE_DEFAULTS = {
+  kLegColor: '#ffffff',
+  cLegColor: '#ffffff',
+  sievePointColor: '#ffffff',
+  lineWidth: 1.5,
+  endpointRadius: 0,
+  opacity: 1.0,
+};
+let triangleAppearance = { ...TRIANGLE_APPEARANCE_DEFAULTS };
+
+function normalizeHexColor(value, fallback) {
+  return HEX_COLOR_RE.test(String(value || '')) ? String(value).toLowerCase() : fallback;
+}
+
+function clampNumber(value, lo, hi, fallback) {
+  const n = Number(value);
+  if (!isFinite(n)) return fallback;
+  return Math.max(lo, Math.min(hi, n));
+}
+
+function colorToRgba(hex, opacity) {
+  const n = parseInt(String(hex).slice(1), 16);
+  const r = (n >> 16) & 255;
+  const g = (n >> 8) & 255;
+  const b = n & 255;
+  return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + Math.max(0, Math.min(1, opacity)).toFixed(3) + ')';
+}
+
+function fillEndpoint(x, y, color, opacity) {
+  const r = triangleAppearance.endpointRadius * lineDpr;
+  if (r <= 0) return;
+  lineCtx.fillStyle = colorToRgba(color, opacity);
+  lineCtx.beginPath();
+  lineCtx.arc(x, y, r, 0, Math.PI * 2);
+  lineCtx.fill();
+}
+
 // Per-note line state. Mirrors activeMidiNotes' lifecycle but is its own
 // array so we can keep drawing fade-out lines after noteoff (matching the
 // cell-glow release tail). Each entry carries the gliss interpolation
@@ -216,7 +254,7 @@ function drawLineOverlay() {
   const now = performance.now();
   let toRemove = null;
 
-  lineCtx.lineWidth = 1.5 * lineDpr;
+  lineCtx.lineWidth = triangleAppearance.lineWidth * lineDpr;
   lineCtx.lineCap = 'round';
   lineCtx.lineJoin = 'round';
 
@@ -290,19 +328,25 @@ function drawLineOverlay() {
     const kx = kScreen.x * lineDpr, ky = kScreen.y * lineDpr;
     const cx = cScreen.x * lineDpr, cy = cScreen.y * lineDpr;
 
-    lineCtx.strokeStyle = 'rgba(255, 255, 255, ' + opacity.toFixed(3) + ')';
+    const lineOpacity = opacity * triangleAppearance.opacity;
 
     // Triangle legs are always STRAIGHT — the curve the user wants lives in
     // the rolling-score gliss chain (drawGlissChain), not here.
+    lineCtx.strokeStyle = colorToRgba(triangleAppearance.kLegColor, lineOpacity);
     lineCtx.beginPath();
     lineCtx.moveTo(kx, ky);
     lineCtx.lineTo(sx, sy);
     lineCtx.stroke();
 
+    lineCtx.strokeStyle = colorToRgba(triangleAppearance.cLegColor, lineOpacity);
     lineCtx.beginPath();
     lineCtx.moveTo(cx, cy);
     lineCtx.lineTo(sx, sy);
     lineCtx.stroke();
+
+    fillEndpoint(kx, ky, triangleAppearance.kLegColor, lineOpacity);
+    fillEndpoint(cx, cy, triangleAppearance.cLegColor, lineOpacity);
+    fillEndpoint(sx, sy, triangleAppearance.sievePointColor, lineOpacity);
   }
 
   if (toRemove) {
@@ -315,6 +359,38 @@ function drawLineOverlay() {
 }
 
 // ---- Public API ------------------------------------------------------------
+
+/** Apply runtime colour/weight settings for K/C-to-sieve triangle legs. */
+export function setAppearance(settings = {}) {
+  const next = { ...triangleAppearance };
+  for (const key of ['kLegColor', 'cLegColor', 'sievePointColor']) {
+    if (Object.prototype.hasOwnProperty.call(settings, key)) {
+      next[key] = normalizeHexColor(settings[key], next[key]);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'lineWidth')) {
+    next.lineWidth = clampNumber(settings.lineWidth, 0.4, 8, next.lineWidth);
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'endpointRadius')) {
+    next.endpointRadius = clampNumber(settings.endpointRadius, 0, 10, next.endpointRadius);
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'opacity')) {
+    next.opacity = clampNumber(settings.opacity, 0.05, 1, next.opacity);
+  }
+  triangleAppearance = next;
+  return getAppearance();
+}
+
+/** Restore triangle overlay appearance to its built-in white-line defaults. */
+export function resetAppearance() {
+  triangleAppearance = { ...TRIANGLE_APPEARANCE_DEFAULTS };
+  return getAppearance();
+}
+
+/** Snapshot of dashboard-editable triangle overlay appearance settings. */
+export function getAppearance() {
+  return { ...triangleAppearance };
+}
 
 /**
  * Wire callbacks and start the draw loop.

@@ -1703,13 +1703,12 @@ function phraseHalfTurn(inst, vel, dur) {
 var LEGATO_OVERLAP_MS = 20;
 var GLISS_OVERLAP_MS  = 60;
 
-// D43 — first gliss step fires this many ms after the anchor, regardless of
-// phrase duration. Makes the slide audible early so a stolen short phrase
-// (fast turn cutting the voice at ~300 ms) still reads as a gliss rather
-// than a sustained note. 150 ms is late enough for the anchor to establish
-// a clear starting pitch, early enough that the slide is unambiguous before
-// scheduleRelease's 200 ms floor hits for tiny durations.
+// D43 — first gliss step fires soon after the anchor, regardless of phrase
+// duration. C5 keeps a short anchor window so wild gliss has a clear starting
+// pitch. C6 is an ordered turn response, so its first slide starts almost
+// immediately after the t=0 anchor.
 var FIRST_GLISS_MS = 150;
+var FIRST_GLISS_MS_C6 = 30;
 
 // D53 — C7 immediate-start drift. C7's character is "wispy ephemeral
 // wandering" / breath-like rocking around an anchor (vs C6's deliberate
@@ -1718,7 +1717,7 @@ var FIRST_GLISS_MS = 150;
 // already differ — C7 fires its first drift much earlier so the listener
 // never hears the anchor settle as a stable pitch; pitch is in motion
 // almost immediately, exposing microtonal slow drift via the slow
-// portamento (CC 5 = 250 ms/semi for C7, set in COMPLEX[7].portamento.time).
+// pitchbend drift.
 // 30 ms is short enough that anchor reads as a "starting pitch" attack
 // moment but not a sustained note; long enough that SWAM still receives
 // the 60 ms anchor → drift overlap (GLISS_OVERLAP_MS) needed to engage
@@ -2870,7 +2869,7 @@ function phraseC1(inst, vel, dur) {
 	for (var i = 0; i < count; i++) {
 		(function(idx, stepCount) {
 			var jitter = (Math.random() - 0.5) * spacing * 0.6;
-			var t = Math.max(0, Math.round(idx * spacing + jitter));
+			var t = (idx === 0) ? 0 : Math.max(0, Math.round(idx * spacing + jitter));
 			scheduleAt(inst, t, function() {
 				var clusterSize = (Math.random() < 0.25) ? rrand(2, 3) : 1;
 				for (var k = 0; k < clusterSize; k++) {
@@ -3193,7 +3192,7 @@ function phraseC2(inst, vel, dur) {
 	//     overlap is bounded by GUARD_MS = 5 of release-tail bleed.
 	var noteOnAbs = new Array(count);
 	for (var i = 0; i < count; i++) {
-		noteOnAbs[i] = noteTimes[i] + humanDelay();
+		noteOnAbs[i] = (i === 0) ? 0 : (noteTimes[i] + humanDelay());
 	}
 	var ringMs = new Array(count);
 	var noteDurMs = new Array(count);
@@ -3301,7 +3300,7 @@ function phraseC3(inst, vel, dur) {
 	var center = pickPitch(3, inst);
 	var noteTimes = [];
 	for (var i = 0; i < count; i++) {
-		noteTimes.push(Math.max(0, i * spacing + humanDelay()));
+		noteTimes.push(i === 0 ? 0 : Math.max(0, i * spacing + humanDelay()));
 	}
 	for (var i = 0; i < count; i++) {
 		(function(idx, stepCount, tOn) {
@@ -3391,7 +3390,7 @@ function phraseC4(inst, vel, dur) {
 	for (var i = 0; i < count; i++) {
 		(function(idx, stepCount) {
 			var jitter = (Math.random() - 0.5) * spacing * 0.5;
-			var t = Math.max(0, Math.round(idx * spacing + jitter));
+			var t = (idx === 0) ? 0 : Math.max(0, Math.round(idx * spacing + jitter));
 			scheduleAt(inst, t, function() {
 				// Per-note bow shape — one ramp per CC, length = the note's
 				// audible window. rrand(minMs, maxMs) bounds the bow-motion
@@ -3620,7 +3619,7 @@ function phraseC5(inst, vel, dur) {
 }
 
 // C6: OrderedSlidingAscDesc — portamento steps along the sieve. idx 0 =
-// anchor legato at t=0; idx 1 = first slide at FIRST_GLISS_MS (D43);
+// anchor legato at t=0; idx 1 = first slide at FIRST_GLISS_MS_C6 (D43);
 // idx ≥2 distribute through the phrase tail with ≥ MIN_GLISS_SPACING_MS
 // spacing (D45). D42: requested count forced to ≥2 even when face isSingle
 // so the slide invariant holds; MIN_LEAP = 1 honors the sieve walk.
@@ -3629,8 +3628,8 @@ function phraseC6(inst, vel, dur) {
 	var requestedCount = faceShapedCount(inst, 3, 6, false);
 	if (requestedCount < 2) requestedCount = 2;  // D42 gliss invariant
 	var durMs = dur * 1000;
-	var tailEnd = Math.max(FIRST_GLISS_MS + 200, durMs * 0.9);
-	var slideTimes = glissSchedule(requestedCount - 1, FIRST_GLISS_MS, tailEnd, MIN_GLISS_SPACING_MS);
+	var tailEnd = Math.max(FIRST_GLISS_MS_C6 + 200, durMs * 0.9);
+	var slideTimes = glissSchedule(requestedCount - 1, FIRST_GLISS_MS_C6, tailEnd, MIN_GLISS_SPACING_MS);
 	var totalCount = 1 + slideTimes.length;
 	commitSieveWalk(totalCount, null);
 
@@ -3658,10 +3657,9 @@ function phraseC6(inst, vel, dur) {
 	// phrases, and as the "stuck triangle" white-line behaviour the
 	// user reported. Slide / anchor pitches in slideViaBend phrases
 	// should land precisely on the sieve walk pitch (no humanization).
-	// D79 — anchor fires at t=0 (was humanDelay() ≈ 0–30 ms). Per-event
-	// humanDelay still rides subsequent slides for groove; only the FIRST
-	// noteon drops it so the audible attack lands on the same frame as
-	// the cube turn.
+	// D79 — anchor fires at t=0 (was humanDelay() ≈ 0–30 ms). The first
+	// ordered slide also skips humanDelay; later slides keep the small
+	// timing humanization after the turn response is already audible.
 	scheduleAt(inst, 0, function() {
 		var v = humanVel(vel * stepVelScale(velCurve, 0, totalCount));
 		legatoNote(inst, lastPitchRef.p, v);
@@ -3683,11 +3681,12 @@ function phraseC6(inst, vel, dur) {
 		var nextEventMs = (i + 1 < slideTimes.length) ? slideTimes[i + 1] : phraseEndMs;
 		var gapMs = nextEventMs - slideTimes[i];
 		var bendDur = Math.max(80, Math.min(gapMs - 50, MAX_BEND_DUR_MS));
-		(function(tMs, bd, target) {
-			scheduleAt(inst, tMs + humanDelay(), function() {
+		(function(tMs, bd, target, idx) {
+			var slideDelay = (idx === 0) ? 0 : humanDelay();
+			scheduleAt(inst, tMs + slideDelay, function() {
 				lastPitchRef.p = glissStep(inst, lastPitchRef.p, target, 1, undefined, undefined, bd);
 			});
-		})(slideTimes[i], bendDur, targets[i]);
+		})(slideTimes[i], bendDur, targets[i], i);
 	}
 	scheduleRelease(inst, dur);
 }

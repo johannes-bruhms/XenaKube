@@ -28,6 +28,7 @@ Prefer editing `xk_swam.js` over growing patch logic. The patch is the host; `xk
 - If `../src/osc-schema.ts`, `../src/swam-mapping.ts`, or `../src/face-gesture.ts` change, run `npm run gen:max` from the repo root and reload the `v8` script.
 - Keep the single-instance SWAM model intact unless you are deliberately re-architecting polyphony. `POOL_SIZE = MAX_ACTIVE = 1` is an intentional musical and technical constraint, not an accident.
 - Treat gliss, selector state, bow polyphony, expression arcs, and pitchbend alignment as silent-failure surfaces. Preserve or add runtime telemetry when changing them.
+- Keep normal phrase first main noteons immediate (`t=0`) and mirrored in `../src/phrase-plan.ts`; C6's first ordered slide uses its own immediate first-gliss constant, while later slides may keep humanized timing.
 - Keep C2 tempo constants mirrored with `../src/phrase-plan.ts`. `C2_RATE_MAX` is the final post-factor note-on cap, so do not add a later C2 density multiplier after `buildC2Tempo()`.
 - `PITCHBEND_RANGE_SEMI` in `xk_swam.js` must exactly match the loaded SWAM preset.
 - If you change keyswitch numbers, CC mapping, or preset assumptions, update both the code and the relevant documentation.
@@ -47,6 +48,7 @@ Prefer editing `xk_swam.js` over growing patch logic. The patch is the host; `xk
 - `demo.maxpat`, `derivations.maxpat`, `polish.maxpat`, `rave.maxpat`: reference/experimental Max patches, not the active performance host.
 - `pfft-test.maxpat`: live pfft spectrogram test patch; it mirrors the optional analyzer sender used by the performance host for local analyzer testing.
 - `xk_pfft_spectrum.maxpat`: `pfft~` subpatch loaded by `pfft-test.maxpat`; writes FFT magnitudes into `buffer~ xk_fft_mag`.
+- `painting.wav`: local audio asset for Max/spectrogram playback or capture checks; do not treat it as generated bridge code.
 - `erosion.gendsp`: supporting Gen patch/reference artifact.
 - `xenakube_2.swam`, `xenakube_main2.swam`: alternate SWAM presets; do not assume they are loaded by `xenakube_swam.maxpat`.
 

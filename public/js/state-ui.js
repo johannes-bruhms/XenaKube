@@ -360,17 +360,30 @@ export function update(state, move) {
 
   if (state.algorithmPartials) {
     const partialsEl = document.getElementById('algorithm-partials');
+    // textContent + element nodes only — `p.name` is constrained to the
+    // algorithm book today, but the book is extensible (operation manual
+    // calls user-defined algorithm names out as future work), so the safe
+    // pattern matches what the move-buffer block one above already uses.
+    while (partialsEl.firstChild) partialsEl.removeChild(partialsEl.firstChild);
     if (state.algorithmPartials.length > 0) {
       const best = state.algorithmPartials
         .sort((a, b) => (b.matched / b.total) - (a.matched / a.total))
         .slice(0, 2);
-      partialsEl.innerHTML = best.map(p => {
-        const pct = Math.round((p.matched / p.total) * 100);
+      for (let i = 0; i < best.length; i++) {
+        const p = best[i];
         const barW = Math.round((p.matched / p.total) * 40);
-        return `<span class="partial-name">${p.name}</span> ${p.matched}/${p.total} <span class="partial-bar" style="width:${barW}px"></span>`;
-      }).join('<br>');
-    } else {
-      partialsEl.innerHTML = '';
+        const name = document.createElement('span');
+        name.className = 'partial-name';
+        name.textContent = p.name;
+        const counts = document.createTextNode(` ${p.matched}/${p.total} `);
+        const bar = document.createElement('span');
+        bar.className = 'partial-bar';
+        bar.style.width = `${barW}px`;
+        partialsEl.appendChild(name);
+        partialsEl.appendChild(counts);
+        partialsEl.appendChild(bar);
+        if (i < best.length - 1) partialsEl.appendChild(document.createElement('br'));
+      }
     }
   }
 
@@ -385,11 +398,20 @@ export function update(state, move) {
       const entry = document.createElement('div');
       entry.className = 'move-entry';
       const ct = state.cAssignments ? state.cAssignments[activeIdx] : '?';
-      entry.innerHTML = `
-        <span class="move-name">${move}</span>
-        <span class="move-vertex">K${activeKIdx + 1}</span>
-        <span class="move-detail">C${ct} ${state.cyclicPhase} step ${state.step}</span>
-      `;
+      const name = document.createElement('span');
+      name.className = 'move-name';
+      name.textContent = move;
+      const vertex = document.createElement('span');
+      vertex.className = 'move-vertex';
+      vertex.textContent = `K${activeKIdx + 1}`;
+      const detail = document.createElement('span');
+      detail.className = 'move-detail';
+      detail.textContent = `C${ct} ${state.cyclicPhase} step ${state.step}`;
+      entry.appendChild(name);
+      entry.appendChild(document.createTextNode(' '));
+      entry.appendChild(vertex);
+      entry.appendChild(document.createTextNode(' '));
+      entry.appendChild(detail);
       log.insertBefore(entry, log.firstChild);
       while (log.children.length > 50) log.removeChild(log.lastChild);
     }

@@ -93,6 +93,31 @@ describe('Max bridge invariants', () => {
     expect(phrasePlanSource).not.toMatch(/\bs\s*\[\s*Math\.floor\s*\(\s*s\.length\s*\/\s*2\s*\)\s*\]/);
   });
 
+  it('keeps every normal complex first audible event scheduled immediately', () => {
+    const phraseC1 = extractLastFunction('phraseC1');
+    const phraseC2 = extractLastFunction('phraseC2');
+    const phraseC3 = extractLastFunction('phraseC3');
+    const phraseC4 = extractLastFunction('phraseC4');
+    const phraseC5 = extractLastFunction('phraseC5');
+    const phraseC6 = extractLastFunction('phraseC6');
+    const phraseC7 = extractLastFunction('phraseC7');
+    const phraseC8 = extractLastFunction('phraseC8');
+
+    expect(phraseC1).toContain('var t = (idx === 0) ? 0');
+    expect(phraseC2).toContain('noteOnAbs[i] = (i === 0) ? 0');
+    expect(phraseC3).toContain('noteTimes.push(i === 0 ? 0');
+    expect(phraseC4).toContain('var t = (idx === 0) ? 0');
+    expect(phraseC5).toContain('legatoNote(inst, lastPitchRef.p, anchorVel)');
+    expect(phraseC6).toContain('scheduleAt(inst, 0, function()');
+    expect(phraseC7).toContain('legatoNote(inst, p1, humanVel(vel))');
+    expect(phraseC8).toContain('scheduleAt(inst, 0, function()');
+    expect(source).toContain('var FIRST_GLISS_MS_C6 = 30;');
+    expect(phrasePlanSource).toContain('const FIRST_GLISS_MS_C6 = 30;');
+    expect(phraseC6).toContain('glissSchedule(requestedCount - 1, FIRST_GLISS_MS_C6');
+    expect(phrasePlanSource).toContain('glissSchedule(requestedCount - 1, FIRST_GLISS_MS_C6');
+    expect(phraseC6).toContain('var slideDelay = (idx === 0) ? 0 : humanDelay();');
+  });
+
   it('keeps face grammar out of live pitch/register selection', () => {
     const handleFace = extractLastFunction('handleFace');
     const pickPitch = extractLastFunction('pickPitch');

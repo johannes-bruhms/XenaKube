@@ -946,8 +946,11 @@
     min-width: 0;
   }
   .layer-toggle,
+  .settings-toggle,
   .record-action,
-  .record-mode {
+  .record-mode,
+  .spec-panel-close,
+  .spec-panel-action {
     font-family: inherit;
     font-size: 10px;
     font-weight: 700;
@@ -958,20 +961,28 @@
     border-radius: 3px;
   }
   .layer-toggle,
+  .settings-toggle,
   .record-action {
     padding: 4px 5px;
     cursor: pointer;
     transition: color 120ms ease, border-color 120ms ease, background 120ms ease;
   }
   .layer-toggle:hover,
+  .settings-toggle:hover,
   .record-action:hover:not(:disabled) {
     color: var(--text);
     border-color: var(--accent2);
   }
-  .layer-toggle.active {
+  .layer-toggle.active,
+  .settings-toggle.active {
     color: var(--accent2);
     border-color: var(--accent2);
     background: rgba(0, 204, 255, 0.10);
+  }
+  .spectrogram-settings-toggle-row .settings-toggle,
+  .cube-colors-toggle-row .settings-toggle {
+    flex: 1;
+    text-align: center;
   }
   .spectrum-status {
     max-width: 64px;
@@ -999,6 +1010,302 @@
   .record-status {
     flex: 1 1 44px;
     min-width: 44px;
+  }
+
+  .spectrogram-settings-panel[hidden],
+  .cube-colors-panel[hidden] {
+    display: none !important;
+  }
+  .spectrogram-settings-panel,
+  .cube-colors-panel {
+    position: fixed;
+    right: calc(var(--br-cluster-w) + 22px);
+    bottom: 14px;
+    width: min(720px, calc(100vw - var(--br-cluster-w) - 46px));
+    max-height: calc(100vh - 92px);
+    z-index: 8;
+    pointer-events: auto;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px;
+    background: rgba(6, 9, 13, 0.84);
+    border: 1px solid rgba(0, 204, 255, 0.32);
+    border-radius: 4px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.38);
+    backdrop-filter: blur(10px);
+    font-family: monospace;
+  }
+  .cube-colors-panel {
+    width: min(680px, calc(100vw - var(--br-cluster-w) - 46px));
+  }
+  .spec-panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .spec-panel-title,
+  .spec-section-title {
+    color: var(--accent2);
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 1.4px;
+    text-transform: uppercase;
+  }
+  .spec-panel-close,
+  .spec-panel-action {
+    padding: 4px 8px;
+    cursor: pointer;
+  }
+  .spec-panel-close:hover,
+  .spec-panel-action:hover {
+    color: var(--text);
+    border-color: var(--accent2);
+  }
+  .spec-panel-body {
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 204, 255, 0.45) transparent;
+    display: grid;
+    grid-template-columns: minmax(240px, 0.86fr) minmax(320px, 1.14fr);
+    gap: 14px;
+  }
+  .spec-settings-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+  .spec-setting-row {
+    display: grid;
+    grid-template-columns: 64px minmax(96px, 1fr) 42px;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+    color: var(--text);
+    font-size: 12px;
+  }
+  .spec-setting-row label {
+    color: var(--text);
+    letter-spacing: 0.4px;
+    min-width: 0;
+  }
+  .spec-setting-row input[type="range"] {
+    min-width: 0;
+    accent-color: var(--slider-color);
+  }
+  .spec-setting-row .slider-val {
+    color: var(--slider-color);
+    font-weight: 700;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .spec-setting-row select {
+    min-width: 0;
+    width: 100%;
+    height: 23px;
+  }
+  .spec-setting-row-color {
+    grid-template-columns: 64px minmax(86px, 1fr) 30px 42px;
+  }
+  .spec-color-input {
+    width: 30px;
+    height: 23px;
+    padding: 1px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .modality-palette-editor {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .modality-palette-row {
+    display: grid;
+    grid-template-columns: 82px minmax(0, 1fr);
+    align-items: start;
+    gap: 8px;
+    min-width: 0;
+    padding-top: 7px;
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+  }
+  .modality-palette-label {
+    min-width: 0;
+    font-size: 11px;
+    line-height: 1.25;
+    color: var(--text);
+  }
+  .modality-palette-label .cmx {
+    color: var(--accent2);
+    font-weight: 700;
+    letter-spacing: 0.8px;
+  }
+  .modality-palette-label .name {
+    display: block;
+    color: var(--dim);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .modality-palette-body {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    min-width: 0;
+  }
+  .modality-transfer-controls {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    min-width: 0;
+  }
+  .modality-transfer-control {
+    display: grid;
+    grid-template-columns: minmax(34px, 1fr) 30px;
+    gap: 3px;
+    align-items: center;
+    min-width: 0;
+  }
+  .modality-transfer-control .mt-label {
+    grid-column: 1 / -1;
+    color: var(--dim);
+    font-size: 9px;
+    line-height: 1;
+    text-transform: uppercase;
+    letter-spacing: 0.4px;
+  }
+  .modality-transfer-control input[type="range"] {
+    min-width: 0;
+    width: 100%;
+    accent-color: var(--slider-color);
+  }
+  .modality-transfer-control .mt-val {
+    color: var(--slider-color);
+    font-size: 10px;
+    font-weight: 700;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+  .palette-stops {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(34px, 1fr));
+    gap: 5px;
+    min-width: 0;
+  }
+  .palette-stop {
+    display: flex;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 3px;
+    min-width: 0;
+    color: var(--dim);
+    font-size: 9px;
+    line-height: 1;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
+  }
+  .palette-stop input[type="color"] {
+    width: 100%;
+    height: 22px;
+    padding: 1px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .spec-panel-action {
+    align-self: flex-end;
+    margin-top: 2px;
+  }
+  .cube-colors-editor {
+    overflow: auto;
+    scrollbar-width: thin;
+    scrollbar-color: rgba(0, 204, 255, 0.45) transparent;
+    display: grid;
+    grid-template-columns: repeat(2, minmax(240px, 1fr));
+    gap: 14px;
+    min-width: 0;
+    min-height: 0;
+  }
+  .cube-color-section {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    min-width: 0;
+  }
+  .cube-swatch-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(42px, 1fr));
+    gap: 6px;
+  }
+  .cube-swatch,
+  .cube-check-row,
+  .cube-range-row {
+    min-width: 0;
+    color: var(--text);
+    font-size: 11px;
+  }
+  .cube-swatch {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    color: var(--dim);
+  }
+  .cube-swatch input[type="color"] {
+    width: 100%;
+    height: 24px;
+    padding: 1px;
+    border: 1px solid rgba(255, 255, 255, 0.18);
+    border-radius: 3px;
+    background: transparent;
+    cursor: pointer;
+  }
+  .cube-check-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .cube-check-row input[type="checkbox"] {
+    width: 14px;
+    height: 14px;
+    accent-color: var(--accent2);
+  }
+  .cube-range-row {
+    display: grid;
+    grid-template-columns: 82px minmax(80px, 1fr) 40px;
+    align-items: center;
+    gap: 8px;
+  }
+  .cube-range-row input[type="range"] {
+    min-width: 0;
+    accent-color: var(--slider-color);
+  }
+  .cube-range-row .slider-val {
+    color: var(--slider-color);
+    font-weight: 700;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+  }
+
+  @media (max-width: 900px) {
+    .spectrogram-settings-panel,
+    .cube-colors-panel {
+      left: 14px;
+      right: 14px;
+      bottom: 76px;
+      width: auto;
+      max-height: calc(100vh - 100px);
+    }
+    .spec-panel-body {
+      grid-template-columns: 1fr;
+    }
+    .cube-colors-editor {
+      grid-template-columns: 1fr;
+    }
   }
 
   /* Quality picker — three discrete tiers (Low / Med / High) toggling

@@ -828,7 +828,7 @@ The audible signature was distinctive: a quieter "second note" near in pitch to 
 
 **Fix**:
 
-1. **`FIRST_GLISS_MS = 150`** — new constant in `max/xk_swam.js`. `phraseC5` schedules idx 0 at `FIRST_GLISS_MS`; `phraseC6` schedules idx 1 (idx 0 is the anchor legato) at `FIRST_GLISS_MS`; `phraseC7` schedules its first drift at `FIRST_GLISS_MS`. Remaining slides in each phrase distribute through `(FIRST_GLISS_MS + 150..250, durMs * 0.88..0.92)` via `(idx / stepCount) * tailLen`. `scheduleRelease`'s 200 ms floor (`Math.max(dur * 1000, 200)`) is always greater than `FIRST_GLISS_MS`, so the first slide never races the release ramp even at sub-200 ms durations.
+1. **Per-complex first-gliss constants** — D43 introduced `FIRST_GLISS_MS` in `max/xk_swam.js`; current implementation keeps the invariant per complex. `phraseC5` schedules idx 0 at `FIRST_GLISS_MS`; `phraseC6` schedules idx 1 (idx 0 is the anchor legato) at `FIRST_GLISS_MS_C6`; `phraseC7` schedules its first drift at `FIRST_GLISS_MS_C7`. Remaining slides in each phrase distribute through the phrase tail. `scheduleRelease`'s floor is always greater than the first-gliss constants, so the first slide never races the release ramp even at tiny durations.
 
 2. **Double stops on C2 / C3 / C8**:
    - **`doubleStopCompanion(main)`** picks an interval from `[3, 4, 5, 7, 8, 9, 12]` semitones (weighted toward the naturally-resonant cello double-stops: m3, M3, P4, P5, m6, M6, octave). Direction biased by register: main ≥ MIDI 60 → companion below; main ≤ MIDI 48 → companion above; mid-range → random. Clamped to the comfortable double-stop range 36–77; flipped if out of range; returns null on impossible cases (never hits in practice).

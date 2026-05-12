@@ -24,7 +24,7 @@ export {
   RATE_DENSITY_GAIN_BY_COMPLEX, RATE_VELOCITY_GAIN_BY_COMPLEX,
   RATE_EXPR_GAIN_BY_COMPLEX, RATE_BOW_GAIN_BY_COMPLEX,
   RATE_TREMOLO_GAIN_BY_COMPLEX, RATE_ACCENT_GAIN_BY_COMPLEX,
-  clamp, harmonicsForC4, resolvePhraseDuration, phraseCountBounds, applyEnvelopeCount,
+  clamp, harmonicsForC4, resolvePhraseDuration, phraseCountBounds,
   turnRatePressure, rateDensityMultiplier, rateVelocityMultiplier,
   rateExpressionMultiplier, rateBowPressureMultiplier, rateTremoloMultiplier,
   rateAccentValue,

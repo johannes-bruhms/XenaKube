@@ -32,3 +32,6 @@ public/interruption/media/
 
 # Local Ableton project — not part of the committed repo
 ableton/
+
+# Local audio assets in the Max folder (the patch is source; recordings are not)
+max/*.wav

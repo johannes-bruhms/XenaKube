@@ -25,6 +25,10 @@ describe('Live transport backpressure guards', () => {
     expect(relay).toContain("data.type === 'set_spectrum_enabled'");
     expect(relay).toContain('_xkSpectrumEnabled');
     expect(relay).toContain("kind: 'spectrum_frame', lowPriority: true, dropIfBuffered: true");
+    expect(relay).toContain('let latestAudibleComplex = 0;');
+    expect(relay).toContain('function activeComplexForSpectrum()');
+    expect(relay).toContain('rawComplex >= 1 && rawComplex <= 8 ? rawComplex : activeComplexForSpectrum()');
+    expect(relay).toContain("data.kind === 'noteon' && data.complex >= 1 && data.complex <= 8");
     expect(relay).toContain('[SPECTRUM] dropped');
     expect(transport).toContain('spectrumFrame: []');
     expect(transport).toContain("case 'spectrum_frame':");
@@ -36,5 +40,12 @@ describe('Live transport backpressure guards', () => {
     expect(transport).toContain("obj?.type === 'gyro'");
     expect(transport).toContain("return false;");
     expect(transport).not.toContain("obj?.type === 'move'");
+  });
+
+  it('binds HTTP/WS to loopback by default (unauthenticated control surface)', () => {
+    expect(relay).toContain("RELAY_HOST = process.env.XK_BIND_HOST || '127.0.0.1'");
+    expect(relay).toContain('server.listen(3000, RELAY_HOST');
+    // No bare server.listen(3000, () => ...) that bypasses the host arg.
+    expect(relay).not.toMatch(/server\.listen\(3000,\s*\(/);
   });
 });

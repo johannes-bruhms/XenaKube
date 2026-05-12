@@ -267,6 +267,7 @@ const LATENCY_WINDOW = 64;
 const pendingVoiceLatency = [];
 const latencyByComplex = new Map();
 const latestExprByVoice = new Map();
+let latestAudibleComplex = 0;
 let latencySeq = 0;
 
 setInterval(() => {
@@ -307,6 +308,12 @@ function startVoiceLatencyProbe(output, phrasePlans = []) {
   const expectedFirstNoteOnMs = firstPlan?.expected?.firstNoteOnMs ?? 0;
   pendingVoiceLatency.push({
     id: ++latencySeq,
+    // Plan id from the TS shadow planner; Max stamps this onto every /xk/midi/*
+    // echo. Matching by planId here is what lets voice steal / overlap not
+    // satisfy the wrong probe FIFO-style. Falls back to FIFO order when
+    // planId === 0 (older Max reloads can emit echoes without the stamp during
+    // a single reload window).
+    planId: (firstPlan?.id | 0) || 0,
     t0: Date.now(),
     moveT0: lastMoveReceivedAt || Date.now(),
     move: lastMove || '-',
@@ -322,14 +329,37 @@ function startVoiceLatencyProbe(output, phrasePlans = []) {
   });
   while (pendingVoiceLatency.length > 32) {
     const dropped = pendingVoiceLatency.shift();
-    console.error(`[LATENCY FAIL] dropped stale pending voice id=${dropped.id} C${dropped.expectedComplex} planFirst=${dropped.expectedFirstNoteOnMs}ms without noteon echo`);
+    console.error(`[LATENCY FAIL] dropped stale pending voice id=${dropped.id} planId=${dropped.planId} C${dropped.expectedComplex} planFirst=${dropped.expectedFirstNoteOnMs}ms without noteon echo`);
   }
 }
 
 function completeVoiceLatencyProbe(data) {
   if (!data || data.kind !== 'noteon' || data.isCompanion === true) return;
   expireVoiceLatencyProbes(Date.now());
-  const pending = pendingVoiceLatency.shift();
+  if (pendingVoiceLatency.length === 0) return;
+  // Prefer planId-matched probe so voice steal / overlap doesn't satisfy the
+  // wrong pending entry. Fall back to FIFO shift only when the echo carries
+  // planId=0 (older Max reload during a single bridge-restart cycle) — every
+  // probe whose planId predates the matched one is then a confirmed miss.
+  const echoPlanId = data.planId | 0;
+  let pending;
+  if (echoPlanId > 0) {
+    const idx = pendingVoiceLatency.findIndex((p) => p.planId === echoPlanId);
+    if (idx === -1) {
+      // No planId match. The echo arrived for a phrase whose probe expired
+      // earlier; do nothing rather than shift the next-in-line probe.
+      return;
+    }
+    if (idx > 0) {
+      const stale = pendingVoiceLatency.splice(0, idx);
+      for (const s of stale) {
+        console.error(`[LATENCY FAIL] no matching noteon for planId=${s.planId} id=${s.id} C${s.expectedComplex} (later planId=${echoPlanId} arrived first)`);
+      }
+    }
+    pending = pendingVoiceLatency.shift();
+  } else {
+    pending = pendingVoiceLatency.shift();
+  }
   if (!pending) return;
 
   const dt = Date.now() - pending.t0;
@@ -343,7 +373,7 @@ function completeVoiceLatencyProbe(data) {
   stats.total++;
   if (stats.samples.length > LATENCY_WINDOW) stats.samples.shift();
 
-  const planText = `planFirst=${pending.expectedFirstNoteOnMs}ms planOverrun=${planOverrunMs}ms planNoteons=${pending.plannedNoteOnCount ?? '?'} planBends=${pending.plannedBendStepCount ?? '?'} planCompanions=${pending.plannedCompanionNoteOnCount ?? '?'}`;
+  const planText = `planId=${pending.planId} planFirst=${pending.expectedFirstNoteOnMs}ms planOverrun=${planOverrunMs}ms planNoteons=${pending.plannedNoteOnCount ?? '?'} planBends=${pending.plannedBendStepCount ?? '?'} planCompanions=${pending.plannedCompanionNoteOnCount ?? '?'}`;
   const halfText = pending.halfTurn ? ' half-turn=1' : '';
   const base = `[LATENCY] voice->noteon ${dt}ms move->noteon ${moveDt}ms ${planText} move=${pending.move} C${complex} face=${pending.face}${halfText} expected=C${pending.expectedComplex} mode=${pending.mode} ${exprText}`;
   if (dt >= LATENCY_FAIL_MS) {
@@ -360,7 +390,7 @@ function completeVoiceLatencyProbe(data) {
 function expireVoiceLatencyProbes(now) {
   while (pendingVoiceLatency.length > 0 && now - pendingVoiceLatency[0].t0 >= LATENCY_MISSING_MS) {
     const stale = pendingVoiceLatency.shift();
-    console.error(`[LATENCY FAIL] no noteon echo within ${LATENCY_MISSING_MS}ms for voice id=${stale.id} move=${stale.move} C${stale.expectedComplex} face=${stale.face}${stale.halfTurn ? ' half-turn=1' : ''} mode=${stale.mode} planFirst=${stale.expectedFirstNoteOnMs}ms planNoteons=${stale.plannedNoteOnCount ?? '?'}`);
+    console.error(`[LATENCY FAIL] no noteon echo within ${LATENCY_MISSING_MS}ms for voice id=${stale.id} planId=${stale.planId} move=${stale.move} C${stale.expectedComplex} face=${stale.face}${stale.halfTurn ? ' half-turn=1' : ''} mode=${stale.mode} planFirst=${stale.expectedFirstNoteOnMs}ms planNoteons=${stale.plannedNoteOnCount ?? '?'}`);
   }
 }
 
@@ -540,16 +570,13 @@ function gyroLoop() {
 }
 gyroLoop();
 
-// Forward engine state over OSC on every state change + broadcast to dashboard
-engine.onState((state) => {
-  latestEngineState = state;
-  const msgs = stateToOsc(state);
-  for (const msg of msgs) {
-    oscMax.send(msg.address, ...msg.args);
-  }
-
-  // Augment state with v2 data (scrambleFactor is now in XenaKubeState)
-  const v2State = {
+// Build the dashboard-facing v2 state from the engine's current state +
+// non-XenaKubeState sub-engines (voice mode, performance mode, algorithm
+// buffer, algorithm partials). Used both by the engine.onState listener and
+// by WS control-mutation branches that need to push fresh state without
+// waiting for the next gyro packet.
+function buildV2State(state) {
+  return {
     ...state,
     voiceMode: engine.voiceEngine.mode,
     performanceMode: engine.modeManager.getMode(),
@@ -560,10 +587,27 @@ engine.onState((state) => {
       total: p.algorithm.moves.length,
     })),
   };
+}
 
-  broadcastState(v2State, lastMove);
+// Forward engine state over OSC on every state change + broadcast to dashboard
+engine.onState((state) => {
+  latestEngineState = state;
+  const msgs = stateToOsc(state);
+  for (const msg of msgs) {
+    oscMax.send(msg.address, ...msg.args);
+  }
+  broadcastState(buildV2State(state), lastMove);
   lastMove = null;
 });
+
+// Push current engine state to dashboard immediately after a WS control
+// mutation. The engine mutators (setMode, setKDiagram, reset, etc.) do not
+// emit on their own listener channel — without this call, the dashboard's
+// K cards / cosmology toggle / tracked-K marker stay stale until the next
+// /xk/gyro packet (which never arrives when the cube is offline).
+function broadcastEngineStateAfterControl() {
+  broadcastState(buildV2State(engine.getState()), null);
+}
 
 // Broadcast cube algorithm events
 engine.onAlgorithm((match) => {
@@ -673,6 +717,15 @@ function activeComplexFromState() {
   return Math.max(1, Math.min(8, cmx | 0));
 }
 
+function activeComplexForSpectrum() {
+  // xk_spectrum.js may emit complex=0. In that case, color by the latest
+  // audio-side noteon echo rather than the engine state, which can advance
+  // before Max has emitted the first note of the new phrase.
+  const cmx = latestAudibleComplex | 0;
+  if (cmx >= 1 && cmx <= 8) return cmx;
+  return activeComplexFromState();
+}
+
 function finiteNumber(v, fallback = 0) {
   const n = Number(v);
   return Number.isFinite(n) ? n : fallback;
@@ -696,7 +749,7 @@ function parseSpectrumFrame(msg) {
     frameId: msg[1] | 0,
     audioTimeMs: finiteNumber(msg[2], Date.now()),
     analysisLatencyMs: Math.max(0, Math.min(2000, finiteNumber(msg[3], 0))),
-    complex: rawComplex >= 1 && rawComplex <= 8 ? rawComplex : activeComplexFromState(),
+    complex: rawComplex >= 1 && rawComplex <= 8 ? rawComplex : activeComplexForSpectrum(),
     binCount,
     minHz: Math.max(1, finiteNumber(msg[6], 40)),
     maxHz: Math.max(2, finiteNumber(msg[7], 6000)),
@@ -770,6 +823,10 @@ midiEchoServer.on('message', (msg) => {
 
   if (data.kind === 'expr') {
     latestExprByVoice.set(data.voice, { val: data.val, complex: data.complex, t: Date.now() });
+  } else if (data.kind === 'noteon' && data.complex >= 1 && data.complex <= 8) {
+    latestAudibleComplex = data.complex | 0;
+  } else if (data.kind === 'panic') {
+    latestAudibleComplex = 0;
   }
   completeVoiceLatencyProbe(data);
   if (data.kind === 'panic') {
@@ -875,9 +932,14 @@ const server = http.createServer((req, res) => {
   serveStatic(urlPath, res);
 });
 
-server.listen(3000, () => {
+// Loopback-only bind: the WS upgrade on this socket accepts unauthenticated
+// control messages (set_mode / reset / move) that drive SWAM. Binding to
+// 127.0.0.1 keeps a venue Wi-Fi peer from being able to play notes via wscat.
+// Set XK_BIND_HOST=0.0.0.0 to opt in to LAN exposure (e.g. remote monitoring).
+const RELAY_HOST = process.env.XK_BIND_HOST || '127.0.0.1';
+server.listen(3000, RELAY_HOST, () => {
     console.log("--------------------------------------------------");
-    console.log("  OPEN CHROME → http://localhost:3000");
+    console.log(`  OPEN CHROME → http://localhost:3000  (bound ${RELAY_HOST}:3000)`);
     console.log("--------------------------------------------------");
 });
 
@@ -942,7 +1004,23 @@ wss.on('connection', function connection(ws) {
 
     ws.on('message', function incoming(message) {
         try {
+            // Hard size cap on inbound WS messages. The dashboard's largest
+            // outbound payload is a `move` object with a few numeric fields;
+            // anything beyond 16 KB is either a malformed client or a deliberate
+            // resource probe. Treat as a drop rather than crash the relay.
+            if (typeof message?.length === 'number' && message.length > 16 * 1024) {
+                console.warn(`[WS DROP] oversize inbound ${message.length}B from ${wsClientId(ws)}`);
+                return;
+            }
             const data = JSON.parse(message);
+            if (!data || typeof data !== 'object' || typeof data.type !== 'string') {
+                // Loopback bind keeps this surface trusted in practice, but a
+                // schema check still catches malformed dashboard builds before
+                // they brick engine state. Match shape on `.type` only; each
+                // branch below narrows further when it reads `.value` etc.
+                console.warn(`[WS DROP] malformed inbound from ${wsClientId(ws)}: missing .type`);
+                return;
+            }
 
             if (data.type === 'move') {
                 let moveStr = data.value;
@@ -1031,11 +1109,13 @@ wss.on('connection', function connection(ws) {
                 if (found) {
                   engine.setKDiagram(found);
                   console.log(`[DIAGRAM] Set K_i diagram: ${found.name}`);
+                  broadcastEngineStateAfterControl();
                 }
             }
             else if (data.type === 'clear_diagram') {
                 engine.clearKDiagram();
                 console.log('[DIAGRAM] Cleared K_i diagram (direct mode)');
+                broadcastEngineStateAfterControl();
             }
             else if (data.type === 'set_mode') {
                 const mode = {};
@@ -1048,16 +1128,19 @@ wss.on('connection', function connection(ws) {
                     sendPanic();
                 }
                 console.log(`[MODE] ${JSON.stringify(mode)}`);
+                broadcastEngineStateAfterControl();
             }
             else if (data.type === 'set_tracked_k') {
                 engine.setTrackedK(Number(data.value));
                 console.log(`[TRACKED_K] ${Number(data.value)}`);
+                broadcastEngineStateAfterControl();
             }
             else if (data.type === 'reset') {
                 engine.reset();
                 phrasePlanner.reset();
                 publishPhraseAuditResults(phraseAuditor.reset('panic'));
                 console.log('[RESET] Engine reset');
+                broadcastEngineStateAfterControl();
             }
             else if (data.type === 'cube_solved') {
                 // Browser detected a solved FACELETS on an unsolved→solved edge.

@@ -132,10 +132,7 @@ transportOn('state', (data, move) => {
   cubeScene.update(data, move);
   stateUi.update(data, move);
   updateMotionHUD(data.motion);
-  if (move) {
-    verifyMoveRemap(move);
-    checkTopFaceZeroGesture(move, data.upFace);
-  }
+  if (move) verifyMoveRemap(move);
   interruptionLayer.onState(data, move);
 });
 transportOn('gyroState', (data) => {
@@ -414,6 +411,14 @@ scoreSpeedSlider.addEventListener('input', () => {
 
 const midiBrushToggle = document.getElementById('midiBrushToggle');
 const spectrogramToggle = document.getElementById('spectrogramToggle');
+const spectrogramSettingsToggle = document.getElementById('spectrogramSettingsToggle');
+const spectrogramSettingsPanel = document.getElementById('spectrogramSettingsPanel');
+const spectrogramSettingsClose = document.getElementById('spectrogramSettingsClose');
+const cubeColorsToggle = document.getElementById('cubeColorsToggle');
+const cubeColorsPanel = document.getElementById('cubeColorsPanel');
+const cubeColorsClose = document.getElementById('cubeColorsClose');
+const cubeColorsEditor = document.getElementById('cubeColorsEditor');
+const resetCubeColorsBtn = document.getElementById('resetCubeColors');
 const spectrumLatencySlider = document.getElementById('spectrumLatency');
 const spectrumLatencyValEl = document.getElementById('spectrumLatencyVal');
 const spectrumNudgeSlider = document.getElementById('spectrumNudge');
@@ -422,8 +427,11 @@ const spectrumGainSlider = document.getElementById('spectrumGain');
 const spectrumGainValEl = document.getElementById('spectrumGainVal');
 const spectrumFloorSlider = document.getElementById('spectrumFloor');
 const spectrumFloorValEl = document.getElementById('spectrumFloorVal');
+const spectrumCeilingSlider = document.getElementById('spectrumCeiling');
+const spectrumCeilingValEl = document.getElementById('spectrumCeilingVal');
 const spectrumBgSlider = document.getElementById('spectrumBg');
 const spectrumBgValEl = document.getElementById('spectrumBgVal');
+const spectrumBgColorEl = document.getElementById('spectrumBgColor');
 const spectrumSmoothSlider = document.getElementById('spectrumSmooth');
 const spectrumSmoothValEl = document.getElementById('spectrumSmoothVal');
 const spectrumBlurSlider = document.getElementById('spectrumBlur');
@@ -431,6 +439,8 @@ const spectrumBlurValEl = document.getElementById('spectrumBlurVal');
 const spectrumTimeSlider = document.getElementById('spectrumTime');
 const spectrumTimeValEl = document.getElementById('spectrumTimeVal');
 const spectrumPaletteEl = document.getElementById('spectrumPalette');
+const modalityPaletteEditor = document.getElementById('modalityPaletteEditor');
+const resetModalityPalettesBtn = document.getElementById('resetModalityPalettes');
 const recordModeEl = document.getElementById('recordMode');
 const recordBeginBtn = document.getElementById('recordBeginBtn');
 const recordEndBtn = document.getElementById('recordEndBtn');
@@ -440,6 +450,28 @@ function setLayerButton(btn, active) {
   if (!btn) return;
   btn.classList.toggle('active', active);
   btn.setAttribute('aria-pressed', active ? 'true' : 'false');
+}
+
+function setSpectrogramSettingsOpen(open) {
+  const active = open === true;
+  if (active) setCubeColorsOpen(false);
+  if (spectrogramSettingsPanel) spectrogramSettingsPanel.hidden = !active;
+  if (spectrogramSettingsToggle) {
+    spectrogramSettingsToggle.classList.toggle('active', active);
+    spectrogramSettingsToggle.setAttribute('aria-pressed', active ? 'true' : 'false');
+    spectrogramSettingsToggle.setAttribute('aria-expanded', active ? 'true' : 'false');
+  }
+}
+
+function setCubeColorsOpen(open) {
+  const active = open === true;
+  if (active) setSpectrogramSettingsOpen(false);
+  if (cubeColorsPanel) cubeColorsPanel.hidden = !active;
+  if (cubeColorsToggle) {
+    cubeColorsToggle.classList.toggle('active', active);
+    cubeColorsToggle.setAttribute('aria-pressed', active ? 'true' : 'false');
+    cubeColorsToggle.setAttribute('aria-expanded', active ? 'true' : 'false');
+  }
 }
 
 function applySpectrumTiming() {
@@ -500,6 +532,26 @@ midiBrushToggle?.addEventListener('click', () => {
 spectrogramToggle?.addEventListener('click', () => {
   applySpectrogramEnabled(!spectrumEnabled);
 });
+spectrogramSettingsToggle?.addEventListener('click', () => {
+  setSpectrogramSettingsOpen(spectrogramSettingsPanel?.hidden !== false);
+});
+spectrogramSettingsClose?.addEventListener('click', () => {
+  setSpectrogramSettingsOpen(false);
+});
+cubeColorsToggle?.addEventListener('click', () => {
+  setCubeColorsOpen(cubeColorsPanel?.hidden !== false);
+});
+cubeColorsClose?.addEventListener('click', () => {
+  setCubeColorsOpen(false);
+});
+document.addEventListener('keydown', (e) => {
+  if (e.key === 'Escape' && spectrogramSettingsPanel?.hidden === false) {
+    setSpectrogramSettingsOpen(false);
+  }
+  if (e.key === 'Escape' && cubeColorsPanel?.hidden === false) {
+    setCubeColorsOpen(false);
+  }
+});
 spectrumLatencySlider?.addEventListener('input', () => {
   currentSpectrumLatencyMs = parseFloat(spectrumLatencySlider.value) || 0;
   spectrumLatencyValEl.textContent = String(currentSpectrumLatencyMs | 0);
@@ -523,18 +575,38 @@ spectrumGainSlider?.addEventListener('input', () => {
   spectrumGainValEl.textContent = String(v);
   spectrumScore.setGainOffset(v);
   localStorage.setItem('spectrumGainDb', String(v));
+  saveModalityTransferSettings();
+  renderModalityPaletteEditor();
+});
+
+const savedSpectrumCeiling = parseFloat(localStorage.getItem('spectrumCeilingDb'));
+const initialSpectrumCeiling = isFinite(savedSpectrumCeiling) ? clampInt(savedSpectrumCeiling, -60, 0) : -15;
+const appliedSpectrumCeiling = spectrumScore.setCeilingDb(initialSpectrumCeiling);
+if (spectrumCeilingSlider) spectrumCeilingSlider.value = String(appliedSpectrumCeiling | 0);
+if (spectrumCeilingValEl) spectrumCeilingValEl.textContent = String(appliedSpectrumCeiling | 0);
+spectrumCeilingSlider?.addEventListener('input', () => {
+  const v = clampInt(parseFloat(spectrumCeilingSlider.value), -60, 0);
+  const applied = spectrumScore.setCeilingDb(v);
+  spectrumCeilingSlider.value = String(applied | 0);
+  spectrumCeilingValEl.textContent = String(applied | 0);
+  localStorage.setItem('spectrumCeilingDb', String(applied | 0));
+  saveModalityTransferSettings();
+  renderModalityPaletteEditor();
 });
 
 const savedSpectrumFloor = parseFloat(localStorage.getItem('spectrumFloorDb'));
 const initialSpectrumFloor = isFinite(savedSpectrumFloor) ? clampInt(savedSpectrumFloor, -130, -50) : -95;
-if (spectrumFloorSlider) spectrumFloorSlider.value = String(initialSpectrumFloor);
-if (spectrumFloorValEl) spectrumFloorValEl.textContent = String(initialSpectrumFloor);
-spectrumScore.setFloorDb(initialSpectrumFloor);
+const appliedSpectrumFloor = spectrumScore.setFloorDb(initialSpectrumFloor);
+if (spectrumFloorSlider) spectrumFloorSlider.value = String(appliedSpectrumFloor | 0);
+if (spectrumFloorValEl) spectrumFloorValEl.textContent = String(appliedSpectrumFloor | 0);
 spectrumFloorSlider?.addEventListener('input', () => {
   const v = clampInt(parseFloat(spectrumFloorSlider.value), -130, -50);
-  spectrumFloorValEl.textContent = String(v);
-  spectrumScore.setFloorDb(v);
-  localStorage.setItem('spectrumFloorDb', String(v));
+  const applied = spectrumScore.setFloorDb(v);
+  spectrumFloorSlider.value = String(applied | 0);
+  spectrumFloorValEl.textContent = String(applied | 0);
+  localStorage.setItem('spectrumFloorDb', String(applied | 0));
+  saveModalityTransferSettings();
+  renderModalityPaletteEditor();
 });
 
 const savedSpectrumBg = parseFloat(localStorage.getItem('spectrumBgPct'));
@@ -596,10 +668,429 @@ spectrumPaletteEl?.addEventListener('change', () => {
   localStorage.setItem('spectrumPalette', v);
 });
 
+const MODALITY_PALETTE_STORAGE = 'spectrumModalityPalettes';
+const MODALITY_TRANSFER_STORAGE = 'spectrumModalityTransfer';
+
+function modalityPaletteStorageShape() {
+  const settings = spectrumScore.getModalityPaletteSettings();
+  const out = {};
+  for (const [complex, info] of Object.entries(settings)) {
+    out[complex] = info.stops.map((stop) => stop.hex);
+  }
+  return out;
+}
+
+function saveModalityPaletteSettings() {
+  localStorage.setItem(MODALITY_PALETTE_STORAGE, JSON.stringify(modalityPaletteStorageShape()));
+}
+
+function modalityTransferStorageShape() {
+  const settings = spectrumScore.getModalityPaletteSettings();
+  const out = {};
+  for (const [complex, info] of Object.entries(settings)) {
+    out[complex] = {
+      gainOffsetDb: info.gainOffsetDb,
+      floorDb: info.floorDb,
+      ceilingDb: info.ceilingDb,
+    };
+  }
+  return out;
+}
+
+function saveModalityTransferSettings() {
+  localStorage.setItem(MODALITY_TRANSFER_STORAGE, JSON.stringify(modalityTransferStorageShape()));
+}
+
+function applySavedModalityPaletteSettings() {
+  const raw = localStorage.getItem(MODALITY_PALETTE_STORAGE);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    for (const [complex, colors] of Object.entries(saved || {})) {
+      if (!Array.isArray(colors)) continue;
+      colors.forEach((hex, idx) => {
+        spectrumScore.setModalityPaletteStop(parseInt(complex, 10), idx, hex);
+      });
+    }
+  } catch (err) {
+    console.warn('[spectrogram settings] ignoring saved modality palettes:', err);
+    localStorage.removeItem(MODALITY_PALETTE_STORAGE);
+  }
+}
+
+function applySavedModalityTransferSettings() {
+  const raw = localStorage.getItem(MODALITY_TRANSFER_STORAGE);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    for (const [complex, settings] of Object.entries(saved || {})) {
+      spectrumScore.setModalityTransfer(parseInt(complex, 10), settings);
+    }
+  } catch (err) {
+    console.warn('[spectrogram settings] ignoring saved modality transfer settings:', err);
+    localStorage.removeItem(MODALITY_TRANSFER_STORAGE);
+  }
+}
+
+function formatDb(v) {
+  return String(Math.round(Number(v) || 0));
+}
+
+function makeModalityTransferControl(cmx, key, label, min, max, value, onApply) {
+  const wrap = document.createElement('label');
+  wrap.className = 'modality-transfer-control';
+  wrap.title = `C${cmx} ${label}`;
+
+  const title = document.createElement('span');
+  title.className = 'mt-label';
+  title.textContent = label;
+
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(min);
+  input.max = String(max);
+  input.step = '1';
+  input.value = formatDb(value);
+  input.dataset.modalityControl = key;
+
+  const val = document.createElement('span');
+  val.className = 'mt-val';
+  val.textContent = formatDb(value);
+
+  input.addEventListener('input', () => {
+    const applied = onApply(parseFloat(input.value) || 0);
+    input.value = formatDb(applied[key]);
+    val.textContent = formatDb(applied[key]);
+    const row = input.closest('.modality-palette-row');
+    const floorInput = row?.querySelector('input[data-modality-control="floorDb"]');
+    const ceilingInput = row?.querySelector('input[data-modality-control="ceilingDb"]');
+    const floorVal = floorInput?.parentElement?.querySelector('.mt-val');
+    const ceilingVal = ceilingInput?.parentElement?.querySelector('.mt-val');
+    if (floorInput) floorInput.value = formatDb(applied.floorDb);
+    if (floorVal) floorVal.textContent = formatDb(applied.floorDb);
+    if (ceilingInput) ceilingInput.value = formatDb(applied.ceilingDb);
+    if (ceilingVal) ceilingVal.textContent = formatDb(applied.ceilingDb);
+    saveModalityTransferSettings();
+  });
+
+  wrap.appendChild(title);
+  wrap.appendChild(input);
+  wrap.appendChild(val);
+  return wrap;
+}
+
+function renderModalityPaletteEditor() {
+  if (!modalityPaletteEditor) return;
+  modalityPaletteEditor.textContent = '';
+  const settings = spectrumScore.getModalityPaletteSettings();
+  for (const complex of Object.keys(settings).sort((a, b) => Number(a) - Number(b))) {
+    const info = settings[complex];
+    const cmx = parseInt(complex, 10);
+    const row = document.createElement('div');
+    row.className = 'modality-palette-row';
+
+    const label = document.createElement('div');
+    label.className = 'modality-palette-label';
+    const code = document.createElement('span');
+    code.className = 'cmx';
+    code.textContent = 'C' + cmx;
+    const name = document.createElement('span');
+    name.className = 'name';
+    name.textContent = String(info.label || '').replace(/^C\d+\s*/, '') || 'modality';
+    label.appendChild(code);
+    label.appendChild(name);
+
+    const body = document.createElement('div');
+    body.className = 'modality-palette-body';
+
+    const transfer = document.createElement('div');
+    transfer.className = 'modality-transfer-controls';
+    transfer.appendChild(makeModalityTransferControl(cmx, 'gainOffsetDb', 'gain', -30, 30, info.gainOffsetDb, (v) => (
+      spectrumScore.setModalityTransfer(cmx, { gainOffsetDb: clampInt(v, -30, 30) })
+    )));
+    transfer.appendChild(makeModalityTransferControl(cmx, 'floorDb', 'floor', -130, -50, info.floorDb, (v) => (
+      spectrumScore.setModalityTransfer(cmx, { floorDb: clampInt(v, -130, -50) })
+    )));
+    transfer.appendChild(makeModalityTransferControl(cmx, 'ceilingDb', 'ceil', -60, 0, info.ceilingDb, (v) => (
+      spectrumScore.setModalityTransfer(cmx, { ceilingDb: clampInt(v, -60, 0) })
+    )));
+
+    const stops = document.createElement('div');
+    stops.className = 'palette-stops';
+    for (const stop of info.stops) {
+      if (stop.stop === 0) continue;
+      const stopLabel = document.createElement('label');
+      stopLabel.className = 'palette-stop';
+      stopLabel.title = `C${cmx} palette stop ${stop.stop.toFixed(2)}`;
+
+      const input = document.createElement('input');
+      input.type = 'color';
+      input.value = stop.hex;
+      input.setAttribute('aria-label', `C${cmx} palette stop ${stop.stop.toFixed(2)}`);
+      input.addEventListener('input', () => {
+        if (spectrumScore.setModalityPaletteStop(cmx, stop.index, input.value)) {
+          saveModalityPaletteSettings();
+        }
+      });
+
+      const value = document.createElement('span');
+      value.textContent = stop.stop.toFixed(2).replace(/^0/, '');
+      stopLabel.appendChild(input);
+      stopLabel.appendChild(value);
+      stops.appendChild(stopLabel);
+    }
+
+    body.appendChild(transfer);
+    body.appendChild(stops);
+    row.appendChild(label);
+    row.appendChild(body);
+    modalityPaletteEditor.appendChild(row);
+  }
+}
+
+applySavedModalityPaletteSettings();
+applySavedModalityTransferSettings();
+if (spectrumBgColorEl) {
+  spectrumBgColorEl.value = spectrumScore.getModalityBackgroundColor();
+  spectrumBgColorEl.addEventListener('input', () => {
+    if (spectrumScore.setAllModalityBackgroundColors(spectrumBgColorEl.value)) {
+      saveModalityPaletteSettings();
+    }
+  });
+}
+renderModalityPaletteEditor();
+resetModalityPalettesBtn?.addEventListener('click', () => {
+  spectrumScore.resetModalityPalettes();
+  localStorage.removeItem(MODALITY_PALETTE_STORAGE);
+  localStorage.removeItem(MODALITY_TRANSFER_STORAGE);
+  localStorage.removeItem('spectrumGainDb');
+  localStorage.removeItem('spectrumFloorDb');
+  localStorage.removeItem('spectrumCeilingDb');
+  spectrumScore.setGainOffset(0);
+  spectrumScore.setFloorDb(-95);
+  spectrumScore.setCeilingDb(-15);
+  if (spectrumGainSlider) spectrumGainSlider.value = '0';
+  if (spectrumGainValEl) spectrumGainValEl.textContent = '0';
+  if (spectrumFloorSlider) spectrumFloorSlider.value = '-95';
+  if (spectrumFloorValEl) spectrumFloorValEl.textContent = '-95';
+  if (spectrumCeilingSlider) spectrumCeilingSlider.value = '-15';
+  if (spectrumCeilingValEl) spectrumCeilingValEl.textContent = '-15';
+  if (spectrumBgColorEl) spectrumBgColorEl.value = spectrumScore.getModalityBackgroundColor();
+  renderModalityPaletteEditor();
+});
+
+const CUBE_COLOR_STORAGE = 'cubeColorSettings';
+
+function saveCubeColorSettings() {
+  localStorage.setItem(CUBE_COLOR_STORAGE, JSON.stringify({
+    cube: cubeScene.getAppearance(),
+    triangle: triangle.getAppearance(),
+  }));
+}
+
+function applySavedCubeColorSettings() {
+  const raw = localStorage.getItem(CUBE_COLOR_STORAGE);
+  if (!raw) return;
+  try {
+    const saved = JSON.parse(raw);
+    if (saved?.cube) cubeScene.setAppearance(saved.cube);
+    if (saved?.triangle) triangle.setAppearance(saved.triangle);
+  } catch (err) {
+    console.warn('[cube colors] ignoring saved appearance settings:', err);
+    localStorage.removeItem(CUBE_COLOR_STORAGE);
+  }
+}
+
+function makeCubeColorSection(title) {
+  const section = document.createElement('section');
+  section.className = 'cube-color-section';
+  const heading = document.createElement('div');
+  heading.className = 'spec-section-title';
+  heading.textContent = title;
+  section.appendChild(heading);
+  return section;
+}
+
+function appendColorControl(parent, labelText, value, onInput) {
+  const label = document.createElement('label');
+  label.className = 'cube-swatch';
+  const text = document.createElement('span');
+  text.textContent = labelText;
+  const input = document.createElement('input');
+  input.type = 'color';
+  input.value = value;
+  input.setAttribute('aria-label', labelText);
+  input.addEventListener('input', () => {
+    onInput(input.value);
+    saveCubeColorSettings();
+  });
+  label.appendChild(input);
+  label.appendChild(text);
+  parent.appendChild(label);
+}
+
+function appendCheckboxControl(parent, labelText, checked, onChange) {
+  const label = document.createElement('label');
+  label.className = 'cube-check-row';
+  const input = document.createElement('input');
+  input.type = 'checkbox';
+  input.checked = checked;
+  input.addEventListener('change', () => {
+    onChange(input.checked);
+    saveCubeColorSettings();
+  });
+  const text = document.createElement('span');
+  text.textContent = labelText;
+  label.appendChild(input);
+  label.appendChild(text);
+  parent.appendChild(label);
+}
+
+function appendRangeControl(parent, labelText, min, max, step, value, onInput, digits = 1) {
+  const row = document.createElement('label');
+  row.className = 'cube-range-row';
+  const text = document.createElement('span');
+  text.textContent = labelText;
+  const input = document.createElement('input');
+  input.type = 'range';
+  input.min = String(min);
+  input.max = String(max);
+  input.step = String(step);
+  input.value = Number(value).toFixed(digits);
+  const val = document.createElement('span');
+  val.className = 'slider-val';
+  val.textContent = Number(value).toFixed(digits);
+  input.addEventListener('input', () => {
+    const next = clampFloat(parseFloat(input.value), min, max, value);
+    const applied = onInput(next);
+    const shown = typeof applied === 'number' ? applied : next;
+    input.value = Number(shown).toFixed(digits);
+    val.textContent = Number(shown).toFixed(digits);
+    saveCubeColorSettings();
+  });
+  row.appendChild(text);
+  row.appendChild(input);
+  row.appendChild(val);
+  parent.appendChild(row);
+}
+
+function appendVertexColorGrid(parent, title, key, prefix, values) {
+  const section = makeCubeColorSection(title);
+  const grid = document.createElement('div');
+  grid.className = 'cube-swatch-grid';
+  values.forEach((hex, idx) => {
+    appendColorControl(grid, `${prefix}${idx + 1}`, hex, (color) => {
+      const appearance = cubeScene.getAppearance();
+      const colors = appearance[key].slice(0, 8);
+      colors[idx] = color;
+      cubeScene.setAppearance({ [key]: colors });
+    });
+  });
+  section.appendChild(grid);
+  parent.appendChild(section);
+}
+
+function appendCubeAppearanceColor(grid, key, label, appearance) {
+  appendColorControl(grid, label, appearance[key], (color) => {
+    cubeScene.setAppearance({ [key]: color });
+  });
+}
+
+function appendTriangleAppearanceColor(grid, key, label, appearance) {
+  appendColorControl(grid, label, appearance[key], (color) => {
+    triangle.setAppearance({ [key]: color });
+  });
+}
+
+function appendCubeAppearanceRange(parent, key, label, min, max, step, appearance, digits = 1) {
+  appendRangeControl(parent, label, min, max, step, appearance[key], (value) => (
+    cubeScene.setAppearance({ [key]: value })[key]
+  ), digits);
+}
+
+function appendTriangleAppearanceRange(parent, key, label, min, max, step, appearance, digits = 1) {
+  appendRangeControl(parent, label, min, max, step, appearance[key], (value) => (
+    triangle.setAppearance({ [key]: value })[key]
+  ), digits);
+}
+
+function renderCubeColorsEditor() {
+  if (!cubeColorsEditor) return;
+  cubeColorsEditor.textContent = '';
+  const cube = cubeScene.getAppearance();
+  const tri = triangle.getAppearance();
+
+  appendVertexColorGrid(cubeColorsEditor, 'live K vertices', 'kVertexColors', 'K', cube.kVertexColors);
+  appendVertexColorGrid(cubeColorsEditor, 'ghost C vertices', 'cVertexColors', 'C', cube.cVertexColors);
+
+  const labelSection = makeCubeColorSection('label text');
+  appendCheckboxControl(labelSection, 'K labels follow vertex color', cube.kLabelsFollowVertex, (checked) => {
+    cubeScene.setAppearance({ kLabelsFollowVertex: checked });
+  });
+  appendCheckboxControl(labelSection, 'C labels follow vertex color', cube.cLabelsFollowVertex, (checked) => {
+    cubeScene.setAppearance({ cLabelsFollowVertex: checked });
+  });
+  const labelGrid = document.createElement('div');
+  labelGrid.className = 'cube-swatch-grid';
+  appendCubeAppearanceColor(labelGrid, 'kLabelColor', 'K labels', cube);
+  appendCubeAppearanceColor(labelGrid, 'cLabelColor', 'C labels', cube);
+  appendCubeAppearanceColor(labelGrid, 'activeLabelColor', 'active', cube);
+  appendCubeAppearanceColor(labelGrid, 'detailLabelColor', 'details', cube);
+  labelSection.appendChild(labelGrid);
+  cubeColorsEditor.appendChild(labelSection);
+
+  const wireSection = makeCubeColorSection('cube lines');
+  const wireGrid = document.createElement('div');
+  wireGrid.className = 'cube-swatch-grid';
+  appendCubeAppearanceColor(wireGrid, 'liveWireColor', 'live wire', cube);
+  appendCubeAppearanceColor(wireGrid, 'ghostWireColor', 'ghost wire', cube);
+  appendCubeAppearanceColor(wireGrid, 'kcLineColor', 'K-C line', cube);
+  appendCubeAppearanceColor(wireGrid, 'adaptiveWireColor', 'overlay', cube);
+  appendCubeAppearanceColor(wireGrid, 'tetraAColor', 'tetra A', cube);
+  appendCubeAppearanceColor(wireGrid, 'tetraBColor', 'tetra B', cube);
+  appendCubeAppearanceColor(wireGrid, 'topMarkerColor', 'top dots', cube);
+  appendCubeAppearanceColor(wireGrid, 'activeHaloColor', 'K halo', cube);
+  appendCubeAppearanceColor(wireGrid, 'ghostActiveHaloColor', 'C halo', cube);
+  wireSection.appendChild(wireGrid);
+  appendCubeAppearanceRange(wireSection, 'baseLineWidth', 'base width', 0.5, 6, 0.1, cube);
+  appendCubeAppearanceRange(wireSection, 'liveWireWidth', 'live width', 0.4, 8, 0.1, cube);
+  appendCubeAppearanceRange(wireSection, 'tetraWireWidth', 'tetra width', 0.3, 6, 0.1, cube);
+  appendCubeAppearanceRange(wireSection, 'ghostWireWidth', 'ghost width', 0.4, 8, 0.1, cube);
+  appendCubeAppearanceRange(wireSection, 'kcWireWidth', 'K-C width', 0.4, 8, 0.1, cube);
+  cubeColorsEditor.appendChild(wireSection);
+
+  const triangleSection = makeCubeColorSection('triangle lines');
+  const triangleGrid = document.createElement('div');
+  triangleGrid.className = 'cube-swatch-grid';
+  appendTriangleAppearanceColor(triangleGrid, 'kLegColor', 'K leg', tri);
+  appendTriangleAppearanceColor(triangleGrid, 'cLegColor', 'C leg', tri);
+  appendTriangleAppearanceColor(triangleGrid, 'sievePointColor', 'sieve dot', tri);
+  triangleSection.appendChild(triangleGrid);
+  appendTriangleAppearanceRange(triangleSection, 'lineWidth', 'line width', 0.4, 8, 0.1, tri);
+  appendTriangleAppearanceRange(triangleSection, 'endpointRadius', 'dot size', 0, 10, 0.5, tri);
+  appendTriangleAppearanceRange(triangleSection, 'opacity', 'opacity', 0.05, 1, 0.05, tri, 2);
+  cubeColorsEditor.appendChild(triangleSection);
+}
+
+applySavedCubeColorSettings();
+renderCubeColorsEditor();
+resetCubeColorsBtn?.addEventListener('click', () => {
+  cubeScene.resetAppearance();
+  triangle.resetAppearance();
+  localStorage.removeItem(CUBE_COLOR_STORAGE);
+  renderCubeColorsEditor();
+});
+
 function clampInt(v, lo, hi) {
   if (!isFinite(v)) return lo;
   return Math.max(lo, Math.min(hi, Math.round(v)));
 }
+
+function clampFloat(v, lo, hi, fallback) {
+  if (!isFinite(v)) return fallback;
+  return Math.max(lo, Math.min(hi, v));
+}
+
 
 if (recordModeEl) {
   const savedRecordMode = localStorage.getItem('recordMode');
@@ -780,21 +1271,22 @@ function verifyMoveRemap(engineMove) {
   }
 }
 
-// Canonical-top CCW quadruple — physical zero-gyro shortcut.
-// Mirrors the zeroBtn handler ONLY when the white (canonical U) face is
-// currently up AND the performer turns U counterclockwise four times in
-// a row within ZERO_QUAD_WINDOW_MS. Restricted to U-on-top so the
-// gesture can't fire by accident when the cube is held in some other
-// orientation; engine-frame `U` is the canonical white-top face after
-// relay MOVE_REMAP.
+// Canonical U CCW quadruple — physical zero-gyro shortcut.
+// This must run from the raw GAN move stream, not from engine `state.upFace`:
+// `upFace` is computed after gyro zeroing, so gating the zero gesture on it
+// creates a bootstrap failure where the gesture only works after the GUI Zero
+// button has already initialized the gyro frame. U/D are unchanged by the
+// canonical-pose remap, so raw GAN `U'` is the same physical white-face turn
+// the performer expects.
 const ZERO_QUAD_WINDOW_MS = 1500;
 const ZERO_QUAD_COUNT = 4;
 const _zeroQuadHistory = [];
 
-function checkTopFaceZeroGesture(move, upFace) {
+function checkZeroGestureFromGanMove(move) {
   if (!move) return;
-  // Require canonical white face on top and a CCW quarter-turn of U.
-  if (upFace !== 'U' || move !== "U'") {
+  const moveStr = typeof move === 'string' ? move : '';
+  // Require a CCW quarter-turn of the physical white U face.
+  if (moveStr !== "U'") {
     _zeroQuadHistory.length = 0;
     return;
   }
@@ -812,7 +1304,7 @@ function checkTopFaceZeroGesture(move, upFace) {
     cubeScene.zeroGyro();
     wsSend({ type: 'zero_gyro' });
     console.log(
-      `[CUBE ZERO GESTURE] U' x${ZERO_QUAD_COUNT} in ${span}ms — zeroing gyro`,
+      `[CUBE ZERO GESTURE] raw GAN U' x${ZERO_QUAD_COUNT} in ${span}ms — zeroing gyro`,
     );
   }
 }
@@ -851,6 +1343,7 @@ connectBtn.addEventListener('click', async () => {
       if (event.type === 'MOVE') {
         recordSentMove(event.move);
         wsSend({ type: 'move', value: event.move });
+        checkZeroGestureFromGanMove(event.move);
       } else if (event.type === 'FACELETS') {
         const solved = event.facelets === SOLVED_FACELETS;
         if (solved && !lastSolvedReport) {
