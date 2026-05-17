@@ -95,7 +95,9 @@
   }
   .ovl > * { pointer-events: auto; }
 
-  /* Top-left column — title, conn-row, mode pills, K/C cards. Single column,
+  /* Top-left column — title, conn-row, mode pills. Floating K/C cards live
+     in this DOM column but are fixed-positioned at the active label-merge point.
+     Single column,
      proportional width, natural font sizes (no zoom hack — sized directly so
      the rendered metrics match the rest of the HUD). */
   .ovl-tl {
@@ -237,7 +239,7 @@
 
   /* Title-toggle: clicking XENAKUBE collapses the dashboard's chrome panels
      (state, mode pills, conn row, gizmo cluster, sliders, move buffer,
-     algorithm toasts, active K/C cards) so only the cube + sieve +
+     algorithm toasts, floating K/C cards) so only the cube + sieve +
      rolling-score remain. Live K-vertex info labels are part of the cube
      scene and remain visible. Persisted via localStorage('uiHidden') in main.js. */
   body.ui-hidden .conn-row,
@@ -455,12 +457,14 @@
   }
   .seq-vertex-pip.active .pip-complex { color: var(--text); }
 
-  /* Active vertex + complex cards (bottom-left overlay) */
+  /* Floating active vertex + complex cards. JS anchors this cluster at the
+     active K/C label-merge point after a phrase trigger; before the merge is
+     ready it falls back to the active ghost C projection for readability. */
   .vertex-grid, .complex-grid { display: block; }
   .vertex-card, .complex-card {
     display: none;
     background: rgba(10, 10, 15, 0.55);
-    border: 1px solid var(--accent);
+    border: 1px solid var(--kc-card-active-label-color, var(--accent));
     border-radius: 4px;
     padding: 6px 10px;
     text-align: center;
@@ -468,7 +472,7 @@
   }
   .vertex-card.active, .complex-card.active {
     display: block;
-    border-color: var(--accent);
+    border-color: var(--kc-card-active-label-color, var(--accent));
     background: rgba(0, 255, 136, 0.10);
     box-shadow: 0 0 10px var(--active-glow);
     padding: 9px 14px;
@@ -479,19 +483,20 @@
   .vertex-label {
     font-size: 32px;
     font-weight: 700;
-    color: var(--accent);
+    color: var(--kc-card-k-color, var(--kc-card-k-label-color, var(--accent)));
     margin-bottom: 4px;
     line-height: 1;
   }
   .vertex-param {
     font-size: 16px;
-    color: var(--text);
+    color: var(--kc-card-detail-label-color, var(--text));
     line-height: 1.35;
     white-space: nowrap;
   }
-  .vertex-param .val { color: var(--accent); font-weight: 600; }
-  .vertex-param .val { color: var(--text); }
-  .vertex-card.active .vertex-param .val { color: #fff; }
+  .vertex-param .val {
+    color: var(--kc-card-active-label-color, var(--text));
+    font-weight: 600;
+  }
   .intensity-bar {
     height: 3px;
     background: var(--border);
@@ -511,22 +516,13 @@
     font-weight: 700;
     margin-bottom: 4px;
     line-height: 1;
+    color: var(--kc-card-c-color, var(--complex-brush-color, var(--kc-card-c-label-color, var(--accent2))));
   }
   .complex-name {
     font-size: 14px;
-    color: var(--dim);
+    color: var(--kc-card-detail-label-color, var(--dim));
     line-height: 1.35;
   }
-
-  /* Complex type colors */
-  .ct-1 { border-color: #ff4444; color: #ff4444; }
-  .ct-2 { border-color: #ffaa22; color: #ffaa22; }
-  .ct-3 { border-color: #44cc44; color: #44cc44; }
-  .ct-4 { border-color: #44dddd; color: #44dddd; }
-  .ct-5 { border-color: #4488ff; color: #4488ff; }
-  .ct-6 { border-color: #aa44ff; color: #aa44ff; }
-  .ct-7 { border-color: #ff44cc; color: #ff44cc; }
-  .ct-8 { border-color: #cccccc; color: #cccccc; }
 
   /* Sieve — vertical piano-roll on the right edge. Each .sieve-cell is one
      semitone (49 cells, C2..C6); the stack lives in column-reverse so cell
@@ -611,9 +607,55 @@
 
   /* Hidden (JS still writes to these) */
   .log-panel, .gyro-panel, .sequence-panel, .vertices-panel, .complexes-panel, .algorithm-panel { display: none !important; }
-  /* Keep active vertex/complex cards visible even though grid containers hide by default */
+  /* Keep active vertex/complex card internals populated; the fixed .active-cards
+     shell itself stays hidden until a phrase-triggering move arrives. */
   .ovl-tl .vertex-grid, .ovl-tl .complex-grid { display: block !important; }
-  .active-cards { display: flex; flex-direction: column; gap: 6px; }
+  .active-cards {
+    --kc-card-k-label-color: var(--accent);
+    --kc-card-c-label-color: var(--accent2);
+    --kc-card-active-label-color: #fff;
+    --kc-card-detail-label-color: var(--text);
+    position: fixed;
+    top: 0;
+    left: 0;
+    z-index: 4;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    pointer-events: none;
+    opacity: 0;
+    transform: translate3d(-9999px, -9999px, 0);
+    transition: opacity 0.16s ease;
+    will-change: transform, opacity;
+  }
+  .active-cards.phrase-active:not(.anchor-hidden) {
+    opacity: 1;
+  }
+  .active-cards.anchor-hidden {
+    opacity: 0;
+  }
+  .active-cards.conjuring .vertex-card.active,
+  .active-cards.conjuring .complex-card.active,
+  .active-cards.conjuring .active-face-glyph {
+    animation: active-card-conjure 0.52s cubic-bezier(0.17, 0.84, 0.24, 1.08) both;
+  }
+  @keyframes active-card-conjure {
+    0% {
+      opacity: 0;
+      filter: blur(4px);
+      transform: translateY(-6px) scale(0.82);
+    }
+    68% {
+      opacity: 1;
+      filter: blur(0.5px);
+      transform: translateY(1px) scale(1.045);
+    }
+    100% {
+      opacity: 1;
+      filter: blur(0);
+      transform: translateY(0) scale(1);
+    }
+  }
 
   .active-face-glyph {
     width: 92px;

@@ -104,7 +104,7 @@ The first draft should prioritize clean enable/disable behavior, visible debug c
   - no interruption DOM remains visible
   - rolling score renders
   - existing white triangle works
-  - K/C cards remain visible
+  - active K/C labels merge into the K/C cards after a phrase trigger
   - no new console warnings/errors
 - Manually verify dashboard with `?intrusions=1&intrusionDebug=1`:
   - first 2 minutes stay clean unless forced with debug key

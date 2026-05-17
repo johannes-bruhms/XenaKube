@@ -5,8 +5,9 @@
 //   • transport events → module update entry points
 //   • DOM controls (sliders, buttons, MAC field) → transport.send / module setters
 //   • Web Bluetooth GAN cube connection → transport (move / gyro / facelets)
-//   • the Phase 1 visual-invariant cross-module reads (rolling-score ←→
-//     triangle's gliss display) so neither module needs the other's import
+//   • the visual-invariant cross-module reads (rolling-score ←→ triangle's
+//     gliss display, state-ui ← cube-scene's active card-anchor projection)
+//     so paired modules don't need direct imports
 //
 // dashboard.html is now HTML + a single <script type="module" src="./js/main.js">
 // — everything that used to live in the inline <script> block has moved
@@ -95,7 +96,9 @@ triangle.init({
   hasActiveKey: (voice, pitch) => rollingScore.hasActiveKey(voice, pitch),
 });
 
-stateUi.init();
+stateUi.init({
+  getActiveCardAnchorScreenPos: cubeScene.getActiveCardAnchorScreenPos,
+});
 
 const intrusionParams = new URLSearchParams(window.location.search);
 const interruptionLayer = initInterruptionLayer({
@@ -327,7 +330,7 @@ document.getElementById('mode-cosmology')?.addEventListener('click', () => {
 
 // XENAKUBE title doubles as a UI-collapse toggle. CSS `body.ui-hidden` hides
 // every chrome panel (state, mode pills, conn row, gizmo cluster, sliders,
-// move buffer, algorithm toasts, active K/C cards); sieve + rolling-score +
+// move buffer, algorithm toasts, floating K/C cards); sieve + rolling-score +
 // cube remain, including the K-vertex intensity / density / duration labels.
 // Title stays as a faint outline so the toggle target is still hittable.
 // Persisted across reloads.
@@ -439,6 +442,7 @@ const spectrumCeilingValEl = document.getElementById('spectrumCeilingVal');
 const spectrumBgSlider = document.getElementById('spectrumBg');
 const spectrumBgValEl = document.getElementById('spectrumBgVal');
 const spectrumBgColorEl = document.getElementById('spectrumBgColor');
+const spectrumCeilingColorEl = document.getElementById('spectrumCeilingColor');
 const spectrumSmoothSlider = document.getElementById('spectrumSmooth');
 const spectrumSmoothValEl = document.getElementById('spectrumSmoothVal');
 const spectrumBlurSlider = document.getElementById('spectrumBlur');
@@ -677,6 +681,8 @@ spectrumPaletteEl?.addEventListener('change', () => {
 
 const MODALITY_PALETTE_STORAGE = 'spectrumModalityPalettes';
 const MODALITY_TRANSFER_STORAGE = 'spectrumModalityTransfer';
+const SPECTRUM_BG_COLOR_STORAGE = 'spectrumBgColor';
+const SPECTRUM_CEILING_COLOR_STORAGE = 'spectrumCeilingColor';
 
 function modalityPaletteStorageShape() {
   const settings = spectrumScore.getModalityPaletteSettings();
@@ -710,18 +716,30 @@ function saveModalityTransferSettings() {
 
 function applySavedModalityPaletteSettings() {
   const raw = localStorage.getItem(MODALITY_PALETTE_STORAGE);
-  if (!raw) return;
+  if (!raw) return { backgroundColor: null, ceilingColor: null };
+  let savedBackgroundColor = null;
+  let savedCeilingColor = null;
   try {
     const saved = JSON.parse(raw);
     for (const [complex, colors] of Object.entries(saved || {})) {
       if (!Array.isArray(colors)) continue;
       colors.forEach((hex, idx) => {
+        if (idx === 0) {
+          if (!savedBackgroundColor && typeof hex === 'string') savedBackgroundColor = hex;
+          return;
+        }
+        if (idx === colors.length - 1) {
+          if (!savedCeilingColor && typeof hex === 'string') savedCeilingColor = hex;
+          return;
+        }
         spectrumScore.setModalityPaletteStop(parseInt(complex, 10), idx, hex);
       });
     }
+    return { backgroundColor: savedBackgroundColor, ceilingColor: savedCeilingColor };
   } catch (err) {
     console.warn('[spectrogram settings] ignoring saved modality palettes:', err);
     localStorage.removeItem(MODALITY_PALETTE_STORAGE);
+    return { backgroundColor: null, ceilingColor: null };
   }
 }
 
@@ -825,7 +843,7 @@ function renderModalityPaletteEditor() {
     const stops = document.createElement('div');
     stops.className = 'palette-stops';
     for (const stop of info.stops) {
-      if (stop.stop === 0) continue;
+      if (stop.stop === 0 || stop.stop === 1) continue;
       const stopLabel = document.createElement('label');
       stopLabel.className = 'palette-stop';
       stopLabel.title = `C${cmx} palette stop ${stop.stop.toFixed(2)}`;
@@ -855,12 +873,32 @@ function renderModalityPaletteEditor() {
   }
 }
 
-applySavedModalityPaletteSettings();
+const savedModalityEndpointColors = applySavedModalityPaletteSettings();
+const savedSpectrumBgColor = localStorage.getItem(SPECTRUM_BG_COLOR_STORAGE);
+const initialSpectrumBgColor = savedSpectrumBgColor || savedModalityEndpointColors.backgroundColor;
+if (initialSpectrumBgColor && spectrumScore.setAllModalityBackgroundColors(initialSpectrumBgColor)) {
+  localStorage.setItem(SPECTRUM_BG_COLOR_STORAGE, spectrumScore.getModalityBackgroundColor());
+}
+const savedSpectrumCeilingColor = localStorage.getItem(SPECTRUM_CEILING_COLOR_STORAGE);
+const initialSpectrumCeilingColor = savedSpectrumCeilingColor || savedModalityEndpointColors.ceilingColor;
+if (initialSpectrumCeilingColor && spectrumScore.setAllModalityCeilingColors(initialSpectrumCeilingColor)) {
+  localStorage.setItem(SPECTRUM_CEILING_COLOR_STORAGE, spectrumScore.getModalityCeilingColor());
+}
 applySavedModalityTransferSettings();
 if (spectrumBgColorEl) {
   spectrumBgColorEl.value = spectrumScore.getModalityBackgroundColor();
   spectrumBgColorEl.addEventListener('input', () => {
     if (spectrumScore.setAllModalityBackgroundColors(spectrumBgColorEl.value)) {
+      localStorage.setItem(SPECTRUM_BG_COLOR_STORAGE, spectrumScore.getModalityBackgroundColor());
+      saveModalityPaletteSettings();
+    }
+  });
+}
+if (spectrumCeilingColorEl) {
+  spectrumCeilingColorEl.value = spectrumScore.getModalityCeilingColor();
+  spectrumCeilingColorEl.addEventListener('input', () => {
+    if (spectrumScore.setAllModalityCeilingColors(spectrumCeilingColorEl.value)) {
+      localStorage.setItem(SPECTRUM_CEILING_COLOR_STORAGE, spectrumScore.getModalityCeilingColor());
       saveModalityPaletteSettings();
     }
   });
@@ -883,10 +921,21 @@ resetModalityPalettesBtn?.addEventListener('click', () => {
   if (spectrumCeilingSlider) spectrumCeilingSlider.value = '-15';
   if (spectrumCeilingValEl) spectrumCeilingValEl.textContent = '-15';
   if (spectrumBgColorEl) spectrumBgColorEl.value = spectrumScore.getModalityBackgroundColor();
+  if (spectrumCeilingColorEl) spectrumCeilingColorEl.value = spectrumScore.getModalityCeilingColor();
   renderModalityPaletteEditor();
 });
 
 const CUBE_COLOR_STORAGE = 'cubeColorSettings';
+
+function setCubeAppearanceAndSync(settings = {}) {
+  const applied = cubeScene.setAppearance(settings);
+  stateUi.setAppearance(applied);
+  return applied;
+}
+
+function syncCardAppearanceFromCube() {
+  stateUi.setAppearance(cubeScene.getAppearance());
+}
 
 function saveCubeColorSettings() {
   localStorage.setItem(CUBE_COLOR_STORAGE, JSON.stringify({
@@ -900,7 +949,7 @@ function applySavedCubeColorSettings() {
   if (!raw) return;
   try {
     const saved = JSON.parse(raw);
-    if (saved?.cube) cubeScene.setAppearance(saved.cube);
+    if (saved?.cube) setCubeAppearanceAndSync(saved.cube);
     if (saved?.triangle) triangle.setAppearance(saved.triangle);
   } catch (err) {
     console.warn('[cube colors] ignoring saved appearance settings:', err);
@@ -990,7 +1039,7 @@ function appendVertexColorGrid(parent, title, key, prefix, values) {
       const appearance = cubeScene.getAppearance();
       const colors = appearance[key].slice(0, 8);
       colors[idx] = color;
-      cubeScene.setAppearance({ [key]: colors });
+      setCubeAppearanceAndSync({ [key]: colors });
     });
   });
   section.appendChild(grid);
@@ -999,7 +1048,7 @@ function appendVertexColorGrid(parent, title, key, prefix, values) {
 
 function appendCubeAppearanceColor(grid, key, label, appearance) {
   appendColorControl(grid, label, appearance[key], (color) => {
-    cubeScene.setAppearance({ [key]: color });
+    setCubeAppearanceAndSync({ [key]: color });
   });
 }
 
@@ -1011,7 +1060,7 @@ function appendTriangleAppearanceColor(grid, key, label, appearance) {
 
 function appendCubeAppearanceRange(parent, key, label, min, max, step, appearance, digits = 1) {
   appendRangeControl(parent, label, min, max, step, appearance[key], (value) => (
-    cubeScene.setAppearance({ [key]: value })[key]
+    setCubeAppearanceAndSync({ [key]: value })[key]
   ), digits);
 }
 
@@ -1028,14 +1077,13 @@ function renderCubeColorsEditor() {
   const tri = triangle.getAppearance();
 
   appendVertexColorGrid(cubeColorsEditor, 'live K vertices', 'kVertexColors', 'K', cube.kVertexColors);
-  appendVertexColorGrid(cubeColorsEditor, 'ghost C vertices', 'cVertexColors', 'C', cube.cVertexColors);
 
   const labelSection = makeCubeColorSection('label text');
   appendCheckboxControl(labelSection, 'K labels follow vertex color', cube.kLabelsFollowVertex, (checked) => {
-    cubeScene.setAppearance({ kLabelsFollowVertex: checked });
+    setCubeAppearanceAndSync({ kLabelsFollowVertex: checked });
   });
   appendCheckboxControl(labelSection, 'C labels follow vertex color', cube.cLabelsFollowVertex, (checked) => {
-    cubeScene.setAppearance({ cLabelsFollowVertex: checked });
+    setCubeAppearanceAndSync({ cLabelsFollowVertex: checked });
   });
   const labelGrid = document.createElement('div');
   labelGrid.className = 'cube-swatch-grid';
@@ -1080,10 +1128,12 @@ function renderCubeColorsEditor() {
 }
 
 applySavedCubeColorSettings();
+syncCardAppearanceFromCube();
 renderCubeColorsEditor();
 resetCubeColorsBtn?.addEventListener('click', () => {
   cubeScene.resetAppearance();
   triangle.resetAppearance();
+  syncCardAppearanceFromCube();
   localStorage.removeItem(CUBE_COLOR_STORAGE);
   renderCubeColorsEditor();
 });

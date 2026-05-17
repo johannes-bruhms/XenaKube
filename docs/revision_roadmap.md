@@ -1320,12 +1320,8 @@ Highest-leverage first. Stop-test-listen between phases.
 - [x] D22 — `phraseCount(lo, hi)` helper; C2–C8 phrase generators rewritten with stochastic density scaled by `INTENSITY_MAP[intensity].density × state.density`
 - [x] D23 — `INTENSITY_MAP.bowMult` per level; `state.bowPressureBase = cmx.bowPressure × bowMult` written in `handleVoice`; `handleExprDev` rebases its ±25 mod off this. `COMPLEX[n].register = {lo, hi}` per complex; `foldToRange(pitch, lo, hi)` takes optional bounds; `pickPitch` passes per-complex register
 
-### Phase 10 — Diagnose harmonics / tremolo silence (D24)
-*Open. Likely upstream, not bridge.*
-- [ ] Open Max console during a cube session; log `complex -> C4` and `-> C8` frequency
-- [ ] If absent: audit `src/voice-engine.ts` active-vertex selection + `src/complexes.ts` α/β/γ mapping to ensure C1–C8 space is fully reached. Possibly the path V1/V2 / tetra orbit combination keeps landing in the same sub-cluster.
-- [ ] If present but no SWAM response: `setToggle` state-desync after `bang()` — force-sync harmonics/tremolo on first `setupComplex` after reset by firing KS unconditionally when `state.activeComplex === 0`.
-- [ ] Add a lightweight stat counter (per-complex hit count over last N voices) logged at complex-change, visible in Max console + dashboard, so the diagnosis becomes cheap to re-verify after any engine change.
+### Phase 10 — Diagnose harmonics / tremolo silence (D24) *(resolved by D69, 2026-05-16)*
+*The hypothesised diagnostic was a `setToggle` state desync after `bang()`. Actual root cause turned out to be the CC 78 / CC 79 diff guard in `setHarmonics` / `setTremolo` — every preset-load race left the bridge cache reading the wrong mode while SWAM landed on the opposite, and subsequent `setX(target)` calls early-returned without re-asserting. Fixed in D69 (Bridge Invariant "Selector re-assertion" extended D44 → D44 + D69) by removing the diff guard and always writing through. Listening test confirmed harmonics + tremolo + portamento all audible 2026-05-16.*
 
 ### Phase 11 — Ghost-cube calibration feedback loop (D25)
 *Open. Touches dashboard, relay, and engine — not just the bridge.*
@@ -1346,7 +1342,7 @@ Highest-leverage first. Stop-test-listen between phases.
 - [x] Removed dead `setSectionSize`/`setToggle` paths for retired KS
 - [x] Verified sune freeze still uses `CC.SUSTAIN_PEDAL` (untouched by migration)
 - [x] Docs synced: `docs/swam/swam_cello_reference.md` §2 + §9, `CLAUDE.md` Keyswitches section, this file (D24 RESOLVED, D27 added, Phase 6 rescoped)
-- [ ] **Listening test (user-side)**: confirm C4 harmonics + C8 tremolo audibly fire; confirm portamento not affected by Gesture Mode pin
+- [x] **Listening test (user-side)**: C4 harmonics + C8 tremolo audibly fire; portamento not affected by Gesture Mode pin. Confirmed 2026-05-16 after D69's CC 78 / CC 79 re-assertion fix landed.
 
 ### Phase 12 — Pitch-bend glissando path (D26, optional)
 *Implement only if C5's compound-gliss segments (D22) still feel under-delivered.*

@@ -43,6 +43,11 @@ describe('Dashboard ghost cube invariants', () => {
     expect(source).toContain('ghostVertPosTarget[c].copy(target);');
     expect(source).toContain('return assigned;');
     expect(source).toContain('[GHOST SNAP FAIL]');
+
+    const applyGhost = extractFunction('applyGhostCAssignmentMove');
+    expect(applyGhost.indexOf("if (cosmology !== 'alpha-cosmo')")).toBeLessThan(
+      applyGhost.indexOf('if (lastCAssignKey === nextKey && lastCAssignCosmology === cosmology) return;')
+    );
   });
 
   it('mounts face-signature glyphs with side remap and through-cube visibility', () => {

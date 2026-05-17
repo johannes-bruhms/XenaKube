@@ -50,6 +50,16 @@ npm run dev
 - If code and docs diverge, fix the docs in the same change.
 - The physical solved edge is a cosmology anchor: alpha-cosmo returns to beta-cosmo with the normal structural reset; already-beta sessions stay in place.
 
+## Drift hygiene
+
+Rules that keep `npm run check:docs` small. Full check definitions: `CLAUDE.md § Drift Detection`.
+
+1. **Don't quote numeric constants by value in docs.** Refer by name; the `bang()` boot log in `max/xk_swam.js` is the authoritative surface for paired tunables. The constant-sync check fails on any unmatched literal that sits next to a tracked constant name.
+2. **Every new file under `docs/` requires a Doc Maintenance row in `CLAUDE.md` in the same commit.** Orphan `*.md` → `npm run check:docs` fails.
+3. **Every new `/xk/*` address goes through `src/osc-schema.ts` first**, then `npm run gen:max`, before any doc references it. The schema is the only source of address strings.
+4. **Every dashboard ↔ bridge mirror constant** (`PORTAMENTO_MS_PER_SEMITONE` vs `COMPLEX[*].portamento.time`, `GLISS_SLIDE_MAX_DUR_MS` vs `MIN_GLISS_SPACING_MS - BEND_DUR_MARGIN_MS`) **must have a vitest equality test in `test/dashboard-bridge-sync.test.ts`.** Doc-side constant-sync can't catch table-vs-table drift inside code.
+5. **No paired-tunable absolute number lives in two places.** Either codegen the second from the first (preferred — that's what `max/gen_includes.js` is for) or wire a runtime/test assertion that fails on mismatch.
+
 ## Documentation ownership
 
 - `CLAUDE.md`: canonical current-state architecture, file roles, commands, and invariant summaries. Keep it present-tense and non-historical.

@@ -4,7 +4,7 @@
 //
 // Owns the DOM beneath the cube canvas:
 //   • Top-left: title, mode badges (palette / voice / regime / solved),
-//     turn-rate readout, active K/C cards
+//     turn-rate readout; floating K/C cards anchor at the active label merge
 //   • Bottom-left: state panel (face, active voice, S4 element, path,
 //     step, snap, complex phase, orbit, scramble, permutation) +
 //     hidden expression panel (kept as DOM so legacy gyro write-throughs
@@ -21,10 +21,11 @@
 //   • transport.on('algorithm') → stateUi.handleAlgorithmEvent
 //   • transport.on('solve')   → stateUi.setSolvedBadge(true, true)
 //   • transport.on('gyroTick') → stateUi.updateExpression(quat, dev)
-//   • #s-path click           → init({ onPathToggle }) callback
+//   • active K/C cards        → init({ getActiveCardAnchorScreenPos }) callback
 
 import { setActive as setActiveSieve } from './sieve.js';
 import { FACE_SIG, paintFaceGlyph, paintEmptyGlyph } from './face-glyph.js';
+import { COMPLEX_COLOR } from './constants.js';
 
 // ---- Constants (internal) --------------------------------------------------
 
@@ -40,6 +41,18 @@ const COMPLEX_SHORT = {
 };
 
 const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.75, 'fff': 0.92 };
+const CARD_APPEARANCE_DEFAULTS = {
+  kVertexColors: [
+    '#00ee77', '#ff3344', '#aaff00', '#ff8800',
+    '#ffd700', '#44aa66', '#ff44aa', '#ccff77',
+  ],
+  kLabelsFollowVertex: true,
+  cLabelsFollowVertex: true,
+  kLabelColor: '#ffffff',
+  cLabelColor: '#ffffff',
+  activeLabelColor: '#ffffff',
+  detailLabelColor: '#cccccc',
+};
 
 // FACE_SIG canonical mirror lives in `./face-glyph.js`. Source of truth is
 // src/face-gesture.ts; the JS mirror exists because the browser bundle
@@ -64,6 +77,12 @@ const seqPips = [];
 const permSlots = [];
 let activeFaceGlyphCanvas = null;
 let activeFaceGlyphCtx = null;
+let activeCardsEl = null;
+let getActiveCardAnchorScreenPos = null;
+let activeCardsVisible = false;
+let activeCardsConjureTimer = null;
+const activeCardAnchor = { x: 0, y: 0, visible: false };
+let cardAppearance = cloneCardAppearance(CARD_APPEARANCE_DEFAULTS);
 
 // ---- Local-expression state (gyro-derived) --------------------------------
 
@@ -76,7 +95,17 @@ let prevGyroTime = 0;
  * Build the dynamic DOM (vertex cards, complex cards, seq pips, perm slots)
  * and wire optional callbacks. Idempotent — call once per page load.
  */
-export function init() {
+export function init({ getActiveCardAnchorScreenPos: getAnchor, getActiveCAnchorScreenPos: legacyGetAnchor } = {}) {
+  activeCardsEl = document.querySelector('.active-cards');
+  getActiveCardAnchorScreenPos = typeof getAnchor === 'function'
+    ? getAnchor
+    : typeof legacyGetAnchor === 'function'
+      ? legacyGetAnchor
+      : null;
+  if (!getActiveCardAnchorScreenPos) {
+    console.warn('[state-ui] active K/C card anchor not wired - K/C cards stay hidden until wired');
+  }
+
   const vertexGrid = document.getElementById('vertex-grid');
   for (let i = 0; i < 8; i++) {
     const card = document.createElement('div');
@@ -127,6 +156,81 @@ export function init() {
     activeFaceGlyphCtx = activeFaceGlyphCanvas.getContext('2d');
     paintEmptyGlyph(activeFaceGlyphCtx);
   }
+
+  applyCardAppearanceVars();
+  positionActiveCards();
+}
+
+function cloneCardAppearance(src) {
+  return {
+    ...src,
+    kVertexColors: (src.kVertexColors || CARD_APPEARANCE_DEFAULTS.kVertexColors).slice(0, 8),
+  };
+}
+
+function coerceCardColor(value, fallback) {
+  const s = String(value || '').trim();
+  return s || fallback;
+}
+
+function applyCardAppearanceVars() {
+  if (!activeCardsEl) return;
+  activeCardsEl.style.setProperty('--kc-card-k-label-color', cardAppearance.kLabelColor);
+  activeCardsEl.style.setProperty('--kc-card-c-label-color', cardAppearance.cLabelColor);
+  activeCardsEl.style.setProperty('--kc-card-active-label-color', cardAppearance.activeLabelColor);
+  activeCardsEl.style.setProperty('--kc-card-detail-label-color', cardAppearance.detailLabelColor);
+}
+
+function kCardColor(kIdx) {
+  return cardAppearance.kLabelsFollowVertex
+    ? (cardAppearance.kVertexColors[kIdx] || cardAppearance.kLabelColor)
+    : cardAppearance.kLabelColor;
+}
+
+function cCardColor(complexType) {
+  return cardAppearance.cLabelsFollowVertex
+    ? (COMPLEX_COLOR[complexType] || COMPLEX_COLOR[0])
+    : cardAppearance.cLabelColor;
+}
+
+function refreshCardPrimaryColors() {
+  for (let i = 0; i < vertexCards.length; i++) {
+    const label = vertexCards[i].querySelector('.vertex-label')?.textContent || '';
+    const kMatch = /^K(\d+)/.exec(label);
+    const kIdx = kMatch ? Math.max(0, Math.min(7, Number(kMatch[1]) - 1)) : i;
+    vertexCards[i].style.setProperty('--kc-card-k-color', kCardColor(kIdx));
+  }
+  for (let i = 0; i < complexCards.length; i++) {
+    const label = complexCards[i].querySelector('.complex-num')?.textContent || '';
+    const cMatch = /^C(\d+)/.exec(label);
+    const ct = cMatch ? Math.max(0, Math.min(8, Number(cMatch[1]))) : i + 1;
+    complexCards[i].style.setProperty('--complex-brush-color', COMPLEX_COLOR[ct] || COMPLEX_COLOR[0]);
+    complexCards[i].style.setProperty('--kc-card-c-color', cCardColor(ct));
+  }
+}
+
+/** Mirror cube-scene label appearance onto the merged K/C cards. */
+export function setAppearance(settings = {}) {
+  const next = cloneCardAppearance(cardAppearance);
+  if (Array.isArray(settings.kVertexColors)) {
+    for (let i = 0; i < 8; i++) {
+      next.kVertexColors[i] = coerceCardColor(settings.kVertexColors[i], next.kVertexColors[i] || CARD_APPEARANCE_DEFAULTS.kVertexColors[i]);
+    }
+  }
+  for (const key of ['kLabelColor', 'cLabelColor', 'activeLabelColor', 'detailLabelColor']) {
+    if (Object.prototype.hasOwnProperty.call(settings, key)) {
+      next[key] = coerceCardColor(settings[key], next[key]);
+    }
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'kLabelsFollowVertex')) {
+    next.kLabelsFollowVertex = settings.kLabelsFollowVertex !== false;
+  }
+  if (Object.prototype.hasOwnProperty.call(settings, 'cLabelsFollowVertex')) {
+    next.cLabelsFollowVertex = settings.cLabelsFollowVertex !== false;
+  }
+  cardAppearance = next;
+  applyCardAppearanceVars();
+  refreshCardPrimaryColors();
 }
 
 /** Cache the algorithm book locally if any caller wants to read it later. */
@@ -159,6 +263,7 @@ export function handlePhrasePlan(data) {
     el.className = 'state-val';
     return;
   }
+  showActiveCards();
 
   const warningPlans = plans.filter(p => Array.isArray(p?.warnings) && p.warnings.length > 0);
   el.textContent = summary[0];
@@ -204,6 +309,7 @@ export function handlePhraseAudit(data) {
  */
 export function update(state, move) {
   const activeIdx = state.activeVertex ?? 0;
+  if (move) showActiveCards();
 
   if (state.cosmology) {
     setCosmologyBadge(state.cosmology);
@@ -257,6 +363,7 @@ export function update(state, move) {
       const v = state.kVertices[i];
       const card = vertexCards[i];
       const kIdx = state.kPermutation ? state.kPermutation[i] : i;
+      card.style.setProperty('--kc-card-k-color', kCardColor(kIdx));
       card.querySelector('.vertex-label').textContent = `K${kIdx + 1}`;
       card.querySelector('[data-v="d"]').textContent = v.density.toFixed(1);
       card.querySelector('[data-v="g"]').textContent = v.intensity;
@@ -272,6 +379,8 @@ export function update(state, move) {
       const ct = state.cAssignments[i];
       const card = complexCards[i];
       const isActive = i === activeIdx;
+      card.style.setProperty('--complex-brush-color', COMPLEX_COLOR[ct] || COMPLEX_COLOR[0]);
+      card.style.setProperty('--kc-card-c-color', cCardColor(ct));
       card.className = `complex-card ct-${ct}` + (isActive ? ' active' : ' inactive');
       card.querySelector('.complex-num').textContent = `C${ct}`;
       card.querySelector('.complex-name').textContent = COMPLEX_SHORT[ct] || '';
@@ -416,6 +525,52 @@ export function update(state, move) {
       while (log.children.length > 50) log.removeChild(log.lastChild);
     }
   }
+}
+
+function showActiveCards() {
+  activeCardsVisible = true;
+  if (!activeCardsEl) return;
+  activeCardsEl.classList.add('phrase-active');
+  activeCardsEl.classList.remove('conjuring');
+  void activeCardsEl.offsetWidth;
+  activeCardsEl.classList.add('conjuring');
+  if (activeCardsConjureTimer) clearTimeout(activeCardsConjureTimer);
+  activeCardsConjureTimer = setTimeout(() => {
+    activeCardsEl?.classList.remove('conjuring');
+    activeCardsConjureTimer = null;
+  }, 560);
+}
+
+function positionActiveCards() {
+  requestAnimationFrame(positionActiveCards);
+  if (!activeCardsEl) return;
+  if (!activeCardsVisible || !getActiveCardAnchorScreenPos) {
+    activeCardsEl.classList.remove('phrase-active');
+    activeCardsEl.classList.add('anchor-hidden');
+    return;
+  }
+
+  const anchor = getActiveCardAnchorScreenPos(activeCardAnchor);
+  if (!anchor || anchor.visible === false) {
+    activeCardsEl.classList.add('anchor-hidden');
+    return;
+  }
+
+  const rect = activeCardsEl.getBoundingClientRect();
+  const margin = 16;
+  const gap = 24;
+  const w = rect.width || 150;
+  const h = rect.height || 240;
+  let x = anchor.x + gap;
+  let y = anchor.y - h * 0.5;
+
+  if (x + w > window.innerWidth - margin) x = anchor.x - w - gap;
+  x = Math.max(margin, Math.min(window.innerWidth - w - margin, x));
+  y = Math.max(margin, Math.min(window.innerHeight - h - margin, y));
+
+  activeCardsEl.style.transform = `translate3d(${x.toFixed(1)}px, ${y.toFixed(1)}px, 0)`;
+  activeCardsEl.classList.remove('anchor-hidden');
+  activeCardsEl.classList.add('phrase-active');
 }
 
 // ---- Algorithm toast / panel notification ---------------------------------

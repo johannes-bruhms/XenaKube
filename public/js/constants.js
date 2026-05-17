@@ -169,6 +169,7 @@ const _SRGB_HEX = {
   7: '#88aaff',  // C7 gliss tasto — cool sky-lavender
   8: '#e11d48',  // C8 trem near-bridge — crimson
 };
+export const COMPLEX_COLOR_SRGB_HEX = _SRGB_HEX;
 
 const _supportsP3Color = (() => {
   try {

@@ -35,10 +35,9 @@ const FRAME_RESET_GAP_MS = 1600;
 const FRAME_RESET_ID_DROP = 2048;
 const STATUS_MIN_INTERVAL_MS = 160;
 
-// Sonogram dB range. Floor is the *quietest* mapped value; below it the unit
-// is clamped to MIN_UNIT so silence never collapses to black — the sonogram
-// always shows a dim base color, like spectroscope~ resting on its noise
-// floor. Tuned for SWAM Cello with rawGainDb=45.
+// Sonogram dB range. Floor is the quietest mapped value. Bins below it use
+// the shared BACKGROUND_RGB so palette changes do not retint silence; audio
+// just above the floor starts at MIN_UNIT in the active palette.
 let FLOOR_DB = -95;
 let CEILING_DB = -15;
 let MIN_UNIT = 0.10;
@@ -134,18 +133,18 @@ const PALETTES = {
 };
 
 // One palette per complex (1..8). When paletteMode === 'auto', each frame
-// paints with the palette keyed to its `complex` field, so the sonogram
-// background gains a visible identity per cosmology slot. Identity colors
-// match the original modality intent: transient speckle (C1, amber pizz),
+// paints with the palette keyed to its `complex` field, so active spectrum
+// energy gains a visible identity per cosmology slot. Identity colors match
+// the original modality intent: transient speckle (C1, amber pizz),
 // bowed thermal (C2, red), pitch prism (C3, teal-magenta), air veil
 // (C4, aqua), gliss ribbon (C5, hot magenta), cold ribbon (C6, ice blue),
 // pressure smear (C7, purple), noise chalk (C8, pink chalk).
-// Shared near-black at stop[0] across every modality, so at MIN_UNIT=0 the
-// floor reads identically regardless of which complex is active and only
-// the bright stops carry modality identity. As `spec bg` rises, the floor
-// interpolates toward each modality's stop[0.20-0.25] which IS modality-
-// specific, so identity gradually re-emerges with brightness.
+// Shared endpoint stops across every named and modality palette. The global
+// bg color owns stop[0] and the under-floor canvas fill; the global ceiling
+// color owns stop[1.00]. Modality identity lives in the interior stops.
 const MODALITY_BG = [8, 8, 14];
+const DEFAULT_BACKGROUND_RGB = MODALITY_BG.slice();
+let BACKGROUND_RGB = DEFAULT_BACKGROUND_RGB.slice();
 
 const MODALITY_LABELS = {
   1: 'C1 pizz',
@@ -217,6 +216,9 @@ const DEFAULT_MODALITY_PALETTES = {
   ],
 };
 
+const DEFAULT_CEILING_RGB = [248, 248, 248];
+let CEILING_RGB = DEFAULT_CEILING_RGB.slice();
+
 function clonePalette(palette) {
   return palette.map((stop) => stop.slice());
 }
@@ -266,16 +268,69 @@ function buildAllLUTs() {
     PALETTE_LUTS['mod:' + i] = buildLUT(MODALITY_PALETTES[i]);
   }
 }
-buildAllLUTs();
 
 function rebuildModalityLut(complex) {
   const cmx = clamp(complex | 0, 1, 8);
   PALETTE_LUTS['mod:' + cmx] = buildLUT(MODALITY_PALETTES[cmx]);
 }
 
+function setPaletteBackgroundStop(palette, rgb) {
+  const stop = palette?.[0];
+  if (!stop) return false;
+  if (stop[1] === rgb[0] && stop[2] === rgb[1] && stop[3] === rgb[2]) return false;
+  stop[1] = rgb[0];
+  stop[2] = rgb[1];
+  stop[3] = rgb[2];
+  return true;
+}
+
+function setPaletteCeilingStop(palette, rgb) {
+  const stop = palette?.[palette.length - 1];
+  if (!stop) return false;
+  if (stop[1] === rgb[0] && stop[2] === rgb[1] && stop[3] === rgb[2]) return false;
+  stop[1] = rgb[0];
+  stop[2] = rgb[1];
+  stop[3] = rgb[2];
+  return true;
+}
+
+function syncPaletteBackgroundStops(rgb) {
+  let changed = false;
+  for (const palette of Object.values(PALETTES)) {
+    changed = setPaletteBackgroundStop(palette, rgb) || changed;
+  }
+  for (let cmx = 1; cmx <= 8; cmx++) {
+    changed = setPaletteBackgroundStop(MODALITY_PALETTES[cmx], rgb) || changed;
+  }
+  if (changed || Object.keys(PALETTE_LUTS).length === 0) buildAllLUTs();
+  return changed;
+}
+
+function syncPaletteCeilingStops(rgb) {
+  let changed = false;
+  for (const palette of Object.values(PALETTES)) {
+    changed = setPaletteCeilingStop(palette, rgb) || changed;
+  }
+  for (let cmx = 1; cmx <= 8; cmx++) {
+    changed = setPaletteCeilingStop(MODALITY_PALETTES[cmx], rgb) || changed;
+  }
+  if (changed || Object.keys(PALETTE_LUTS).length === 0) buildAllLUTs();
+  return changed;
+}
+syncPaletteBackgroundStops(BACKGROUND_RGB);
+syncPaletteCeilingStops(CEILING_RGB);
+
 function rgbToHex(r, g, b) {
   const toHex = (v) => clamp(v | 0, 0, 255).toString(16).padStart(2, '0');
   return '#' + toHex(r) + toHex(g) + toHex(b);
+}
+
+function rgbCss(rgb) {
+  return 'rgb(' + (rgb[0] | 0) + ',' + (rgb[1] | 0) + ',' + (rgb[2] | 0) + ')';
+}
+
+function packedRgb(rgb) {
+  return 0xFF000000 | ((rgb[2] | 0) << 16) | ((rgb[1] | 0) << 8) | (rgb[0] | 0);
 }
 
 function parseHexColor(value) {
@@ -457,7 +512,7 @@ function resolvePalette(frame) {
 }
 
 function currentFloorColor() {
-  return paletteColor(MIN_UNIT, resolvePalette(prevDrawnFrame));
+  return rgbCss(BACKGROUND_RGB);
 }
 
 function setAllModalityTransferField(field, value) {
@@ -604,6 +659,7 @@ function paintColumnImageData(xStart, colW, prevFrame, currFrame) {
   const minU = MIN_UNIT;
   const oneMinusMinU = 1 - MIN_UNIT;
   const gain = transfer.gainOffsetDb;
+  const floorPacked = packedRgb(BACKGROUND_RGB);
 
   const imgData = historyCtx.createImageData(totalPx, innerH);
   const data32 = new Uint32Array(imgData.data.buffer);
@@ -649,8 +705,10 @@ function paintColumnImageData(xStart, colW, prevFrame, currFrame) {
       const db = dbA * (1 - beta) + dbB * beta + gain;
 
       let t;
-      if (db <= floorDb) t = 0;
-      else if (db >= ceilingDb) t = 1;
+      if (db <= floorDb) {
+        data32[y * totalPx + xi] = floorPacked;
+        continue;
+      } else if (db >= ceilingDb) t = 1;
       else t = (db - floorDb) / dbRange;
       const u = minU + oneMinusMinU * t;
 
@@ -1061,9 +1119,9 @@ export function setCeilingDb(db) {
   return CEILING_DB;
 }
 
-// Background brightness — the minimum palette position even when audio is
-// fully silent. 0 = palette floor (can read as near-black with some
-// palettes); ~0.10 = the always-alive default; ~0.30 = washed-out glow.
+// Background brightness - the minimum palette position for audio just above
+// FLOOR_DB. Fully quiet bins use BACKGROUND_RGB so the floor color stays
+// shared across palettes.
 export function setMinUnit(u) {
   if (!Number.isFinite(u)) return;
   const next = clamp(u, 0, 0.95);
@@ -1143,25 +1201,35 @@ export function getModalityPaletteSettings() {
 }
 
 export function getModalityBackgroundColor() {
-  const first = MODALITY_PALETTES[1]?.[0];
-  return first ? rgbToHex(first[1], first[2], first[3]) : '#08080e';
+  return rgbToHex(BACKGROUND_RGB[0], BACKGROUND_RGB[1], BACKGROUND_RGB[2]);
+}
+
+export function getModalityCeilingColor() {
+  return rgbToHex(CEILING_RGB[0], CEILING_RGB[1], CEILING_RGB[2]);
 }
 
 export function setAllModalityBackgroundColors(color) {
   const rgb = parseHexColor(color);
   if (!rgb) return false;
   let changed = false;
-  for (let cmx = 1; cmx <= 8; cmx++) {
-    const stop = MODALITY_PALETTES[cmx]?.[0];
-    if (!stop) continue;
-    if (stop[1] !== rgb[0] || stop[2] !== rgb[1] || stop[3] !== rgb[2]) {
-      stop[1] = rgb[0];
-      stop[2] = rgb[1];
-      stop[3] = rgb[2];
-      changed = true;
-      rebuildModalityLut(cmx);
-    }
+  if (BACKGROUND_RGB[0] !== rgb[0] || BACKGROUND_RGB[1] !== rgb[1] || BACKGROUND_RGB[2] !== rgb[2]) {
+    BACKGROUND_RGB = rgb.slice();
+    changed = true;
   }
+  changed = syncPaletteBackgroundStops(rgb) || changed;
+  if (changed) invalidateHistory();
+  return true;
+}
+
+export function setAllModalityCeilingColors(color) {
+  const rgb = parseHexColor(color);
+  if (!rgb) return false;
+  let changed = false;
+  if (CEILING_RGB[0] !== rgb[0] || CEILING_RGB[1] !== rgb[1] || CEILING_RGB[2] !== rgb[2]) {
+    CEILING_RGB = rgb.slice();
+    changed = true;
+  }
+  changed = syncPaletteCeilingStops(rgb) || changed;
   if (changed) invalidateHistory();
   return true;
 }
@@ -1171,6 +1239,8 @@ export function setModalityPaletteStop(complex, stopIndex, color) {
   const idx = stopIndex | 0;
   const palette = MODALITY_PALETTES[cmx];
   if (!palette || idx < 0 || idx >= palette.length) return false;
+  if (idx === 0) return setAllModalityBackgroundColors(color);
+  if (idx === palette.length - 1) return setAllModalityCeilingColors(color);
   const rgb = parseHexColor(color);
   if (!rgb) return false;
   const stop = palette[idx];
@@ -1197,8 +1267,10 @@ export function resetModalityPalettes() {
   for (let cmx = 1; cmx <= 8; cmx++) {
     MODALITY_PALETTES[cmx] = defaults[cmx];
     MODALITY_TRANSFER[cmx] = { ...DEFAULT_MODALITY_TRANSFER[cmx] };
-    rebuildModalityLut(cmx);
   }
+  syncPaletteBackgroundStops(BACKGROUND_RGB);
+  syncPaletteCeilingStops(CEILING_RGB);
+  buildAllLUTs();
   invalidateHistory();
 }
 
@@ -1208,6 +1280,8 @@ export function getLookSettings() {
     floorDb: FLOOR_DB,
     ceilingDb: CEILING_DB,
     minUnit: MIN_UNIT,
+    backgroundColor: getModalityBackgroundColor(),
+    ceilingColor: getModalityCeilingColor(),
     palette: paletteMode,
     smoothDensity,
     blurPx,

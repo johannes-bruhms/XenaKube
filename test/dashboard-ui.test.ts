@@ -10,14 +10,17 @@ describe('Dashboard UI collapse behavior', () => {
   const triangle = readFileSync(join(process.cwd(), 'public', 'js', 'triangle.js'), 'utf8');
   const rollingScore = readFileSync(join(process.cwd(), 'public', 'js', 'rolling-score.js'), 'utf8');
   const spectrumScore = readFileSync(join(process.cwd(), 'public', 'js', 'spectrum-score.js'), 'utf8');
+  const stateUi = readFileSync(join(process.cwd(), 'public', 'js', 'state-ui.js'), 'utf8');
   const performanceRecorder = readFileSync(join(process.cwd(), 'public', 'js', 'performance-recorder.js'), 'utf8');
 
   it('keeps live K-vertex telemetry labels visible when chrome is hidden', () => {
     expect(main).not.toContain('setVertexInfoVisible');
     expect(cubeScene).not.toContain('_vertexInfoVisible');
     expect(cubeScene).toContain('if (vertices) {');
-    expect(cubeScene).toContain('ctx.fillText(`${v.intensity} d${v.density.toFixed(1)}`, W / 2, 24);');
-    expect(cubeScene).toContain('ctx.fillText(`${v.duration}s`, W / 2, 42);');
+    expect(cubeScene).toContain('function drawLabelPanel(ctx, lines)');
+    expect(cubeScene).toContain('LABEL_PANEL_FILL');
+    expect(cubeScene).toContain('text: `${v.intensity} d${v.density.toFixed(1)}`');
+    expect(cubeScene).toContain('text: `${v.duration}s`');
   });
 
   it('keeps cube-scene vertex labels out of the bloom pass', () => {
@@ -54,6 +57,35 @@ describe('Dashboard UI collapse behavior', () => {
     expect(cubeScene).toContain('renderAdaptiveWireframes();');
   });
 
+  it('conjures active K/C cards from the active K/C label pair after phrase trigger', () => {
+    expect(main).toContain('stateUi.init({');
+    expect(main).toContain('getActiveCardAnchorScreenPos: cubeScene.getActiveCardAnchorScreenPos');
+    expect(cubeScene).toContain('export function getActiveCardAnchorScreenPos(out = {})');
+    expect(cubeScene).toContain('export const getActiveCScreenPos = getActiveCardAnchorScreenPos;');
+    expect(cubeScene).toContain('function applyActivePairConjure(now)');
+    expect(cubeScene).toContain('startActivePairConjure();');
+    expect(cubeScene).toContain('vertexMeshes[currentActiveK].getWorldPosition(_activePairKWorld);');
+    expect(cubeScene).toContain('ghostVertMeshes[currentActiveC].getWorldPosition(_activePairCWorld);');
+    expect(cubeScene).toContain('vertexMeshes[currentActiveK].position.copy(_activePairKPullLocal);');
+    expect(cubeScene).toContain('ghostVertMeshes[currentActiveC].position.copy(_activePairCPullLocal);');
+    expect(cubeScene).toContain('vertexLabels[currentActiveK].sprite.position.copy(_activePairLabelLocal);');
+    expect(cubeScene).toContain('ghostLabels[currentActiveC].sprite.position.copy(_activePairLabelLocal);');
+    expect(cubeScene).toContain('labelOpacity(vertexLabels[k], k === currentActiveK ? labelAlpha : 1);');
+    expect(cubeScene).toContain('labelOpacity(ghostLabels[c], c === currentActiveC ? labelAlpha : 1);');
+    expect(cubeScene).toContain('_activeCScreenWorld.copy(_activePairCardAnchorWorld);');
+    expect(stateUi).toContain('getActiveCardAnchorScreenPos');
+    expect(stateUi).toContain('if (move) showActiveCards();');
+    expect(stateUi).toContain('showActiveCards();');
+    expect(stateUi).toContain("activeCardsEl.classList.add('conjuring');");
+    expect(stateUi).toContain('requestAnimationFrame(positionActiveCards);');
+    expect(stateUi).toContain('activeCardsEl.style.transform = `translate3d(');
+    expect(mainCss).toContain('@keyframes active-card-conjure');
+    expect(mainCss).toContain('.active-cards.phrase-active:not(.anchor-hidden)');
+    expect(mainCss).toContain('transform: translate3d(-9999px, -9999px, 0);');
+    expect(mainCss).toContain('transition: opacity 0.16s ease;');
+    expect(mainCss).not.toContain('transform 0.12s ease-out');
+  });
+
   it('clips gliss companion overlays to the rolling-score pitch range', () => {
     expect(rollingScore).toContain('function _companionDyFromOffset(offsetSemis, mainPitch, mainY, canvasH)');
     expect(rollingScore).toContain('const companionPitch = mainPitch + offsetSemis;');
@@ -73,6 +105,7 @@ describe('Dashboard UI collapse behavior', () => {
     expect(dashboardHtml).toContain('id="spectrumNudge"');
     expect(dashboardHtml).toContain('id="spectrumCeiling"');
     expect(dashboardHtml).toContain('id="spectrumBgColor"');
+    expect(dashboardHtml).toContain('id="spectrumCeilingColor"');
     expect(dashboardHtml).toContain('id="modalityPaletteEditor"');
     expect(dashboardHtml).toContain('id="resetModalityPalettes"');
     expect(mainCss).toContain('#spectrogram-score');
@@ -84,6 +117,11 @@ describe('Dashboard UI collapse behavior', () => {
     expect(main).toContain("wsSend({ type: 'set_spectrum_enabled', enabled: spectrumEnabled });");
     expect(main).toContain('setSpectrogramSettingsOpen');
     expect(main).toContain('renderModalityPaletteEditor');
+    expect(main).toContain('spectrumBgColor');
+    expect(main).toContain('SPECTRUM_BG_COLOR_STORAGE');
+    expect(main).toContain('spectrumCeilingColor');
+    expect(main).toContain('SPECTRUM_CEILING_COLOR_STORAGE');
+    expect(main).toContain('stop.stop === 0 || stop.stop === 1');
     expect(main).toContain('spectrumModalityPalettes');
     expect(main).toContain('spectrumModalityTransfer');
     expect(rollingScore).toContain('export function setVisible(value)');
@@ -95,6 +133,14 @@ describe('Dashboard UI collapse behavior', () => {
     expect(spectrumScore).toContain('export function setModalityPaletteStop');
     expect(spectrumScore).toContain('export function setModalityTransfer');
     expect(spectrumScore).toContain('export function setAllModalityBackgroundColors');
+    expect(spectrumScore).toContain('export function setAllModalityCeilingColors');
+    expect(spectrumScore).toContain('export function getModalityCeilingColor');
+    expect(spectrumScore).toContain('BACKGROUND_RGB');
+    expect(spectrumScore).toContain('CEILING_RGB');
+    expect(spectrumScore).toContain('return rgbCss(BACKGROUND_RGB);');
+    expect(spectrumScore).toContain('const floorPacked = packedRgb(BACKGROUND_RGB);');
+    expect(spectrumScore).toContain('syncPaletteBackgroundStops');
+    expect(spectrumScore).toContain('syncPaletteCeilingStops');
     expect(spectrumScore).toContain('export function resetModalityPalettes');
     expect(spectrumScore).toContain('modalityStatus(prevDrawnFrame)');
     expect(spectrumScore).toContain('handleFrame(raw)');
@@ -117,9 +163,22 @@ describe('Dashboard UI collapse behavior', () => {
     expect(main).toContain('renderCubeColorsEditor');
     expect(main).toContain('cubeColorSettings');
     expect(main).toContain('cubeScene.setAppearance');
+    expect(main).toContain('stateUi.setAppearance');
+    expect(main).toContain('setCubeAppearanceAndSync');
     expect(main).toContain('triangle.setAppearance');
+    expect(main).not.toContain('ghost C vertices');
+    expect(main).not.toContain('cVertexColors');
     expect(cubeScene).toContain('export function setAppearance(settings = {})');
     expect(cubeScene).toContain('export function resetAppearance()');
+    expect(cubeScene).toContain('COMPLEX_COLOR_SRGB_HEX');
+    expect(cubeScene).toContain('makeComplexDotTexture');
+    expect(cubeScene).not.toContain('cVertexColors');
+    expect(mainCss).toContain('--kc-card-k-label-color');
+    expect(mainCss).toContain('--kc-card-c-label-color');
+    expect(mainCss).toContain('--kc-card-active-label-color');
+    expect(stateUi).toContain('export function setAppearance(settings = {})');
+    expect(stateUi).toContain("import { COMPLEX_COLOR } from './constants.js';");
+    expect(stateUi).toContain('refreshCardPrimaryColors()');
     expect(cubeScene).toContain('adaptiveWireColor');
     expect(cubeScene).toContain('cubeAppearance.liveWireWidth');
     expect(cubeScene).toContain('cubeAppearance.kcWireWidth');

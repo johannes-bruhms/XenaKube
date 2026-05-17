@@ -20,7 +20,7 @@
 //
 // Constants kept internal:
 //   CUBE_VERTS, CUBE_EDGES, TETRA_A, TETRA_B
-//   GHOST_VERT_COLORS{,_HEX,_DIM}
+//   GHOST_VERT_COLORS{,_HEX,_DIM} (locked to the MIDI brush palette)
 //   COMPLEX_ABBR (only used in ghost label paint)
 //
 // State kept private to this module: every Three.js object, every
@@ -34,6 +34,7 @@ import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
 import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 import { FACES, FACE_NORMAL as FACE_GLYPH_NORMAL, paintFaceGlyph } from './face-glyph.js';
+import { COMPLEX_COLOR_SRGB_HEX } from './constants.js';
 
 // ---- Geometry constants (internal) -----------------------------------------
 
@@ -101,29 +102,20 @@ const K_VERT_COLORS_DIM = [
   '#ccaa00', '#338855', '#cc3388', '#99cc55',
 ];
 
-// Ghost-cube dot palette. All-cool-spectrum (cyan → blue → indigo →
-// violet → teal) so the K (warm) and C (cool) sets share zero hues —
-// at a glance the user reads "this vertex belongs to the live cube" or
-// "ghost cube" by warm vs cool alone, then identifies which K/C by hue.
-// Ghost wireframe stays 0x00ccff (edges are structure, dots are
-// identity). Dim colours are ~60% luminance for the abbreviation line.
-const GHOST_VERT_COLORS = [
-  0x00ddff,  // C1 cyan
-  0x0099ff,  // C2 sky blue
-  0x3366ff,  // C3 royal blue
-  0x7755ff,  // C4 indigo
-  0xaa44ff,  // C5 purple
-  0xcc55dd,  // C6 magenta-purple
-  0x5588cc,  // C7 slate blue
-  0x22bbcc,  // C8 teal
-];
+// Ghost-cube dot palette. C vertices are locked to the same per-complex
+// sRGB brush colours as the MIDI rolling score; the cube-colors panel may
+// edit label text, but not the C vertex material identity. Ghost wireframe
+// stays cyan because edges are structure; dots are musical material.
 const GHOST_VERT_COLORS_HEX = [
-  '#00ddff', '#0099ff', '#3366ff', '#7755ff',
-  '#aa44ff', '#cc55dd', '#5588cc', '#22bbcc',
+  COMPLEX_COLOR_SRGB_HEX[1], COMPLEX_COLOR_SRGB_HEX[2],
+  COMPLEX_COLOR_SRGB_HEX[3], COMPLEX_COLOR_SRGB_HEX[4],
+  COMPLEX_COLOR_SRGB_HEX[5], COMPLEX_COLOR_SRGB_HEX[6],
+  COMPLEX_COLOR_SRGB_HEX[7], COMPLEX_COLOR_SRGB_HEX[8],
 ];
+const GHOST_VERT_COLORS = GHOST_VERT_COLORS_HEX.map(hex => parseInt(hex.slice(1), 16));
 const GHOST_VERT_COLORS_DIM = [
-  '#0099bb', '#0066bb', '#2244cc', '#5533cc',
-  '#7733cc', '#9944aa', '#3366aa', '#178899',
+  '#a57228', '#2858a7', '#4170aa', '#1790a2',
+  '#ad2368', '#723aa8', '#5c74ad', '#981432',
 ];
 
 // Used only for the two-line ghost-label paint (`C{n}` + abbreviation).
@@ -137,7 +129,6 @@ const INTENSITY_LEVELS = { 'p': 0.1, 'mp': 0.25, 'mf': 0.42, 'f': 0.58, 'ff': 0.
 const HEX_COLOR_RE = /^#[0-9a-fA-F]{6}$/;
 const CUBE_APPEARANCE_DEFAULTS = {
   kVertexColors: K_VERT_COLORS_HEX.slice(),
-  cVertexColors: GHOST_VERT_COLORS_HEX.slice(),
   kLabelsFollowVertex: true,
   cLabelsFollowVertex: true,
   kLabelColor: '#ffffff',
@@ -165,7 +156,6 @@ function cloneCubeAppearance(src) {
   return {
     ...src,
     kVertexColors: (src.kVertexColors || []).slice(0, 8),
-    cVertexColors: (src.cVertexColors || []).slice(0, 8),
   };
 }
 
@@ -346,15 +336,73 @@ ghostActiveRing.scale.set(0.45, 0.45, 1);
 ghostActiveRing.visible = false;
 const ghostTopMarkers = [];
 
-function makeLabel(text, color) {
-  const c = document.createElement('canvas');
-  c.width = 128; c.height = 80;
-  const ctx = c.getContext('2d');
-  ctx.font = 'bold 20px monospace';
-  ctx.fillStyle = color;
+const LABEL_CANVAS_W = 128;
+const LABEL_CANVAS_H = 80;
+const LABEL_PANEL_FILL = 'rgba(3, 7, 12, 0.56)';
+const LABEL_PANEL_STROKE = 'rgba(255, 255, 255, 0.16)';
+
+function fillRoundRect(ctx, x, y, w, h, r) {
+  const rr = Math.min(r, w * 0.5, h * 0.5);
+  ctx.beginPath();
+  ctx.moveTo(x + rr, y);
+  ctx.lineTo(x + w - rr, y);
+  ctx.quadraticCurveTo(x + w, y, x + w, y + rr);
+  ctx.lineTo(x + w, y + h - rr);
+  ctx.quadraticCurveTo(x + w, y + h, x + w - rr, y + h);
+  ctx.lineTo(x + rr, y + h);
+  ctx.quadraticCurveTo(x, y + h, x, y + h - rr);
+  ctx.lineTo(x, y + rr);
+  ctx.quadraticCurveTo(x, y, x + rr, y);
+  ctx.closePath();
+}
+
+function drawLabelPanel(ctx, lines) {
+  const W = ctx.canvas.width;
+  const H = ctx.canvas.height;
+  const padX = 7;
+  const padY = 4;
+  const gapY = 1;
+  ctx.clearRect(0, 0, W, H);
   ctx.textAlign = 'center';
   ctx.textBaseline = 'top';
-  ctx.fillText(text, 64, 2);
+
+  let textW = 0;
+  let textH = 0;
+  for (const line of lines) {
+    ctx.font = line.font;
+    textW = Math.max(textW, ctx.measureText(line.text).width);
+    textH += line.lineHeight;
+  }
+  textH += Math.max(0, lines.length - 1) * gapY;
+
+  const panelW = Math.min(W - 4, Math.ceil(textW + padX * 2));
+  const panelH = Math.min(H - 4, Math.ceil(textH + padY * 2));
+  const x = Math.round((W - panelW) * 0.5);
+  const y = 2;
+
+  ctx.save();
+  ctx.fillStyle = LABEL_PANEL_FILL;
+  fillRoundRect(ctx, x, y, panelW, panelH, 5);
+  ctx.fill();
+  ctx.strokeStyle = LABEL_PANEL_STROKE;
+  ctx.lineWidth = 1;
+  ctx.stroke();
+
+  let ty = y + padY;
+  for (const line of lines) {
+    ctx.font = line.font;
+    ctx.fillStyle = line.color;
+    ctx.fillText(line.text, W / 2, ty);
+    ty += line.lineHeight + gapY;
+  }
+  ctx.restore();
+}
+
+function makeLabel(text, color) {
+  const c = document.createElement('canvas');
+  c.width = LABEL_CANVAS_W; c.height = LABEL_CANVAS_H;
+  const ctx = c.getContext('2d');
+  drawLabelPanel(ctx, [{ text, color, font: 'bold 20px monospace', lineHeight: 23 }]);
   const tex = new THREE.CanvasTexture(c);
   const mat = new THREE.SpriteMaterial({
     map: tex,
@@ -366,6 +414,95 @@ function makeLabel(text, color) {
   sprite.layers.set(SHARP_LABEL_LAYER);
   sprite.scale.set(1.0, 0.625, 1);
   return { sprite, canvas: c, ctx, tex };
+}
+
+function dotTextureRand(seed) {
+  let t = seed + 0x6D2B79F5;
+  return function nextRand() {
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+function makeComplexDotTexture(complex) {
+  const c = document.createElement('canvas');
+  c.width = 64; c.height = 64;
+  const ctx = c.getContext('2d');
+  ctx.fillStyle = 'rgb(170, 170, 170)';
+  ctx.fillRect(0, 0, 64, 64);
+  const rnd = dotTextureRand(0xC0FFEE + complex * 101);
+
+  if (complex === 1) {
+    ctx.fillStyle = 'rgb(105, 105, 105)';
+    ctx.fillRect(0, 0, 64, 64);
+    for (let i = 0; i < 34; i++) {
+      const r = 1.5 + rnd() * 5.5;
+      ctx.fillStyle = i % 3 === 0 ? 'rgb(245, 245, 245)' : 'rgb(165, 165, 165)';
+      ctx.beginPath();
+      ctx.arc(rnd() * 64, rnd() * 64, r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (complex === 2) {
+    for (let y = -6; y < 72; y += 8) {
+      ctx.fillStyle = y % 16 === 0 ? 'rgb(220, 220, 220)' : 'rgb(125, 125, 125)';
+      ctx.fillRect(-4, y + (rnd() - 0.5) * 5, 72, 3 + rnd() * 3);
+    }
+  } else if (complex === 3) {
+    ctx.fillStyle = 'rgb(130, 130, 130)';
+    ctx.fillRect(0, 0, 64, 64);
+    for (let i = 0; i < 12; i++) {
+      const g = 155 + rnd() * 90;
+      const grad = ctx.createRadialGradient(32, 32, 1, 32, 32, 34);
+      grad.addColorStop(0, `rgba(${g}, ${g}, ${g}, 0.88)`);
+      grad.addColorStop(1, `rgba(${g}, ${g}, ${g}, 0)`);
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.ellipse(12 + rnd() * 40, 10 + rnd() * 44, 14 + rnd() * 16, 8 + rnd() * 12, rnd() * Math.PI, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (complex === 4) {
+    const grad = ctx.createRadialGradient(32, 32, 0, 32, 32, 32);
+    grad.addColorStop(0, 'rgb(250, 250, 250)');
+    grad.addColorStop(0.45, 'rgb(178, 178, 178)');
+    grad.addColorStop(1, 'rgb(72, 72, 72)');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, 64, 64);
+    for (let i = 0; i < 26; i++) {
+      const g = 200 + rnd() * 55;
+      ctx.fillStyle = `rgba(${g}, ${g}, ${g}, 0.22)`;
+      ctx.beginPath();
+      ctx.arc(32 + (rnd() - 0.5) * 46, 32 + (rnd() - 0.5) * 46, 2 + rnd() * 4, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  } else if (complex >= 5 && complex <= 7) {
+    ctx.fillStyle = complex === 7 ? 'rgb(125, 125, 125)' : 'rgb(105, 105, 105)';
+    ctx.fillRect(0, 0, 64, 64);
+    ctx.lineCap = 'round';
+    for (let i = 0; i < 8; i++) {
+      const g = 155 + rnd() * 90;
+      ctx.strokeStyle = `rgba(${g}, ${g}, ${g}, ${complex === 5 ? 0.82 : 0.64})`;
+      ctx.lineWidth = complex === 7 ? 2 + rnd() * 2 : 3 + rnd() * 4;
+      const y = -10 + i * 11 + rnd() * 8;
+      ctx.beginPath();
+      ctx.moveTo(-8, y + (complex === 5 ? 14 : 6));
+      ctx.lineTo(72, y - (complex === 5 ? 18 : 8));
+      ctx.stroke();
+    }
+  } else if (complex === 8) {
+    ctx.fillStyle = 'rgb(92, 92, 92)';
+    ctx.fillRect(0, 0, 64, 64);
+    for (let i = 0; i < 140; i++) {
+      const g = 110 + rnd() * 135;
+      ctx.fillStyle = `rgba(${g}, ${g}, ${g}, ${0.32 + rnd() * 0.5})`;
+      ctx.fillRect(Math.floor(rnd() * 64), Math.floor(rnd() * 64), 1 + Math.floor(rnd() * 3), 1 + Math.floor(rnd() * 3));
+    }
+  }
+
+  const tex = new THREE.CanvasTexture(c);
+  if ('SRGBColorSpace' in THREE) tex.colorSpace = THREE.SRGBColorSpace;
+  tex.needsUpdate = true;
+  return tex;
 }
 
 // Per-K-vertex soft halo sprites tinted by each K color. Live alongside the
@@ -461,11 +598,15 @@ for (let i = 0; i < 8; i++) {
 }
 
 const ghostVertGeo = new THREE.SphereGeometry(0.05, 6, 6);
+const ghostVertTextures = Array.from({ length: 8 }, (_, i) => makeComplexDotTexture(i + 1));
 const ghostVertMeshes = [];
 const ghostLabels = [];
 for (let i = 0; i < 8; i++) {
   const mat = new THREE.MeshBasicMaterial({
-    color: GHOST_VERT_COLORS[i], transparent: true, opacity: 0.8,
+    color: GHOST_VERT_COLORS[i],
+    map: ghostVertTextures[i],
+    transparent: true,
+    opacity: 0.86,
   });
   const m = new THREE.Mesh(ghostVertGeo.clone(), mat);
   m.position.copy(CUBE_VERTS[i]);
@@ -473,16 +614,10 @@ for (let i = 0; i < 8; i++) {
   ghostVertMeshes.push(m);
 
   const label = makeLabel(`C${i + 1}`, GHOST_VERT_COLORS_HEX[i]);
-  const ctx = label.ctx;
-  ctx.clearRect(0, 0, 128, 80);
-  ctx.font = 'bold 16px monospace';
-  ctx.fillStyle = GHOST_VERT_COLORS_HEX[i];
-  ctx.textAlign = 'center';
-  ctx.textBaseline = 'top';
-  ctx.fillText(`C${i + 1}`, 64, 2);
-  ctx.font = '12px monospace';
-  ctx.fillStyle = GHOST_VERT_COLORS_DIM[i];
-  ctx.fillText(COMPLEX_ABBR[i + 1] || '', 64, 22);
+  drawLabelPanel(label.ctx, [
+    { text: `C${i + 1}`, color: GHOST_VERT_COLORS_HEX[i], font: 'bold 16px monospace', lineHeight: 18 },
+    { text: COMPLEX_ABBR[i + 1] || '', color: GHOST_VERT_COLORS_DIM[i], font: '12px monospace', lineHeight: 14 },
+  ]);
   label.tex.needsUpdate = true;
   label.sprite.position.copy(CUBE_VERTS[i]).addScaledVector(CUBE_VERTS[i].clone().normalize(), 0.45);
   label.sprite.scale.set(0.7, 0.44, 1);
@@ -830,6 +965,12 @@ let cActiveAnimStart = 0;
 let cActiveAnimReady = false;
 let currentActiveC = 0;
 
+const ACTIVE_PAIR_PULL_MS = 520;
+const ACTIVE_PAIR_LABEL_FADE_MS = 360;
+const ACTIVE_PAIR_PULL_MAX = 0.42;
+let activePairConjureActive = false;
+let activePairConjureStart = 0;
+
 const VERTEX_STEP_MS = 100;
 const LABEL_OFFSET_FACTOR = 1 + 0.55 / Math.sqrt(3);
 const vertexPosFrom     = Array.from({ length: 8 }, (_, i) => CUBE_VERTS[i].clone());
@@ -998,6 +1139,24 @@ const _contrastWorldA = new THREE.Vector3();
 const _contrastWorldB = new THREE.Vector3();
 const _contrastProjA = new THREE.Vector3();
 const _contrastProjB = new THREE.Vector3();
+const _activeCScreenWorld = new THREE.Vector3();
+const _activeCScreenProj = new THREE.Vector3();
+const _activePairKWorld = new THREE.Vector3();
+const _activePairCWorld = new THREE.Vector3();
+const _activePairMidWorld = new THREE.Vector3();
+const _activePairKPullWorld = new THREE.Vector3();
+const _activePairCPullWorld = new THREE.Vector3();
+const _activePairKPullLocal = new THREE.Vector3();
+const _activePairCPullLocal = new THREE.Vector3();
+const _activePairKLabelWorld = new THREE.Vector3();
+const _activePairCLabelWorld = new THREE.Vector3();
+const _activePairLabelMergeWorld = new THREE.Vector3();
+const _activePairCardAnchorWorld = new THREE.Vector3();
+const _activePairCameraRight = new THREE.Vector3();
+const _activePairCameraUp = new THREE.Vector3();
+const _activePairLabelLocal = new THREE.Vector3();
+const _activePairCardProj = new THREE.Vector3();
+let activePairCardAnchorReady = false;
 let contrastLineCount = 0;
 
 function projectToContrast(v, out) {
@@ -1168,6 +1327,8 @@ function animateCube() {
     ghostActiveRingMat.opacity = 0.4 + 0.3 * Math.sin(ringPulse + Math.PI);
   }
 
+  applyActivePairConjure(performance.now());
+
   if (hasGyro && hasSnap) {
     cubeGroup.updateMatrixWorld(true);
     ghostGroup.updateMatrixWorld(true);
@@ -1263,6 +1424,91 @@ function updateFaceGlyphVisibility() {
   }
 }
 
+function smooth01(t) {
+  const x = Math.max(0, Math.min(1, t));
+  return x * x * (3 - 2 * x);
+}
+
+function labelOpacity(label, opacity) {
+  label.sprite.material.opacity = Math.max(0, Math.min(1, opacity));
+}
+
+function resetActivePairLabelOpacity() {
+  for (const label of vertexLabels) labelOpacity(label, 1);
+  for (const label of ghostLabels) labelOpacity(label, 1);
+}
+
+function startActivePairConjure() {
+  activePairConjureActive = true;
+  activePairConjureStart = performance.now();
+  activePairCardAnchorReady = false;
+  resetActivePairLabelOpacity();
+}
+
+function applyActivePairConjure(now) {
+  activePairCardAnchorReady = false;
+  if (!activePairConjureActive || !activeAnimReady || !cActiveAnimReady || !ghostGroup.visible) {
+    resetActivePairLabelOpacity();
+    return;
+  }
+
+  const age = Math.max(0, now - activePairConjureStart);
+  const pullT = smooth01(age / ACTIVE_PAIR_PULL_MS);
+  const spring = Math.sin((age / ACTIVE_PAIR_PULL_MS) * Math.PI * 3.2) * Math.exp(-age / 380) * 0.08;
+  const pull = Math.max(0, Math.min(ACTIVE_PAIR_PULL_MAX, ACTIVE_PAIR_PULL_MAX * pullT + spring));
+  const labelT = smooth01(age / ACTIVE_PAIR_LABEL_FADE_MS);
+  const labelAlpha = 1 - labelT;
+
+  cubeGroup.updateMatrixWorld(true);
+  ghostGroup.updateMatrixWorld(true);
+  vertexMeshes[currentActiveK].getWorldPosition(_activePairKWorld);
+  ghostVertMeshes[currentActiveC].getWorldPosition(_activePairCWorld);
+  _activePairMidWorld.copy(_activePairKWorld).lerp(_activePairCWorld, 0.5);
+
+  _activePairKPullWorld.copy(_activePairKWorld).lerp(_activePairMidWorld, pull);
+  _activePairCPullWorld.copy(_activePairCWorld).lerp(_activePairMidWorld, pull);
+
+  cubeGroup.worldToLocal(_activePairKPullLocal.copy(_activePairKPullWorld));
+  vertexMeshes[currentActiveK].position.copy(_activePairKPullLocal);
+  vertexHalos[currentActiveK].position.copy(_activePairKPullLocal);
+  activeRing.position.copy(_activePairKPullLocal);
+
+  ghostGroup.worldToLocal(_activePairCPullLocal.copy(_activePairCPullWorld));
+  ghostVertMeshes[currentActiveC].position.copy(_activePairCPullLocal);
+  ghostActiveRing.position.copy(_activePairCPullLocal);
+
+  _activePairCameraRight.set(1, 0, 0).applyQuaternion(camera.quaternion);
+  _activePairCameraUp.set(0, 1, 0).applyQuaternion(camera.quaternion);
+  _activePairLabelMergeWorld.copy(_activePairKPullWorld)
+    .lerp(_activePairCPullWorld, 0.5)
+    .addScaledVector(_activePairCameraUp, 0.22);
+
+  vertexLabels[currentActiveK].sprite.getWorldPosition(_activePairKLabelWorld);
+  ghostLabels[currentActiveC].sprite.getWorldPosition(_activePairCLabelWorld);
+  cubeGroup.worldToLocal(
+    _activePairLabelLocal.copy(_activePairKLabelWorld)
+      .lerp(_activePairLabelMergeWorld, labelT)
+      .addScaledVector(_activePairCameraRight, -0.06 * labelT)
+  );
+  vertexLabels[currentActiveK].sprite.position.copy(_activePairLabelLocal);
+  ghostGroup.worldToLocal(
+    _activePairLabelLocal.copy(_activePairCLabelWorld)
+      .lerp(_activePairLabelMergeWorld, labelT)
+      .addScaledVector(_activePairCameraRight, 0.06 * labelT)
+  );
+  ghostLabels[currentActiveC].sprite.position.copy(_activePairLabelLocal);
+
+  for (let k = 0; k < vertexLabels.length; k++) {
+    labelOpacity(vertexLabels[k], k === currentActiveK ? labelAlpha : 1);
+  }
+  for (let c = 0; c < ghostLabels.length; c++) {
+    labelOpacity(ghostLabels[c], c === currentActiveC ? labelAlpha : 1);
+  }
+
+  _activePairCardAnchorWorld.copy(_activePairLabelMergeWorld).addScaledVector(_activePairCameraRight, 0.22);
+  activePairCardAnchorReady = true;
+}
+
 function paintActiveVertex(slot, activeK) {
   if (!activeAnimReady) {
     for (let k = 0; k < 8; k++) {
@@ -1351,23 +1597,16 @@ function paintGhostVertexLabels(activeC) {
     const color = labelMainColor('c', c, isActive);
     const dimColor = labelDetailColor('c', c, isActive);
     const label = ghostLabels[c];
-    const ctx = label.ctx;
-    ctx.clearRect(0, 0, 128, 80);
-    ctx.font = 'bold 16px monospace';
-    ctx.fillStyle = color;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`C${c + 1}`, 64, 2);
-    ctx.font = '12px monospace';
-    ctx.fillStyle = dimColor;
-    ctx.fillText(COMPLEX_ABBR[c + 1] || '', 64, 22);
+    drawLabelPanel(label.ctx, [
+      { text: `C${c + 1}`, color, font: 'bold 16px monospace', lineHeight: 18 },
+      { text: COMPLEX_ABBR[c + 1] || '', color: dimColor, font: '12px monospace', lineHeight: 14 },
+    ]);
     label.tex.needsUpdate = true;
   }
 }
 
 function applyGhostCAssignmentMove(cAssignments, cosmology) {
   const nextKey = cosmology === 'alpha-cosmo' ? cAssignments.join(',') : '__beta__';
-  if (lastCAssignKey === nextKey && lastCAssignCosmology === cosmology) return;
 
   if (cosmology !== 'alpha-cosmo') {
     for (let c = 0; c < 8; c++) {
@@ -1383,6 +1622,8 @@ function applyGhostCAssignmentMove(cAssignments, cosmology) {
     lastCAssignCosmology = cosmology;
     return;
   }
+
+  if (lastCAssignKey === nextKey && lastCAssignCosmology === cosmology) return;
 
   const slotOfC = new Array(8);
   for (let slot = 0; slot < 8; slot++) {
@@ -1428,24 +1669,19 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
     const color = labelMainColor('k', k, isActive);
     const dimColor = labelDetailColor('k', k, isActive);
     const label = vertexLabels[k];
-    const ctx = label.ctx;
-    const W = 128, H = 80;
-    ctx.clearRect(0, 0, W, H);
-
-    ctx.font = 'bold 18px monospace';
-    ctx.fillStyle = color;
-    ctx.textAlign = 'center';
-    ctx.textBaseline = 'top';
-    ctx.fillText(`K${k + 1}`, W / 2, 2);
+    const lines = [
+      { text: `K${k + 1}`, color, font: 'bold 18px monospace', lineHeight: 20 },
+    ];
 
     if (vertices) {
       const v = vertices[slot];
-      ctx.font = '14px monospace';
-      ctx.fillStyle = dimColor;
-      ctx.fillText(`${v.intensity} d${v.density.toFixed(1)}`, W / 2, 24);
-      ctx.fillText(`${v.duration}s`, W / 2, 42);
+      lines.push(
+        { text: `${v.intensity} d${v.density.toFixed(1)}`, color: dimColor, font: '14px monospace', lineHeight: 17 },
+        { text: `${v.duration}s`, color: dimColor, font: '14px monospace', lineHeight: 17 },
+      );
     }
 
+    drawLabelPanel(label.ctx, lines);
     label.tex.needsUpdate = true;
   }
 }
@@ -1453,10 +1689,8 @@ function paintVertexLabels(perm, vertices, complexTypes, activeIdx) {
 function coerceCubeAppearance(settings = {}) {
   const next = cloneCubeAppearance(cubeAppearance);
   const kColors = Array.isArray(settings.kVertexColors) ? settings.kVertexColors : next.kVertexColors;
-  const cColors = Array.isArray(settings.cVertexColors) ? settings.cVertexColors : next.cVertexColors;
   for (let i = 0; i < 8; i++) {
     next.kVertexColors[i] = normalizeHexColor(kColors[i], next.kVertexColors[i] || CUBE_APPEARANCE_DEFAULTS.kVertexColors[i]);
-    next.cVertexColors[i] = normalizeHexColor(cColors[i], next.cVertexColors[i] || CUBE_APPEARANCE_DEFAULTS.cVertexColors[i]);
   }
   for (const key of [
     'kLabelColor', 'cLabelColor', 'activeLabelColor', 'detailLabelColor',
@@ -1495,13 +1729,11 @@ function applyCubeAppearance(settings = {}) {
     K_VERT_COLORS_HEX[i] = cubeAppearance.kVertexColors[i];
     K_VERT_COLORS[i] = hexToNumber(K_VERT_COLORS_HEX[i]);
     K_VERT_COLORS_DIM[i] = dimHexColor(K_VERT_COLORS_HEX[i]);
-    GHOST_VERT_COLORS_HEX[i] = cubeAppearance.cVertexColors[i];
-    GHOST_VERT_COLORS[i] = hexToNumber(GHOST_VERT_COLORS_HEX[i]);
-    GHOST_VERT_COLORS_DIM[i] = dimHexColor(GHOST_VERT_COLORS_HEX[i]);
 
     vertexMeshes[i].material.color.set(K_VERT_COLORS_HEX[i]);
     vertexHalos[i].material.color.set(K_VERT_COLORS_HEX[i]);
     ghostVertMeshes[i].material.color.set(GHOST_VERT_COLORS_HEX[i]);
+    ghostVertMeshes[i].material.map = ghostVertTextures[i];
   }
 
   edgeMat.color.set(cubeAppearance.liveWireColor);
@@ -1689,6 +1921,7 @@ export function setCubeQuat(quat) {
 export function update(state, move) {
   const activeIdx = state.activeVertex ?? 0;
   const activeKIdx = state.kPermutation ? state.kPermutation[activeIdx] : activeIdx;
+  const phraseTriggered = typeof move === 'string' && move.length > 0;
 
   applyFaceTurnGlyphRotation(move);
 
@@ -1753,6 +1986,9 @@ export function update(state, move) {
     snapTarget.set(state.snapQuat[0], state.snapQuat[1], state.snapQuat[2], state.snapQuat[3]);
     hasSnapTarget = true;
     assertGhostSnapSource(state);
+  }
+  if (phraseTriggered) {
+    startActivePairConjure();
   }
 }
 
@@ -1842,6 +2078,31 @@ export function getCWorldPos(c, out) {
   ghostVertMeshes[c].getWorldPosition(out);
   return out;
 }
+
+/** Project the active pair's conjure point (fallback: active ghost C) to CSS pixels. */
+export function getActiveCardAnchorScreenPos(out = {}) {
+  if (!ghostGroup.visible) {
+    out.x = 0;
+    out.y = 0;
+    out.visible = false;
+    return out;
+  }
+  if (activePairCardAnchorReady) {
+    _activeCScreenWorld.copy(_activePairCardAnchorWorld);
+  } else {
+    ghostGroup.updateMatrixWorld(true);
+    ghostVertMeshes[currentActiveC].getWorldPosition(_activeCScreenWorld);
+  }
+  _activeCScreenProj.copy(_activeCScreenWorld).project(camera);
+  const r = canvas.getBoundingClientRect();
+  out.x = r.left + (_activeCScreenProj.x * 0.5 + 0.5) * r.width;
+  out.y = r.top + (-_activeCScreenProj.y * 0.5 + 0.5) * r.height;
+  out.visible = _activeCScreenProj.z >= -1 && _activeCScreenProj.z <= 1;
+  return out;
+}
+
+/** Back-compat alias for older callers; prefer getActiveCardAnchorScreenPos. */
+export const getActiveCScreenPos = getActiveCardAnchorScreenPos;
 
 /** Read-only access to the perspective camera (used by triangle's projection). */
 export function getCamera() { return camera; }

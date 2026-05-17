@@ -16,7 +16,7 @@
 
 <div class="algorithm-history" id="algorithm-history"></div>
 
-<!-- Top-left: title + connect/reset/zero row + mode pills + active K/C cards -->
+<!-- Top-left: title + connect/reset/zero row + mode pills. -->
 <div class="ovl ovl-tl">
   <div class="ovl-section">
     <h1 class="title" id="ui-toggle" role="button" tabindex="0" aria-pressed="false" title="click to toggle UI panels">XENAKUBE</h1>
@@ -44,7 +44,7 @@
     <span class="turn-rate-val" id="turn-rate-val">0.0 t/s</span>
   </div>
 
-  <!-- Active K + C cards (only the active pair render; legacy 8-grids hidden). -->
+  <!-- Floating active K + C cards; JS shows the active pair after a phrase trigger. -->
   <div class="active-cards">
     <div class="vertex-grid" id="vertex-grid"></div>
     <div class="complex-grid" id="complex-grid"></div>
@@ -261,11 +261,17 @@
           <input type="range" id="spectrumCeiling" min="-60" max="0" step="1" value="-15">
           <span class="slider-val" id="spectrumCeilingVal">-15</span>
         </div>
-        <div class="spec-setting-row spec-setting-row-color" title="Sonogram background brightness plus shared 0.00 color for all modality palettes.">
+        <div class="spec-setting-row spec-setting-row-color" title="Sonogram background brightness plus shared background color for every palette.">
           <label>bg</label>
           <input type="range" id="spectrumBg" min="0" max="40" step="1" value="10">
-          <input type="color" id="spectrumBgColor" class="spec-color-input" value="#08080e" aria-label="Shared modality 0.00 color">
+          <input type="color" id="spectrumBgColor" class="spec-color-input" value="#08080e" aria-label="Shared spectrogram background color">
           <span class="slider-val" id="spectrumBgVal">10</span>
+        </div>
+        <div class="spec-setting-row spec-setting-row-color" title="Shared 1.00 threshold color for every named and modality palette.">
+          <label>ceil</label>
+          <span aria-hidden="true"></span>
+          <input type="color" id="spectrumCeilingColor" class="spec-color-input" value="#f8f8f8" aria-label="Shared spectrogram ceiling color">
+          <span class="slider-val">1.00</span>
         </div>
         <div class="spec-setting-row" title="Time-interpolation density between FFT frames. 0 = sharp columns (time grid visible). ~67 = RX-style smooth (1 sub-column per 1.5 device px). 120 = pixel-perfect (CPU heavy).">
           <label>smooth</label>
@@ -365,7 +371,7 @@
 (function bootstrapDashboardSettings() {
   var ALLOWED = ['uiHidden','scoreSpeed','midiBrushEnabled','spectrogramEnabled',
     'spectrumLatencyMs','spectrumNudgeMs','spectrumGainDb','spectrumCeilingDb',
-    'spectrumFloorDb','spectrumBgPct','spectrumSmoothPct','spectrumBlurTenths',
+    'spectrumFloorDb','spectrumBgPct','spectrumBgColor','spectrumCeilingColor','spectrumSmoothPct','spectrumBlurTenths',
     'spectrumTimePct','spectrumPalette','spectrumModalityPalettes',
     'spectrumModalityTransfer','cubeColorSettings','ghostSize','cubeDepth',
     'quality','recordMode'];

@@ -30,6 +30,8 @@ export const SYNCED_KEYS = new Set([
   'spectrumCeilingDb',
   'spectrumFloorDb',
   'spectrumBgPct',
+  'spectrumBgColor',
+  'spectrumCeilingColor',
   'spectrumSmoothPct',
   'spectrumBlurTenths',
   'spectrumTimePct',
