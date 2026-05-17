@@ -93,16 +93,23 @@ describe('Dashboard ghost cube invariants', () => {
     expect(faceGlyph).toContain('ctx.lineTo(rowX + rowW * 0.82, row.y + rowH - H * 0.045);');
   });
 
-  it('exposes the alpha/beta cosmology switch through the dashboard', () => {
+  it('exposes the alpha/beta/mandala cosmology cycle through the dashboard', () => {
     expect(dashboard).toContain('id="mode-cosmology"');
     expect(dashboard).toContain('BETA-COSMO');
 
     expect(main).toContain("wsSend({ type: 'set_mode', cosmology: next })");
-    expect(main).toContain("next = currentCosmology === 'alpha-cosmo' ? 'beta-cosmo' : 'alpha-cosmo'");
+    // 3-state cycle: beta-cosmo → mandala-cosmo → alpha-cosmo. mandala-cosmo
+    // adds the gamelan sphere engine alongside SWAM; the COSMOLOGY_CYCLE array
+    // is the single source of truth for the order.
+    expect(main).toContain('COSMOLOGY_CYCLE');
+    expect(main).toContain("'beta-cosmo'");
+    expect(main).toContain("'mandala-cosmo'");
+    expect(main).toContain("'alpha-cosmo'");
     expect(main).toContain('stateUi.setCosmologyBadge(next)');
 
     expect(stateUi).toContain('export function setCosmologyBadge(cosmology)');
     expect(stateUi).toContain('cosmology-alpha');
     expect(stateUi).toContain('cosmology-beta');
+    expect(stateUi).toContain('cosmology-mandala');
   });
 });

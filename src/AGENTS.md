@@ -27,6 +27,10 @@ This guide applies to the TypeScript engine and shared mapping/schema code under
 - `types.ts`: shared public types for engine state, modes, voices, and expressions.
 - `vertices.ts`: K_i density/intensity/base-duration material table.
 - `voice-engine.ts`: sequential/polyphonic voice selection plus face and half-turn punctuation flags on voice events.
+- `mandala-cosmo.ts`: pure helpers that turn `/xk/voice` transitions into 0..N `SphereStrike`s (gong on colotomic ring boundary, kempul on half-turn, saron on K transition, slenthem on C6+). Only invoked by `engine.ts` when `cosmology === 'mandala-cosmo'`. Sphere strikes are purely additive — see header rules.
+- `sphere-mapping.ts`: pickers that resolve gamelan sample selections by instrument family / tuning / degree / velocity. Returns manifest-canonical names that Max's `xk_sphere.js` looks up in `polybuffer~`.
+- `gamelan-manifest.ts`: GENERATED — committed output of `scripts/build-gamelan-manifest.mjs`. Source of truth for which `.wav` files exist under `media/gamelan/`. Regen after sample changes.
+- `gamelan-tuning.ts`: Scala-transcribed cent arrays + reference Hz per scale (saron/slenthem/bonang/kempul in pelog + slendro). Carries `GAMELAN_TUNING_HASH` for the D78 alignment invariant.
 - `index.ts`: public export surface consumed by `relay.js`.
 
 ## Rules
@@ -59,6 +63,9 @@ Run the full suite with `npm test`. The most relevant targeted guards live in:
 - `../test/swam-mapping.test.ts`
 - `../test/phrase-plan.test.ts`
 - `../test/phrase-audit.test.ts`
+- `../test/sphere-mapping.test.ts` (gamelan manifest + picker invariants — D77)
+- `../test/gamelan-tuning.test.ts` (Scala data shape + tuning-hash codegen sync — D78)
+- `../test/mandala-cosmo.test.ts` (per-turn sphere-strike planning under mandala-cosmo)
 
 ## Docs to update when semantics change
 

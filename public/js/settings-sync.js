@@ -43,6 +43,7 @@ export const SYNCED_KEYS = new Set([
   'cubeDepth',
   'quality',
   'recordMode',
+  'mandalaEnabled',
 ]);
 
 const DEBOUNCE_MS = 800;

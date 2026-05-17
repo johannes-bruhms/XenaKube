@@ -24,10 +24,13 @@ import { parseFace, getFaceSignature, type FaceMove } from './face-gesture.js';
 import { activeCornerForTurn, upFace, type Face } from './orientation.js';
 import { MotionTracker } from './motion.js';
 import { HALF_TURN_WINDOW_MS, HALF_TURN_GESTURE_DURATION_SEC } from './swam-mapping.js';
+import { planMandalaStrikes } from './mandala-cosmo.js';
+import type { SphereStrike } from './sphere-mapping.js';
 
 export type StateListener = (state: XenaKubeState) => void;
 export type CubeAlgorithmListener = (match: CubeAlgorithmMatch) => void;
 export type VoiceListener = (output: VoiceOutput) => void;
+export type SphereListener = (strikes: SphereStrike[]) => void;
 export interface SolveReport {
   state: XenaKubeState;
   previousCosmology: EngineMode['cosmology'];
@@ -95,6 +98,7 @@ export class XenaKubeEngine {
   private algorithmListeners: CubeAlgorithmListener[] = [];
   private voiceListeners: VoiceListener[] = [];
   private solveListeners: SolveListener[] = [];
+  private sphereListeners: SphereListener[] = [];
 
   constructor(mode?: Partial<EngineMode>) {
     if (mode) this.setMode(mode);
@@ -121,6 +125,18 @@ export class XenaKubeEngine {
     };
   }
 
+  /** Subscribe to sphere strikes (mandala-cosmo only currently). Fires once
+   *  per cube turn after onVoice; carries 0–N strikes (gong on ring boundary,
+   *  kempul on half-turn, saron on K transition, slenthem on C6+). Empty
+   *  arrays are still delivered so listeners can run feature gates / counters.
+   *  Sphere strikes are purely additive — see src/mandala-cosmo.ts header. */
+  onSphere(listener: SphereListener): () => void {
+    this.sphereListeners.push(listener);
+    return () => {
+      this.sphereListeners = this.sphereListeners.filter(l => l !== listener);
+    };
+  }
+
   /**
    * Subscribe to cube-solved transitions. Edge detection is owned by the
    * browser FACELETS stream; reportCubeSolved() applies solve-anchor mode
@@ -135,7 +151,13 @@ export class XenaKubeEngine {
 
   reportCubeSolved(): SolveReport {
     const previousCosmology = this.mode.cosmology;
-    const cosmologyChanged = previousCosmology !== 'beta-cosmo';
+    // Solve auto-anchor: only alpha-cosmo collapses back to beta-cosmo on
+    // solve (the historical "Nomos Alpha session ended, return to corner
+    // topology" semantic). Beta-cosmo stays beta; mandala-cosmo stays
+    // mandala — solve is a meaningful event in mandala-cosmo (closes a
+    // colotomic ring, triggers visual dissolution) but does not collapse
+    // the cosmology. Any new cosmology added later must also be considered.
+    const cosmologyChanged = previousCosmology === 'alpha-cosmo';
     if (cosmologyChanged) {
       this.setMode({ cosmology: 'beta-cosmo' });
       this.emitState(this.getState());
@@ -263,6 +285,16 @@ export class XenaKubeEngine {
     const state = this.getState();
     this.emitState(state);
     for (const listener of this.voiceListeners) listener(voiceOutput);
+
+    // Sphere dispatch — mandala-cosmo only. Purely additive: no /xk/voice
+    // mutation, no timing change to SWAM. planMandalaStrikes returns an
+    // empty array when no strike is appropriate (e.g. lower complexes
+    // mid-cycle). Listeners still fire on empty arrays so dashboard /
+    // auditor can run their feature gates.
+    if (this.mode.cosmology === 'mandala-cosmo') {
+      const strikes = planMandalaStrikes({ state, voice: voiceOutput, turnIndex: this.step });
+      for (const listener of this.sphereListeners) listener(strikes);
+    }
     return state;
   }
 

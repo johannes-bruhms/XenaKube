@@ -823,6 +823,13 @@
     border: 1px solid var(--accent2);
     color: var(--accent2);
   }
+  .mode-badge.cosmology-mandala {
+    /* warm gamelan-bronze hue. Distinct from alpha/beta so the toggle's
+       current state is unmistakable across the 3-state cycle. */
+    background: rgba(212, 160, 23, 0.15);
+    border: 1px solid #d4a017;
+    color: #d4a017;
+  }
   .mode-badge.voice-seq {
     background: rgba(0, 255, 136, 0.12);
     border: 1px solid var(--accent);
@@ -1434,9 +1441,18 @@
     50% { opacity: 1; }
   }
 
-  /* Rolling visual layers. The actual-audio spectrogram sits behind the
-   * MIDI brush piano-roll; both remain below cube-canvas. */
+  /* Rolling visual layers. Back-to-front Z stack:
+   *   spectrogram (-3)  — actual-audio FFT sonogram
+   *   mandala     (-2)  — accumulating gamelan glyphs (sphere "ground")
+   *   rolling     (-1)  — MIDI brush piano-roll      (cello "figure")
+   *   cube-canvas ( 0)  — three.js cube
+   * MIRROR: MANDALA_SYMMETRY_ORDER in public/js/mandala-canvas.js must
+   * match --mandala-symmetry below (D81 invariant). */
+  :root {
+    --mandala-symmetry: 8;
+  }
   #spectrogram-score,
+  #mandala-canvas,
   #rolling-score {
     position: fixed;
     inset: 0;
@@ -1446,7 +1462,13 @@
     pointer-events: none;
   }
   #spectrogram-score {
+    z-index: -3;
+  }
+  #mandala-canvas {
     z-index: -2;
+    /* Off by default; JS toggles display via setEnabled. Mandala
+       additive-blend takes care of dark transparency. */
+    display: none;
   }
   #rolling-score {
     z-index: -1;
@@ -1454,4 +1476,8 @@
   #spectrogram-score.spectrum-disabled,
   #rolling-score.midi-disabled {
     visibility: hidden;
+  }
+  .slider-val.mandala-status {
+    opacity: 0.6;
+    margin-left: 4px;
   }

@@ -10,6 +10,7 @@ import type { ExpressionState } from './expression.js';
 import type { CubeAlgorithmMatch } from './cube-algorithm.js';
 import type { PhrasePlan } from './phrase-plan.js';
 import type { VoiceOutput } from './voice-engine.js';
+import type { SphereStrike } from './sphere-mapping.js';
 import { OSC, vertexAddr, complexAddr } from './osc-schema.js';
 
 /** OSC message: address + args */
@@ -122,6 +123,21 @@ export function voiceToOsc(output: VoiceOutput, phrasePlans: PhrasePlan[] = []):
     });
   });
   return msgs;
+}
+
+/** Sphere strike → /xk/sphere/strike. Additive to /xk/voice; never replaces.
+ *  Emitted in mandala-cosmo only (relay layer gates by cosmology). */
+export function sphereStrikeToOsc(strike: SphereStrike): OscMessage {
+  return {
+    address: OSC.SPHERE_STRIKE,
+    args: [strike.sample, strike.gain, strike.pan, strike.voiceSteal ? 1 : 0, strike.strikeId],
+  };
+}
+
+/** Sphere panic — flushes every gamelan voice on cosmology switch / relay
+ *  disconnect. Cheap because it carries no args. */
+export function spherePanicToOsc(): OscMessage {
+  return { address: OSC.SPHERE_PANIC, args: [] };
 }
 
 /** Shadow TypeScript phrase plan -> compact OSC summary for Max logging.

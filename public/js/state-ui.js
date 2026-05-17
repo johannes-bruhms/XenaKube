@@ -241,13 +241,25 @@ export function setAlgorithmBook(book) {
 export function setCosmologyBadge(cosmology) {
   const badge = document.getElementById('mode-cosmology');
   if (!badge) return;
-  const isAlpha = cosmology === 'alpha-cosmo';
-  badge.textContent = isAlpha ? 'ALPHA-COSMO' : 'BETA-COSMO';
-  badge.className = `mode-badge mode-toggle ${isAlpha ? 'cosmology-alpha' : 'cosmology-beta'}`;
-  badge.setAttribute('aria-pressed', isAlpha ? 'true' : 'false');
-  badge.title = isAlpha
-    ? 'Switch to beta-cosmo physical corner topology'
-    : 'Switch to alpha-cosmo S4 K/C walks';
+  let label, klass, title, pressed;
+  switch (cosmology) {
+    case 'alpha-cosmo':
+      label = 'ALPHA-COSMO'; klass = 'cosmology-alpha'; pressed = 'true';
+      title = 'Switch to beta-cosmo physical corner topology';
+      break;
+    case 'mandala-cosmo':
+      label = 'MANDALA-COSMO'; klass = 'cosmology-mandala'; pressed = 'mixed';
+      title = 'Switch to alpha-cosmo (S4 walks). Mandala-cosmo adds the gamelan sphere engine alongside SWAM.';
+      break;
+    default:
+      label = 'BETA-COSMO'; klass = 'cosmology-beta'; pressed = 'false';
+      title = 'Switch to mandala-cosmo (sphere engine on)';
+      break;
+  }
+  badge.textContent = label;
+  badge.className = `mode-badge mode-toggle ${klass}`;
+  badge.setAttribute('aria-pressed', pressed);
+  badge.title = title;
 }
 
 /** Show the relay-side shadow phrase plan for the latest voice event. */

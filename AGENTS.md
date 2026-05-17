@@ -76,6 +76,7 @@ Rules that keep `npm run check:docs` small. Full check definitions: `CLAUDE.md �
 - `docs/performance-model.md`: musical / structural model, core turn loop, modes, algorithm book, expression mapping, and key math.
 - `docs/osc-reference.md`: OSC address table and routing notes.
 - `docs/synthesis-bridge.md`: Max patch topology, bridge file roles, and SWAM routing notes.
+- `docs/sphere-engine.md`: gamelan sphere-engine reference (instrument inventory, tunings, mandala-cosmo K→sphere mapping, mandala canvas, D75–D78 + D80–D83).
 - `docs/swam/swam_cello_reference.md`: authoritative SWAM parameter, CC, and keyswitch reference.
 - `docs/xenakis_nomos_alpha_primary_source.md`: Xenakis primary source excerpt for the cube model.
 - `docs/xenakube-operation-manual.md`: performer-facing operation manual and face/complex behavior reference.

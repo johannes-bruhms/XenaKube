@@ -36,10 +36,12 @@ Prefer editing `xk_swam.js` over growing patch logic. The patch is the host; `xk
 ## Files
 
 - `xk_swam.js`: main bridge logic and invariants.
+- `xk_sphere.js`: sibling v8 for the gamelan sphere engine. Receives `/xk/sphere/*` from relay (mandala-cosmo only), dispatches `polybuffer~` reads on `bang()` and per-strike `groove~` plays via routed outlets. Owns D75–D78 runtime invariants on the sphere side. Patch additions live in `xenakube_swam.maxpat` (build via `max-patch` subagent — confirm before any MCP mutation).
 - `xk_spectrum.js`: optional v8 helper for formatting Max-side FFT analysis as `/xk/spectrum/frame`; used by `pfft-test.maxpat` and the toggle-gated analyzer block in `xenakube_swam.maxpat`.
 - `xenakube_swam.maxpat`: host patch.
 - `xenakube_main.swam`: SWAM preset expected by the patch (loaded by `xenakube_swam.maxpat` on `[loadbang]`).
-- `gen_includes.js`: generated shared data from `src/`.
+- `gen_includes.js`: generated shared data from `src/` for `xk_swam.js`.
+- `gen_sphere_includes.js`: GENERATED — `xk_sphere.js`'s data table (OSC subset, full gamelan sample manifest, tuning hash). Regen via `npm run gen:max`; never hand-edit. Mirrors `src/gamelan-manifest.ts` + `src/gamelan-tuning.ts`.
 - `ks_logger.js`: optional debugging helper for keyswitch/MIDI inspection.
 - `onehot.js`: v8 helper used by the host patch.
 - `relay-controller.js`: Max-side helper for relay control workflows. `script start` launches only the controller; `relay` / `start relay` starts `relay.js` as a child process. It exposes explicit `kill process` / `kill_process` Max messages for killing a stale port-3000 listener; do not auto-start or auto-kill the relay from script start.

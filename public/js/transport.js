@@ -53,6 +53,7 @@ function _logBackpressure(kind, buffered, dropped) {
 //   midiEcho       — `{ type: 'midi_echo', data }` from Max/SWAM. (data).
 //   spectrumFrame  — `{ type: 'spectrum_frame', data }` actual-audio FFT frame from Max. (data).
 //   spectrumStatus — `{ type: 'spectrum_status', data }` relay-side spectrum forwarding state. (data).
+//   sphereStrike   — `{ type: 'sphere_strike', data }` mandala-cosmo gamelan strikes from relay. (data).
 const handlers = {
   open:          [],
   close:         [],
@@ -68,6 +69,7 @@ const handlers = {
   midiEcho:      [],
   spectrumFrame: [],
   spectrumStatus: [],
+  sphereStrike:  [],
 };
 
 function emit(name, ...args) {
@@ -130,6 +132,7 @@ export function connect() {
         case 'midi_echo':       emit('midiEcho',  msg.data);          break;
         case 'spectrum_frame':  emit('spectrumFrame', msg.data);      break;
         case 'spectrum_status': emit('spectrumStatus', msg.data);     break;
+        case 'sphere_strike':   emit('sphereStrike', msg.data);       break;
       }
     } catch (e) {
       console.error('[transport] parse error:', e);

@@ -103,6 +103,26 @@ describe('paired-tunable equality (bridge ↔ phrase-plan ↔ dashboard)', () =>
     expect(dash).toEqual(bridge);
   });
 
+  it('MANDALA_SYMMETRY_ORDER matches between mandala-canvas.js and css/main.css (D81)', () => {
+    // D81 — symmetry constant sync. JS owns the source of truth; CSS var
+    // mirrors it for any future stylesheet that wants the order (currently
+    // documentary only). Drift would mean a stylesheet edit didn't update
+    // the JS constant or vice versa.
+    const mandalaJs = read('public', 'js', 'mandala-canvas.js');
+    const mainCss = read('public', 'css', 'main.css');
+    const jsVal = extractNumber(
+      mandalaJs,
+      /export\s+const\s+MANDALA_SYMMETRY_ORDER\s*=\s*(\d+)\s*;/,
+      'js MANDALA_SYMMETRY_ORDER',
+    );
+    const cssVal = extractNumber(
+      mainCss,
+      /--mandala-symmetry\s*:\s*(\d+)\s*;/,
+      'css --mandala-symmetry',
+    );
+    expect(cssVal).toBe(jsVal);
+  });
+
   it('GLISS_PORTAMENTO_MS_PER_SEMITONE (rolling-chain) mirrors PORTAMENTO_MS_PER_SEMITONE (white line)', () => {
     // Visual-line + rolling-chain MUST stay in lockstep or Phase 1.3
     // `assertGlissSync` fires.

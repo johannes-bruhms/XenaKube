@@ -24,6 +24,7 @@ import {
 import * as cubeScene from './cube-scene.js';
 import * as rollingScore from './rolling-score.js';
 import * as spectrumScore from './spectrum-score.js';
+import * as mandalaCanvas from './mandala-canvas.js';
 import * as performanceRecorder from './performance-recorder.js';
 import * as triangle from './triangle.js';
 import * as stateUi from './state-ui.js';
@@ -61,6 +62,15 @@ function setSpectrumStatusText(text) {
 
 spectrumScore.init({
   onStatus: setSpectrumStatusText,
+});
+
+function setMandalaStatusText(text) {
+  const el = document.getElementById('mandalaStatus');
+  if (el) el.textContent = text || 'off';
+}
+
+const mandalaApi = mandalaCanvas.init({
+  onStatus: setMandalaStatusText,
 });
 
 rollingScore.init({
@@ -179,8 +189,10 @@ transportOn('phraseAudit',  stateUi.handlePhraseAudit);
 transportOn('solve',        () => {
   stateUi.setSolvedBadge(true, true);
   interruptionLayer.onSolve();
+  mandalaApi.handleSolve();
 });
 transportOn('midiEcho',     handleMidiEcho);
+transportOn('sphereStrike', mandalaApi.handleStrikeBatch);
 transportOn('spectrumFrame', spectrumScore.handleFrame);
 transportOn('spectrumStatus', (data) => {
   if (data?.enabled === false && spectrumEnabled) setSpectrumStatusText('relay');
@@ -320,8 +332,14 @@ document.getElementById('zeroBtn').addEventListener('click', () => {
   wsSend({ type: 'zero_gyro' });
 });
 
+// Cosmology cycle: alpha-cosmo -> beta-cosmo -> mandala-cosmo -> alpha-cosmo.
+// mandala-cosmo activates the gamelan sphere engine alongside SWAM. Order
+// chosen so clicking from the default beta-cosmo lands on mandala-cosmo
+// first (no need to pass through alpha).
+const COSMOLOGY_CYCLE = ['beta-cosmo', 'mandala-cosmo', 'alpha-cosmo'];
 document.getElementById('mode-cosmology')?.addEventListener('click', () => {
-  const next = currentCosmology === 'alpha-cosmo' ? 'beta-cosmo' : 'alpha-cosmo';
+  const i = COSMOLOGY_CYCLE.indexOf(currentCosmology);
+  const next = COSMOLOGY_CYCLE[(i + 1 + COSMOLOGY_CYCLE.length) % COSMOLOGY_CYCLE.length];
   currentCosmology = next;
   stateUi.setCosmologyBadge(next);
   wsSend({ type: 'set_mode', cosmology: next });
@@ -543,6 +561,14 @@ midiBrushToggle?.addEventListener('click', () => {
 spectrogramToggle?.addEventListener('click', () => {
   applySpectrogramEnabled(!spectrumEnabled);
 });
+const mandalaToggle = document.getElementById('mandalaToggle');
+mandalaToggle?.addEventListener('click', () => {
+  const next = !mandalaApi.isEnabled();
+  mandalaApi.setEnabled(next);
+  setLayerButton(mandalaToggle, next);
+});
+// Reflect persisted state in the button on boot.
+if (mandalaToggle) setLayerButton(mandalaToggle, mandalaApi.isEnabled());
 spectrogramSettingsToggle?.addEventListener('click', () => {
   setSpectrogramSettingsOpen(spectrogramSettingsPanel?.hidden !== false);
 });

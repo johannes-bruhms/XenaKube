@@ -20,6 +20,7 @@ This guide applies to the browser dashboard under `public/`.
 - `js/cube-scene.js`: Three.js cube scene, snap ghost, canonical alignment checks, gyro zero, runtime appearance setters, brush-locked C vertex material, 3D read positions, and active K/C label-merge card projection.
 - `js/rolling-score.js`: rolling piano-roll canvas, brushes, note/gliss history, and visual assertions.
 - `js/spectrum-score.js`: optional actual-audio spectrogram canvas, spectrum frame buffer, modality rendering, no-synthetic-stale painting guard, and stale-frame telemetry.
+- `js/mandala-canvas.js`: optional accumulating mandala layer fed by `sphere_strike` events (mandala-cosmo gamelan engine). Togglable alongside MIDI brushes / spectrogram; off by default. Renders below brushes (Z = -2, brushes at -1). Owns the D80 glyph-counter, D81 symmetry-constant-sync, and D83 feature-gate invariants on the dashboard side. `MANDALA_SYMMETRY_ORDER` mirrors `--mandala-symmetry` in `css/main.css`.
 - `js/performance-recorder.js`: optional long-PNG recorder for visible/composite/spectrum/MIDI rolling visual layers.
 - `js/triangle.js`: K/C-to-sieve leg overlay, runtime appearance setters, and gliss-line trajectory model.
 - `js/sieve.js`: 49-cell pitch strip, active pitch glow, and sieve layout assertion.

@@ -17,6 +17,7 @@ This guide applies to the documentation tree under `docs/`.
 - `performance-model.md`: musical / structural model, core turn loop, voice / engine modes, algorithm book, expression mapping, and key math.
 - `osc-reference.md`: OSC address and routing reference.
 - `synthesis-bridge.md`: Max patch topology, bridge file roles, and routing notes.
+- `sphere-engine.md`: gamelan sphere-engine reference (instrument inventory, tunings, mandala-cosmo K→sphere mapping, mandala canvas, D75–D78 + D80–D83).
 - `swam/swam_cello_reference.md`: authoritative SWAM parameter, CC, and keyswitch reference.
 - `xenakis_nomos_alpha_primary_source.md`: primary-source excerpt for Xenakis' cube model.
 - `xenakube-operation-manual.md`: performer-facing operation manual and face/complex behavior reference.

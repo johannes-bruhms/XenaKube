@@ -44,8 +44,12 @@ export enum ComplexType {
 /** Cyclic mapping phase for C_i assignments */
 export type CyclicPhase = 'alpha' | 'beta' | 'gamma';
 
-/** Structural cosmology: Xenakis-faithful S4 walks vs performer-visible corners. */
-export type CosmologyMode = 'alpha-cosmo' | 'beta-cosmo';
+/** Structural cosmology. Alpha = Xenakis-faithful S4 walks; beta = performer-
+ *  visible corner topology; mandala = beta-cosmo dispatch plus parallel
+ *  sphere-engine (gamelan) strikes on cycle boundaries / half-turns / vertex
+ *  transitions. Adding a cosmology MUST update solve-handler logic in engine.ts
+ *  (only alpha→beta auto-switches on solve; beta and mandala stay put). */
+export type CosmologyMode = 'alpha-cosmo' | 'beta-cosmo' | 'mandala-cosmo';
 
 /** Performance/interaction mode */
 export interface EngineMode {

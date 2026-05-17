@@ -51,6 +51,26 @@ export const OSC = {
   PHRASE_PLAN:   '/xk/phrase/plan',     // i:planId, i:complexType, s:face|"-", f:durationSec, i:eventCount, i:noteOnCount, i:bendStepCount, i:companionNoteOnCount, i:halfTurn(0|1). Sent immediately before the matching /xk/voice.
   PANIC:         '/xk/panic',           // (no args) — relay WS disconnect
 
+  // ── sphere engine: relay → Max (port 57121) ─────────────────
+  //
+  // Mandala-cosmo gamelan sample bridge — fires alongside (not in place of)
+  // /xk/voice. Body engine (SWAM cello) stays gestural; sphere engine
+  // (gamelan, modal-resonant samples) provides the cosmic medium. Sphere
+  // strikes are purely additive — emitting them never mutates SWAM state
+  // and they share no voice slot with /xk/voice. Cosmology controls when
+  // they fire (currently only in mandala-cosmo) and the body/sphere mix
+  // balance, not the sphere engine itself.
+  SPHERE_STRIKE: '/xk/sphere/strike',   // s:sampleName, f:gain(0..1), f:pan(-1..1), i:voiceSteal(0|1), i:strikeId
+  SPHERE_PANIC:  '/xk/sphere/panic',    // (no args) — flush all sphere voices on cosmology change / relay disconnect
+
+  // ── sphere engine: Max → relay (port 57122) ──────────────────
+  //    Echoed from every dispatched strike in `max/xk_sphere.js` so the
+  //    relay can run the D75 sphere-echo-audit invariant. Pure auditor
+  //    surface — dashboard mandala canvas renders on planned strikes,
+  //    not echoes, for low-latency visual sync.
+  SPHERE_ECHO:   '/xk/sphere/echo',     // s:sampleName, i:strikeId, f:gainActual, i:voiceSlot
+  SPHERE_LOADED: '/xk/sphere/loaded',   // i:loadedCount, i:expectedCount, s:tuningHash — emitted by xk_sphere.js bang()
+
   // ── Max-internal helper (not emitted by relay) ───────────────
   TREM_LEARN:    '/xk/tremLearn',       // i:value — single-shot CC80 for MIDI-Learn
 

@@ -6,8 +6,18 @@ export {
 } from './engine.js';
 export {
   stateToOsc, expressionToOsc, algorithmToOsc, voiceToOsc, phrasePlanToOsc,
-  solveToOsc, type OscMessage,
+  solveToOsc, sphereStrikeToOsc, spherePanicToOsc, type OscMessage,
 } from './osc-output.js';
+export {
+  type SphereStrike, type SphereInstrumentClass,
+  pickGongStrike, pickKempulStrike, pickSaronStrike, pickSlenthemStrike,
+  pickBonangStrike, samplesIn, sampleExists, VELOCITY_RANK,
+} from './sphere-mapping.js';
+export { GAMELAN_SAMPLES, GAMELAN_SAMPLE_COUNT, GAMELAN_MANIFEST_HASH, GAMELAN_INSTRUMENT_COUNTS } from './gamelan-manifest.js';
+export {
+  ALL_SCALES, SARON_PELOG, SLENTHEM_PELOG, SLENTHEM_SLENDRO, BONANG_SLENDRO, KEMPUL_PELOG,
+  GAMELAN_TUNING_HASH, degreeHz, degreeMidi, type ScalaScale,
+} from './gamelan-tuning.js';
 export { OSC, vertexAddr, complexAddr, ALL_XK_ADDRESSES, MIDI_ECHO_PORT } from './osc-schema.js';
 export {
   HARMONICS, TREMOLO, BOW_POLY,

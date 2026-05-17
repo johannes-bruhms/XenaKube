@@ -9,6 +9,7 @@
 <body>
 
 <canvas id="spectrogram-score"></canvas>
+<canvas id="mandala-canvas"></canvas>
 <canvas id="rolling-score"></canvas>
 <canvas id="cube-canvas"></canvas>
 <svg id="cube-contrast-layer" aria-hidden="true"></svg>
@@ -200,13 +201,15 @@
     <input type="range" id="scoreSpeed" min="60" max="900" step="30" value="360">
     <span class="slider-val" id="scoreSpeedVal">360</span>
   </div>
-  <div class="br-slider-row visual-layer-row" title="Toggle rolling visual layers. MIDI brushes default on; spectrogram default off.">
+  <div class="br-slider-row visual-layer-row" title="Toggle rolling visual layers. MIDI brushes default on; spectrogram + mandala default off.">
     <label>layers</label>
     <div class="layer-toggle-group">
       <button type="button" id="midiBrushToggle" class="layer-toggle active" aria-pressed="true">midi</button>
       <button type="button" id="spectrogramToggle" class="layer-toggle" aria-pressed="false">spec</button>
+      <button type="button" id="mandalaToggle" class="layer-toggle" aria-pressed="false" title="Accumulating mandala layer — receives sphere-engine (gamelan) strikes in mandala-cosmo. Off by default.">mand</button>
     </div>
     <span class="slider-val spectrum-status" id="spectrumStatus">off</span>
+    <span class="slider-val mandala-status" id="mandalaStatus">off</span>
   </div>
   <div class="br-slider-row spectrogram-settings-toggle-row" title="Open the spectrogram settings panel.">
     <label>spec</label>
@@ -374,7 +377,7 @@
     'spectrumFloorDb','spectrumBgPct','spectrumBgColor','spectrumCeilingColor','spectrumSmoothPct','spectrumBlurTenths',
     'spectrumTimePct','spectrumPalette','spectrumModalityPalettes',
     'spectrumModalityTransfer','cubeColorSettings','ghostSize','cubeDepth',
-    'quality','recordMode'];
+    'quality','recordMode','mandalaEnabled'];
   try {
     var xhr = new XMLHttpRequest();
     xhr.open('GET', '/api/dashboard-settings', false);

@@ -17,6 +17,8 @@ const {
   phrasePlanSummary,
   phraseAuditSummary,
   solveToOsc,
+  sphereStrikeToOsc,
+  spherePanicToOsc,
   getBuiltinDiagrams,
   OSC,
   MIDI_ECHO_PORT,
@@ -65,8 +67,12 @@ setInterval(() => {
 
 // === XenaKube Engine ===
 // Default stays beta-cosmo. Set XK_COSMO=alpha-cosmo to run the historical
-// Nomos Alpha walk path without adding a dashboard mapping yet.
-const START_COSMO = process.env.XK_COSMO === 'alpha-cosmo' ? 'alpha-cosmo' : 'beta-cosmo';
+// Nomos Alpha walk path; XK_COSMO=mandala-cosmo to boot the gamelan
+// sphere-engine cosmology (requires the xk_sphere.js v8 + polybuffer~
+// chain in the Max patch — sphere strikes fire harmlessly into the void
+// if Max isn't running the sphere chain).
+const VALID_COSMO = new Set(['alpha-cosmo', 'beta-cosmo', 'mandala-cosmo']);
+const START_COSMO = VALID_COSMO.has(process.env.XK_COSMO) ? process.env.XK_COSMO : 'beta-cosmo';
 const engine = new XenaKubeEngine({ cosmology: START_COSMO });
 const phrasePlanner = new PhrasePlanner();
 const phraseAuditor = new PhraseEchoAuditor();
@@ -651,9 +657,13 @@ engine.onSolve((report) => {
 
   const payload = JSON.stringify({ type: 'solve' });
   broadcastWs(payload, { kind: 'solve' });
+  // Only alpha→beta auto-switches on solve (engine.reportCubeSolved).
+  // beta-cosmo and mandala-cosmo stay put — solve is a meaningful event
+  // (cycle-closing in mandala-cosmo triggers visual dissolution) but does
+  // not collapse the cosmology.
   const cosmoText = report?.cosmologyChanged
     ? ` -> beta-cosmo (from ${report.previousCosmology})`
-    : '';
+    : ` (cosmology=${report?.state?.cosmology ?? 'unknown'} — unchanged)`;
   console.log(`[SOLVE] cube solved${cosmoText}`);
 });
 
@@ -691,6 +701,89 @@ function sendPanic() {
   } catch (e) { /* OSC may be closed; safe to ignore */ }
   publishPhraseAuditResults(phraseAuditor.reset('panic'));
 }
+
+/** Flush sphere voices (sphere chain in xk_sphere.js / polybuffer~). Fires
+ *  on cosmology switch, reset, and WS disconnect. Reset sphere echo
+ *  bookkeeping so the D75 audit doesn't carry stale pending strikes. */
+function sendSpherePanic() {
+  try {
+    const msg = spherePanicToOsc();
+    oscMax.send(msg.address);
+  } catch (e) { /* OSC may be closed; safe to ignore */ }
+  sphereAudit.reset();
+}
+
+// === Sphere strike echo audit (D75 — lightweight relay-side) ===
+//
+// Counts pending /xk/sphere/strike emissions and matches incoming
+// /xk/sphere/echo by strikeId. Late or missing echoes log a FAIL line.
+// Suppressed until at least one echo has been seen — sphere chain may
+// not be loaded in Max, in which case we don't want noisy fail spam.
+const SPHERE_ECHO_TIMEOUT_MS = 400;
+const SPHERE_ECHO_LOG_INTERVAL_MS = 5000;
+const sphereAudit = {
+  pending: new Map(), // strikeId -> { sample, emittedAtMs }
+  echoesSeen: 0,
+  missCount: 0,
+  lateCount: 0,
+  lastLogMs: 0,
+  reset() {
+    this.pending.clear();
+    this.missCount = 0;
+    this.lateCount = 0;
+  },
+  noteStrike(strikeId, sample) {
+    this.pending.set(strikeId, { sample, emittedAtMs: Date.now() });
+    // Schedule timeout — only counts as a miss once timeout fires.
+    setTimeout(() => {
+      const p = this.pending.get(strikeId);
+      if (!p) return;
+      // Suppress until handshake — no echoes yet means sphere chain absent.
+      if (this.echoesSeen > 0) {
+        this.missCount++;
+        console.warn(`[SPHERE STRIKE FAIL] strikeId=${strikeId} sample=${p.sample} no echo within ${SPHERE_ECHO_TIMEOUT_MS}ms`);
+      }
+      this.pending.delete(strikeId);
+    }, SPHERE_ECHO_TIMEOUT_MS);
+  },
+  noteEcho(strikeId, sample) {
+    this.echoesSeen++;
+    const p = this.pending.get(strikeId);
+    if (!p) {
+      // Echo without a known strike — orphan; log rarely.
+      this.maybeLog(`orphan echo strikeId=${strikeId} sample=${sample}`);
+      return;
+    }
+    const lat = Date.now() - p.emittedAtMs;
+    if (lat > SPHERE_ECHO_TIMEOUT_MS) this.lateCount++;
+    this.pending.delete(strikeId);
+  },
+  maybeLog(msg) {
+    const now = Date.now();
+    if (now - this.lastLogMs < SPHERE_ECHO_LOG_INTERVAL_MS) return;
+    this.lastLogMs = now;
+    console.warn(`[SPHERE ECHO] ${msg}`);
+  },
+};
+
+// === Sphere strike emission (mandala-cosmo only) ===
+//
+// engine.onSphere fires after onVoice. Strikes are formatted into
+// /xk/sphere/strike OSC + broadcast over WS as { type: 'sphere_strike' }
+// so the dashboard mandala canvas can deposit glyphs on the planned
+// strike (low-latency visual sync; echo is for invariant audit only).
+engine.onSphere((strikes) => {
+  for (const strike of strikes) {
+    const msg = sphereStrikeToOsc(strike);
+    try { oscMax.send(msg.address, ...msg.args); }
+    catch (e) { /* OSC may be closed during panic; safe */ }
+    sphereAudit.noteStrike(strike.strikeId, strike.sample);
+  }
+  if (strikes.length > 0) {
+    const payload = JSON.stringify({ type: 'sphere_strike', data: { strikes } });
+    broadcastWs(payload, { kind: 'sphere_strike' });
+  }
+});
 
 // === MIDI echo listener (Phase E tier 2) ===
 //
@@ -810,6 +903,22 @@ midiEchoServer.on('message', (msg) => {
       _spectrumFrameDrops++;
       maybeLogSpectrumDrops();
     }
+    return;
+  }
+
+  // Sphere echo (D75 audit) — path-routed early so the SWAM auditor
+  // doesn't touch sphere-namespace traffic.
+  if (address === OSC.SPHERE_ECHO) {
+    const sample = String(msg[1] ?? '');
+    const strikeId = msg[2] | 0;
+    sphereAudit.noteEcho(strikeId, sample);
+    return;
+  }
+  if (address === OSC.SPHERE_LOADED) {
+    const loaded = msg[1] | 0;
+    const expected = msg[2] | 0;
+    const tuningHash = String(msg[3] ?? '');
+    console.log(`[SPHERE LOAD] loaded=${loaded} expected=${expected} tuningHash=${tuningHash}`);
     return;
   }
 
@@ -1092,7 +1201,7 @@ wss.on('connection', function connection(ws) {
       console.log("Client disconnected.");
       // Deterministic cleanup: tell bridges to flush all notes/CCs.
       // Covers the "cable unplugged → notes stuck in SWAM" case.
-      if (wss.clients.size === 0) sendPanic();
+      if (wss.clients.size === 0) { sendPanic(); sendSpherePanic(); }
       scheduleShutdown();
     });
 
@@ -1215,11 +1324,12 @@ wss.on('connection', function connection(ws) {
                 const mode = {};
                 if (data.cCube) mode.cCube = data.cCube;
                 if (data.kCube) mode.kCube = data.kCube;
-                if (data.cosmology === 'alpha-cosmo' || data.cosmology === 'beta-cosmo') mode.cosmology = data.cosmology;
+                if (VALID_COSMO.has(data.cosmology)) mode.cosmology = data.cosmology;
                 engine.setMode(mode);
                 if (mode.cosmology) {
                     phrasePlanner.reset();
                     sendPanic();
+                    sendSpherePanic();
                 }
                 console.log(`[MODE] ${JSON.stringify(mode)}`);
                 broadcastEngineStateAfterControl();
@@ -1233,6 +1343,7 @@ wss.on('connection', function connection(ws) {
                 engine.reset();
                 phrasePlanner.reset();
                 publishPhraseAuditResults(phraseAuditor.reset('panic'));
+                sendSpherePanic();
                 console.log('[RESET] Engine reset');
                 broadcastEngineStateAfterControl();
             }
