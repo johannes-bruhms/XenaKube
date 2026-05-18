@@ -4,7 +4,7 @@ Mandala-cosmo's second synthesis output. The body engine (SWAM Cello, `max/xk_sw
 
 ## Pack provenance
 
-Samples: **Latent Sonorities** by Khyam Allami + Counterpoint, sampled from the Gamêlan Agêng Tumbuk Nêm at **Rumah Budaya Indonesia, Berlin**. Tuning analysis via Leimma. Files in `media/gamelan/`. Scala files under `media/gamelan/Latent-Sonorities-Tuning-Files-in-Scala/`.
+Samples: **Latent Sonorities** by Khyam Allami + Counterpoint, sampled from the Gamêlan Agêng Tumbuk Nêm at **Rumah Budaya Indonesia, Berlin**. Tuning analysis via Leimma. Files in `max/media/gamelan/`. Scala files under `max/media/gamelan/Latent-Sonorities-Tuning-Files-in-Scala/`.
 
 Credit the pack visibly when shipping recordings or installation builds — the project is an explicit decolonial-tuning effort and using it congruently matters.
 
@@ -114,7 +114,7 @@ Per-instrument glyph language (`SPHERE_INSTRUMENT_GLYPH` in `src/mandala-cosmo.t
 
 When adding a sample family or editing a tuning:
 
-1. Add/rename `.wav` files in `media/gamelan/` (or amend a Scala file in `src/gamelan-tuning.ts`).
+1. Add/rename `.wav` files in `max/media/gamelan/` (or amend a Scala file in `src/gamelan-tuning.ts`).
 2. Run `node scripts/build-gamelan-manifest.mjs` to refresh `src/gamelan-manifest.ts`.
 3. Run `npm run gen:max` to refresh `max/gen_sphere_includes.js`.
 4. Reload `xk_sphere.js` in Max (right-click v8 → Reload Script).

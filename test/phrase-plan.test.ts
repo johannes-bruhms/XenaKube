@@ -4,10 +4,14 @@ import { PhrasePlanner, phrasePlanSummary, type PhrasePlan } from '../src/phrase
 import { ComplexType, type XenaKubeState } from '../src/types.js';
 import {
   HALF_TURN_GESTURE_DURATION_SEC,
+  HALF_TURN_GLISS_DURATION_SEC,
+  HALF_TURN_GLISS_SPAN_BY_COMPLEX,
   HALF_TURN_GESTURE_EXPR,
   HALF_TURN_GESTURE_INTENSITY,
   HALF_TURN_GESTURE_NOTE_MS,
+  HALF_TURN_GESTURE_RELEASE_MS,
   HALF_TURN_GESTURE_VELOCITY,
+  ONSET_EXPRESSION_MIN,
 } from '../src/swam-mapping.js';
 import type { FaceMove } from '../src/face-gesture.js';
 import type { VoiceOutput } from '../src/voice-engine.js';
@@ -103,6 +107,19 @@ describe('PhrasePlanner', () => {
     }
   });
 
+  it('keeps slow-start face expression seeds immediately audible', () => {
+    const planner = new PhrasePlanner({ rng: () => 0.5, now: () => 1000 });
+    const plan = planner.planVoiceOutput(voice(ComplexType.Atom, "D'"), state())[0];
+    const expr = plan.events.find(e => e.kind === 'exprShape');
+
+    expect(expr?.kind).toBe('exprShape');
+    if (expr?.kind === 'exprShape') {
+      expect(expr.shape).toBe('hairpin-up');
+      expect(expr.start).toBeGreaterThanOrEqual(ONSET_EXPRESSION_MIN);
+      expect(expr.end).toBeGreaterThanOrEqual(ONSET_EXPRESSION_MIN);
+    }
+  });
+
   it('C7 plans immediate drift and no companions', () => {
     const planner = new PhrasePlanner({ rng: () => 0, now: () => 1000 });
     const plan = planner.planVoiceOutput(voice(ComplexType.OrderedSlidingFlat, 'U'), state())[0];
@@ -145,9 +162,9 @@ describe('PhrasePlanner', () => {
     expect(mainPitches[1]).toBeGreaterThan(mainPitches[0]);
   });
 
-  it('plans half-turn punctuation as short loud assertive material regardless of C or face', () => {
+  it('plans non-C1/non-gliss half-turn punctuation as short loud bowed dyad material', () => {
     const planner = new PhrasePlanner({ rng: () => 0, now: () => 1000 });
-    const out = voice(ComplexType.OrderedSlidingFlat, "U'");
+    const out = voice(ComplexType.OrderedCloudFlat, "U'");
     out.halfTurn = true;
     out.active[0].params = { density: 0.1, intensity: 'ppp', duration: 5 };
 
@@ -169,6 +186,70 @@ describe('PhrasePlanner', () => {
     expect(noteOffs.every(e => e.tMs === HALF_TURN_GESTURE_NOTE_MS)).toBe(true);
     expect(plan.expected.bendStepCount).toBe(0);
     expect(plan.expected.companionNoteOnCount).toBe(1);
+  });
+
+  it('plans C1 half-turn punctuation as pizzicato, not a bowed dyad', () => {
+    const planner = new PhrasePlanner({ rng: () => 0, now: () => 1000 });
+    const out = voice(ComplexType.AtaxicCloud, "U'");
+    out.halfTurn = true;
+    out.active[0].params = { density: 0.1, intensity: 'ppp', duration: 5 };
+
+    const plan = planner.planVoiceOutput(out, stateWithSieve([0, 12, 24]))[0];
+    const noteOns = plan.events.filter(e => e.kind === 'noteOn');
+    const noteOffs = plan.events.filter(e => e.kind === 'noteOff');
+    const expr = plan.events.find(e => e.kind === 'exprShape');
+
+    expect(plan.halfTurn).toBe(true);
+    expect(plan.durationSource).toBe('half-turn');
+    expect(plan.durationSec).toBe(HALF_TURN_GESTURE_DURATION_SEC);
+    expect(plan.intensity).toBe(HALF_TURN_GESTURE_INTENSITY);
+    expect(plan.faceEnvelope).toBe('half-turn');
+    expect(expr?.kind).toBe('exprShape');
+    if (expr?.kind === 'exprShape') expect(expr.peakExpr).toBe(HALF_TURN_GESTURE_EXPR);
+    expect(noteOns).toHaveLength(1);
+    expect(noteOns[0]).toMatchObject({ kind: 'noteOn', tMs: 0, velocity: HALF_TURN_GESTURE_VELOCITY });
+    expect(noteOns.some(e => e.kind === 'noteOn' && e.isCompanion === true)).toBe(false);
+    expect(noteOffs).toHaveLength(1);
+    expect(noteOffs[0]?.tMs).toBe(HALF_TURN_GESTURE_NOTE_MS);
+    expect(plan.expected.bendStepCount).toBe(0);
+    expect(plan.expected.companionNoteOnCount).toBe(0);
+  });
+
+  it('plans C5-C7 half-turn punctuation as one same-duration gliss with per-complex span', () => {
+    const complexes = [
+      ComplexType.AtaxicSliding,
+      ComplexType.OrderedSlidingAscDesc,
+      ComplexType.OrderedSlidingFlat,
+    ];
+
+    for (const complex of complexes) {
+      const planner = new PhrasePlanner({ rng: () => 0.75, now: () => 1000 });
+      const out = voice(complex, "U'");
+      out.halfTurn = true;
+
+      const plan = planner.planVoiceOutput(out, stateWithSieve([24]))[0];
+      const bend = plan.events.find(e => e.kind === 'bendStep');
+      const noteOns = plan.events.filter(e => e.kind === 'noteOn');
+      const noteOffs = plan.events.filter(e => e.kind === 'noteOff');
+
+      expect(plan.durationSec, `C${complex}`).toBe(HALF_TURN_GLISS_DURATION_SEC);
+      expect(plan.expected.bendStepCount, `C${complex}`).toBe(1);
+      expect(plan.expected.companionNoteOnCount, `C${complex}`).toBe(0);
+      expect(noteOns, `C${complex}`).toHaveLength(1);
+      expect(noteOffs, `C${complex}`).toHaveLength(0);
+      expect(bend?.kind, `C${complex}`).toBe('bendStep');
+      if (bend?.kind === 'bendStep') {
+        expect(bend.tMs, `C${complex}`).toBe(0);
+        expect(bend.durMs, `C${complex}`).toBe(Math.round(HALF_TURN_GLISS_DURATION_SEC * 1000));
+        expect(bend.durMs + HALF_TURN_GESTURE_RELEASE_MS + 20, `C${complex}`).toBeLessThanOrEqual(500);
+        expect(Math.abs(bend.toPitch - bend.fromPitch), `C${complex}`).toBe(HALF_TURN_GLISS_SPAN_BY_COMPLEX[complex]);
+      }
+      expect(noteOns[0]).toMatchObject({ kind: 'noteOn', tMs: 0 });
+    }
+    expect(HALF_TURN_GLISS_SPAN_BY_COMPLEX[ComplexType.AtaxicSliding]).toBeGreaterThan(
+      HALF_TURN_GLISS_SPAN_BY_COMPLEX[ComplexType.OrderedSlidingAscDesc],
+    );
+    expect(HALF_TURN_GLISS_SPAN_BY_COMPLEX[ComplexType.OrderedSlidingFlat]).toBe(1);
   });
 
   it('C5 plans wild gliss bends and re-voiced in-range companions', () => {

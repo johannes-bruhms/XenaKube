@@ -30,7 +30,7 @@
 //     └─ pre-loaded at bang() from gen_sphere_includes.js GAMELAN_SAMPLES.
 //        Buffers named by `canonical` (e.g. "gong-center-soft-gongmallet").
 //
-// Sample files live in media/gamelan/ relative to the project root.
+// Sample files live in max/media/gamelan/ relative to the project root.
 // The Max patch must be saved next to (or know how to find) that
 // folder so polybuffer~ reads resolve.
 // ================================================================
@@ -62,7 +62,7 @@ include("gen_sphere_includes.js");
 // Folder containing the .wav samples. Relative to the patch by default;
 // override via the `samplefolder <path>` message if you keep the patch
 // somewhere other than the project root.
-var SAMPLE_FOLDER = "../media/gamelan";
+var SAMPLE_FOLDER = "media/gamelan";
 
 // Per-instrument-class voice polyphony cap. Strikes beyond the cap
 // steal the oldest voice (D76 panic semantics). Tuned for v1: gong is
@@ -78,12 +78,21 @@ var POLY_BY_CLASS = {
 	"kethuk":            2
 };
 
-// Lookup: canonical name -> manifest entry (built at load).
+// Lookups built at v8 load:
+//   SAMPLE_BY_NAME — canonical -> manifest entry (used to validate strikes)
+//   SAMPLE_INDEX_BY_NAME — canonical -> 1-based polybuffer~ index (used to
+//     emit `set gamelan.<N>` for groove~). Assumes polybuffer~'s readfolder
+//     loads files in alphabetical order matching the manifest's sort, which
+//     is the convention on every modern Max + Windows/macOS build. If a
+//     wrong sample ever plays, this assumption broke and we need to add a
+//     getshortname callback round-trip at bang() time.
 var SAMPLE_BY_NAME = {};
+var SAMPLE_INDEX_BY_NAME = {};
 (function buildLookup() {
 	for (var i = 0; i < GAMELAN_SAMPLES.length; i++) {
 		var s = GAMELAN_SAMPLES[i];
 		SAMPLE_BY_NAME[s.canonical] = s;
+		SAMPLE_INDEX_BY_NAME[s.canonical] = i + 1;
 	}
 })();
 
@@ -117,38 +126,33 @@ function fail() {
 }
 
 // ================================================================
-// LOAD — bang() triggers polybuffer~ read of all 314 samples
+// LOAD — bang() triggers ONE polybuffer~ readfolder
 // ================================================================
 //
-// We don't poke polybuffer~ directly from this v8 (Max objects aren't
-// addressable as JS objects across the patcher boundary cleanly).
-// Instead we emit a sequence of `load <canonical> <filepath>` messages
-// out the debug outlet — the patch routes those to [polybuffer~ gamelan]
-// via a [prepend read] / [t b s s] chain set up alongside the v8.
+// polybuffer~ takes `readfolder <path>` and loads every audio file
+// under <path> into buffers named `<polybuffer-arg>.<index>` (1-based).
+// We emit ONE `load <path>` message; the downstream chain
+// (`[route load]` -> `[prepend readfolder]` -> `[polybuffer~ gamelan]`)
+// converts that into the readfolder message. Per-file references are
+// then indexed (gamelan.1 .. gamelan.N) where N maps 1:1 to the
+// alphabetically-sorted manifest order (see SAMPLE_INDEX_BY_NAME).
 //
-// Acknowledgement: polybuffer~ has no per-buffer load callback, so
-// loadedCount is incremented optimistically when we emit `load`. The
-// D77 invariant logs expected vs loaded at bang() completion; user
-// verifies in the Max console.
+// loadedCount is set optimistically; polybuffer~ does not emit a
+// per-buffer callback. The D77 invariant truth-check happens when the
+// user audits Max console output after bang() / patch reload.
 
 function bang() {
-	log("=== SPHERE BANG — loading", expectedCount, "samples from", SAMPLE_FOLDER, "===");
+	log("=== SPHERE BANG — emitting readfolder for", SAMPLE_FOLDER, "===");
 	log("=== TUNING HASH=" + GAMELAN_TUNING_HASH + " — verify matches src/gamelan-tuning.ts ===");
 	log("=== MANIFEST HASH=" + GAMELAN_MANIFEST_HASH + " — verify matches src/gamelan-manifest.ts ===");
-	loadedCount = 0;
 	initVoiceRings();
-	for (var i = 0; i < GAMELAN_SAMPLES.length; i++) {
-		var s = GAMELAN_SAMPLES[i];
-		// Emit: ["load", canonical, "<folder>/<file>"]
-		outlet(PLAY_OUTLET, "load", s.canonical, SAMPLE_FOLDER + "/" + s.file);
-		loadedCount++;
-	}
-	// D77 — loaded == expected check.
-	if (loadedCount !== expectedCount) {
-		fail("SAMPLE LOAD FAIL expected=" + expectedCount + " got=" + loadedCount);
-	} else {
-		log("SAMPLE LOAD OK count=" + loadedCount);
-	}
+	pendingEchoes = {};
+	// Emit: ["load", "<folder>"]
+	// Downstream [route load] strips the "load" token; [prepend readfolder]
+	// turns the path into `readfolder <path>` for polybuffer~.
+	outlet(PLAY_OUTLET, "load", SAMPLE_FOLDER);
+	loadedCount = expectedCount; // optimistic — verify in polybuffer~ inspector
+	log("SAMPLE LOAD: emitted readfolder; verify polybuffer~ holds " + expectedCount + " buffers (double-click polybuffer~ object to inspect)");
 	outlet(LOADED_OUTLET, loadedCount, expectedCount, GAMELAN_TUNING_HASH);
 }
 
@@ -180,9 +184,20 @@ function strike(sample, gain, pan, voiceSteal, strikeId) {
 	var cls = s.instrument;
 	allocateVoice(cls, voiceSteal);
 
-	// Emit: [<instrumentClass>, "play", canonical, gain, pan, strikeId]
+	// polybuffer~ names its buffers `<polybuf-arg>.<index>` (e.g. gamelan.5),
+	// so the downstream `prepend set` -> `groove~` references the buffer by
+	// that index-based symbol rather than the canonical (which is a manifest-
+	// side label, not a polybuffer slot name).
+	var polyIdx = SAMPLE_INDEX_BY_NAME[s.canonical];
+	if (!polyIdx) {
+		fail("STRIKE INDEX MISSING canonical=" + s.canonical + " strikeId=" + strikeId);
+		return;
+	}
+	var bufferRef = "gamelan." + polyIdx;
+
+	// Emit: [<instrumentClass>, "play", "gamelan.<N>", gain, pan, strikeId]
 	// Downstream [route <classes>] sends to the matching voice subpatch.
-	outlet(PLAY_OUTLET, cls, "play", s.canonical, gain, pan, strikeId);
+	outlet(PLAY_OUTLET, cls, "play", bufferRef, gain, pan, strikeId);
 
 	pendingEchoes[strikeId] = Date.now();
 	outlet(ECHO_OUTLET, s.canonical, strikeId, gain, voiceRingActiveCount(cls));

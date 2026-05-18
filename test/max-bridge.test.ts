@@ -9,6 +9,7 @@ describe('Max bridge invariants', () => {
   const pfftSpectrumPatch = readFileSync(join(process.cwd(), 'max', 'xk_pfft_spectrum.maxpat'), 'utf8');
   const performancePatch = readFileSync(join(process.cwd(), 'max', 'xenakube_swam.maxpat'), 'utf8');
   const relayController = readFileSync(join(process.cwd(), 'max', 'relay-controller.js'), 'utf8');
+  const generatedInclude = readFileSync(join(process.cwd(), 'max', 'gen_includes.js'), 'utf8');
   const phrasePlanSource = readFileSync(join(process.cwd(), 'src', 'phrase-plan.ts'), 'utf8');
 
   function extractLastFunction(name: string): string {
@@ -118,6 +119,41 @@ describe('Max bridge invariants', () => {
     expect(phraseC6).toContain('var slideDelay = (idx === 0) ? 0 : humanDelay();');
   });
 
+  it('keeps phrase-start expression seeds above the live-onset floor', () => {
+    const scheduleExprEnvelope = extractLastFunction('scheduleExprEnvelope');
+    const schedulePhraseArc = extractLastFunction('schedulePhraseArc');
+    const schedulePhraseHairpin = extractLastFunction('schedulePhraseHairpin');
+    const phraseC2 = extractLastFunction('phraseC2');
+    const handleVoice = extractLastFunction('handleVoice');
+
+    expect(generatedInclude).toContain('var ONSET_EXPRESSION_MIN =');
+    expect(source).toContain('function onsetExpressionValue(val)');
+    expect(scheduleExprEnvelope).toContain('onsetExpressionValue(peakExpr * env.attack)');
+    expect(schedulePhraseArc).toContain('onsetLo = onsetExpressionValue(lo)');
+    expect(schedulePhraseArc).toContain('hi = onsetExpressionValue(peakExpr * ARC_CEIL)');
+    expect(schedulePhraseHairpin).toContain('onsetLo = onsetExpressionValue(lo)');
+    expect(phraseC2).toContain('if (idx === 0) exprVal = onsetExpressionValue(exprVal);');
+    expect(handleVoice).toContain('onsetExpressionValue(inst.peakExpr)');
+    expect(handleVoice).toContain('onsetExpressionValue(inst.peakExpr * c2StartMul)');
+  });
+
+  it('keeps C3 retriggers free of cross-phrase tails and same-pitch noteoff races', () => {
+    const handleVoice = extractLastFunction('handleVoice');
+    const legatoNoteOverlap = extractLastFunction('legatoNoteOverlap');
+
+    expect(generatedInclude).not.toContain('"3": true');
+    expect(handleVoice).toContain('var preserveTail = (complexType !== 3 && LEGATO_COMPLEX[complexType] === true);');
+    expect(handleVoice).toContain('C3 ONSET TAIL FAIL');
+    expect(handleVoice).toContain('allNotesOff(inst);');
+    expect(source).toContain('function sameMidiPitch(a, b)');
+    expect(legatoNoteOverlap).toContain('sameMidiPitch(oldNotes[i], pitch)');
+    expect(legatoNoteOverlap).toContain('noteOff(inst, oldNotes[i]);');
+    expect(legatoNoteOverlap).toContain('removeActiveNote(inst, oldNotes[i]);');
+    expect(legatoNoteOverlap).toContain('overlapNotes.push(oldNotes[i]);');
+    expect(source).toContain('samePitchRetriggers=');
+    expect(source).toContain('tailClears=');
+  });
+
   it('keeps face grammar out of live pitch/register selection', () => {
     const handleFace = extractLastFunction('handleFace');
     const pickPitch = extractLastFunction('pickPitch');
@@ -135,31 +171,67 @@ describe('Max bridge invariants', () => {
     expect(phraseC7).not.toMatch(/faceMotion|motionDir/);
   });
 
-  it('routes half-turn punctuation through a dedicated short assertive gesture', () => {
+  it('routes half-turn punctuation through a dedicated short assertive gesture without turning C1 into bow', () => {
     const handleVoice = extractLastFunction('handleVoice');
     const phraseHalfTurn = extractLastFunction('phraseHalfTurn');
+    const phraseHalfTurnPizz = extractLastFunction('phraseHalfTurnPizz');
+    const phraseHalfTurnBowed = extractLastFunction('phraseHalfTurnBowed');
+    const phraseHalfTurnGliss = extractLastFunction('phraseHalfTurnGliss');
+    const halfTurnGlissStroke = extractLastFunction('halfTurnGlissStroke');
     const setupHalfTurnGesture = extractLastFunction('setupHalfTurnGesture');
+    const scheduleRelease = extractLastFunction('scheduleRelease');
     const router = extractLastFunction('anything');
     const handlePhrasePlan = extractLastFunction('handlePhrasePlan');
 
     expect(source).toContain('HALF_TURN_GESTURE_DURATION_SEC');
+    expect(source).toContain('HALF_TURN_GLISS_DURATION_SEC');
+    expect(source).toContain('HALF_TURN_GLISS_SPAN_BY_COMPLEX');
+    expect(generatedInclude).toContain('var HALF_TURN_GLISS_DURATION_SEC =');
+    expect(generatedInclude).toContain('var HALF_TURN_GLISS_SPAN_BY_COMPLEX =');
     expect(source).toContain('HALF_TURN_GESTURE_INTENSITY');
     expect(router).toContain('handleVoice(args[0], args[1], args[2], args[3], args[4], args[5])');
     expect(handlePhrasePlan).toContain('half-turn=1');
     expect(handleVoice).toContain('var halfTurn = (halfTurnFlag | 0) === 1;');
+    expect(handleVoice).toContain('? HALF_TURN_GLISS_DURATION_SEC');
     expect(handleVoice).toContain('durationSource = "half-turn";');
-    expect(handleVoice).toContain('setupHalfTurnGesture(inst);');
-    expect(handleVoice).toContain('phraseHalfTurn(inst, HALF_TURN_GESTURE_VELOCITY, duration);');
+    expect(handleVoice).toContain('setupHalfTurnGesture(inst, complexType);');
+    expect(handleVoice).toContain('phraseHalfTurn(inst, HALF_TURN_GESTURE_VELOCITY, duration, complexType);');
+    expect(handleVoice).toContain('isHalfTurnGlissComplex(complexType) ? "gliss" : "bowed-dyad"');
     expect(handleVoice).toContain('inst.forceComplexSetup === true');
-    expect(setupHalfTurnGesture).toContain('setPlayMode(inst, "bow")');
-    expect(setupHalfTurnGesture).toContain('setBowPolyphony(inst, BOW_POLY.DOUBLE_HOLD)');
+    expect(setupHalfTurnGesture).toContain('var isPizz = complexType === 1;');
+    expect(setupHalfTurnGesture).toContain('var isHarmonic = complexType === 4;');
+    expect(setupHalfTurnGesture).toContain('var isGliss = isHalfTurnGlissComplex(complexType);');
+    expect(setupHalfTurnGesture).toContain('inst.forceKS = true;');
+    expect(setupHalfTurnGesture).toContain('inst.forceKS = prevForceKS;');
+    expect(setupHalfTurnGesture).toContain('setPlayMode(inst, isPizz ? "pizz" : "bow")');
+    expect(setupHalfTurnGesture).toContain('setHarmonics(inst, isHarmonic ? harmonicsForC4(inst) : HARMONICS.OFF)');
+    expect(setupHalfTurnGesture).toContain('setBowPolyphony(inst, isPizz ? COMPLEX[1].bowPoly : BOW_POLY.DOUBLE_HOLD)');
     expect(setupHalfTurnGesture).toContain('ccForce(inst, CC.EXPRESSION, HALF_TURN_GESTURE_EXPR)');
     expect(setupHalfTurnGesture).toContain('inst.forceComplexSetup = true;');
-    expect(phraseHalfTurn).toContain('noteOn(inst, p, vel)');
-    expect(phraseHalfTurn).toContain('noteOn(inst, companion, Math.round(vel * 0.92), true)');
-    expect(phraseHalfTurn).toContain('scheduleRelease(inst, dur)');
+    expect(phraseHalfTurn).toContain('if (complexType === 1)');
+    expect(phraseHalfTurn).toContain('phraseHalfTurnPizz(inst, vel, dur);');
+    expect(phraseHalfTurn).toContain('if (isHalfTurnGlissComplex(complexType))');
+    expect(phraseHalfTurn).toContain('phraseHalfTurnGliss(inst, vel, dur, complexType);');
+    expect(phraseHalfTurn).toContain('phraseHalfTurnBowed(inst, vel, dur);');
+    expect(phraseHalfTurnPizz).toContain('noteOn(inst, p, vel)');
+    expect(phraseHalfTurnPizz).not.toContain('companion');
+    expect(phraseHalfTurnGliss).toContain('var span = HALF_TURN_GLISS_SPAN_BY_COMPLEX[complexType] || 7;');
+    expect(phraseHalfTurnGliss).toContain('halfTurnGlissStroke(inst, p, target, durMs);');
+    expect(phraseHalfTurnGliss).not.toContain('glissStep(');
+    expect(halfTurnGlissStroke).toContain('OSC.MIDI_BENDSTEP');
+    expect(halfTurnGlissStroke).toContain('inst.glissBendCount = (inst.glissBendCount | 0) + 1;');
+    expect(halfTurnGlissStroke).toContain('rampPitchbend(inst, targetBend, strokeMs);');
+    expect(halfTurnGlissStroke).not.toContain('noteOn(inst, hpTarget');
+    expect(scheduleRelease).toContain('if (inst.halfTurn) fadeMs = HALF_TURN_GESTURE_RELEASE_MS;');
+    expect(scheduleRelease).toContain('if (inst.halfTurn) {');
+    expect(scheduleRelease).toContain('emitPitchbend(inst, PITCHBEND_CENTER)');
+    expect(phraseHalfTurnBowed).toContain('noteOn(inst, companion, Math.round(vel * 0.92), true)');
+    expect(phraseHalfTurnBowed).toContain('scheduleRelease(inst, dur)');
     expect(phrasePlanSource).toContain("durationSource: DurationSource = isHalfTurn ? 'half-turn'");
     expect(phrasePlanSource).toContain('this.phraseHalfTurn(ctx);');
+    expect(phrasePlanSource).toContain('this.phraseHalfTurnPizz(ctx);');
+    expect(phrasePlanSource).toContain('this.phraseHalfTurnGliss(ctx);');
+    expect(phrasePlanSource).toContain('this.phraseHalfTurnBowed(ctx);');
   });
 
   it('keeps C5 wild gliss bends active and prevents bend-target companion masking', () => {
@@ -289,6 +361,12 @@ describe('Max bridge invariants', () => {
     expect(relayController).toContain("Max.addHandler('kill_process', killRelayPortProcess)");
     expect(relayController).toContain("Max.addHandler('kill', (...args) =>");
     expect(relayController).toContain("String(args[0] || '').toLowerCase() === 'process'");
+    expect(relayController).toContain("path: '/api/shutdown'");
+    expect(relayController).toContain("requestRelayShutdown('max stop relay'");
+    expect(relayController).toContain("forceKillRelayChild('stop relay timeout')");
+    expect(relayController).toContain("forceKillRelayChild('kill process')");
+    expect(relayController).toContain("process.once('exit', cleanupRelayChildOnControllerExit)");
+    expect(relayController).toContain("spawnSync('taskkill.exe'");
     expect(relayController).toContain('Get-NetTCPConnection -LocalPort ${RELAY_PORT} -State Listen');
     expect(relayController).toContain('Stop-Process -Id $_.OwningProcess -Force');
   });

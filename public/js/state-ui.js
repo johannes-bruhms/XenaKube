@@ -4,7 +4,7 @@
 //
 // Owns the DOM beneath the cube canvas:
 //   • Top-left: title, mode badges (palette / voice / regime / solved),
-//     turn-rate readout; floating K/C cards anchor at the active label merge
+//     turn-rate readout; floating K/C cards anchor at the active ghost C
 //   • Bottom-left: state panel (face, active voice, S4 element, path,
 //     step, snap, complex phase, orbit, scramble, permutation) +
 //     hidden expression panel (kept as DOM so legacy gyro write-throughs
@@ -573,10 +573,12 @@ function positionActiveCards() {
   const gap = 24;
   const w = rect.width || 150;
   const h = rect.height || 240;
-  let x = anchor.x + gap;
+  const preferLeft = anchor.side === 'left';
+  let x = preferLeft ? anchor.x - w - gap : anchor.x + gap;
   let y = anchor.y - h * 0.5;
 
-  if (x + w > window.innerWidth - margin) x = anchor.x - w - gap;
+  if (preferLeft && x < margin) x = anchor.x + gap;
+  if (!preferLeft && x + w > window.innerWidth - margin) x = anchor.x - w - gap;
   x = Math.max(margin, Math.min(window.innerWidth - w - margin, x));
   y = Math.max(margin, Math.min(window.innerHeight - h - margin, y));
 

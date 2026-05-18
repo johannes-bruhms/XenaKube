@@ -153,6 +153,11 @@ var INTENSITY_MAP = {
   }
 };
 
+// ---------------- Expression onset / play floors -----------------
+var CC_EXPRESSION_FLOOR = 12;
+
+var ONSET_EXPRESSION_MIN = 32;
+
 // ---------------- Envelope profiles (per-note + per-phrase) ------
 var ENV_PROFILE = {
   pluck: {
@@ -345,10 +350,9 @@ var FACE_MAP = {
   }
 };
 
-// ---------------- Gliss (legato/portamento) complexes ------------
+// ---------------- Cross-phrase legato tail complexes --------------
 var LEGATO_COMPLEX = {
   "2": true,
-  "3": true,
   "5": true,
   "6": true,
   "7": true
@@ -372,6 +376,14 @@ var COMPLEX_DURATION_FLOOR_SEC = {
 var HALF_TURN_WINDOW_MS = 150;
 
 var HALF_TURN_GESTURE_DURATION_SEC = 0.28;
+
+var HALF_TURN_GLISS_DURATION_SEC = 0.42;
+
+var HALF_TURN_GLISS_SPAN_BY_COMPLEX = {
+  "5": 24,
+  "6": 7,
+  "7": 1
+};
 
 var HALF_TURN_GESTURE_INTENSITY = "fff";
 

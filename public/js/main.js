@@ -19,6 +19,7 @@ import {
   connect as transportConnect,
   send    as transportSend,
   on      as transportOn,
+  isOpen  as transportIsOpen,
 } from './transport.js';
 
 import * as cubeScene from './cube-scene.js';
@@ -35,7 +36,15 @@ import {
   panic         as sievePanic,
   getCellRect   as getSieveCellRect,
 } from './sieve.js';
-import { install as installSettingsSync } from './settings-sync.js';
+import {
+  SYNCED_KEYS,
+  install as installSettingsSync,
+  gatherSyncedSettings,
+  saveActiveSettings,
+  fetchDashboardPresets,
+  saveDashboardPreset,
+  deleteDashboardPreset,
+} from './settings-sync.js';
 
 // Bootstrap-from-server already ran synchronously in dashboard.html (so the
 // localStorage reads below see the file's values); this installs the push
@@ -52,7 +61,7 @@ cubeScene.init({
   // the zero to the relay so the engine's snap cells re-center on the
   // same rest pose the visual just adopted (otherwise snap thresholds
   // stay anchored to the raw sensor frame and feel asymmetric).
-  onAutoZero: () => wsSend({ type: 'zero_gyro' }),
+  onAutoZero: () => sendZeroGyroToRelay('auto-zero'),
 });
 
 function setSpectrumStatusText(text) {
@@ -131,19 +140,31 @@ let pendingGyroState = null;
 let currentCosmology = 'beta-cosmo';
 let spectrumEnabled = false;
 let midiBrushEnabled = true;
+let currentGyroSmoothing = 0.50;
+let currentStillThreshold = 0.10;
 let currentScoreSpeed = 360;
 let currentSpectrumLatencyMs = 120;
 let currentSpectrumNudgeMs = 0;
+let relayConnected = false;
 
 transportOn('open', () => {
+  relayConnected = true;
   dot.classList.add('connected');
   wsStatusEl.textContent = 'connected';
   wsSend({ type: 'get_diagrams' });
   wsSend({ type: 'set_spectrum_enabled', enabled: spectrumEnabled });
+  wsSend({ type: 'set_gyro_smoothing', value: currentGyroSmoothing });
+  wsSend({ type: 'set_still_threshold', value: currentStillThreshold });
+  flushPendingCubeGyroToRelay('ws-open');
+  flushPendingZeroGyroToRelay('ws-open');
+  updateCubeConnectAvailability();
 });
 transportOn('close', () => {
+  relayConnected = false;
   dot.classList.remove('connected');
   wsStatusEl.textContent = 'reconnecting...';
+  invalidateCubeSessionForRelayClose();
+  updateCubeConnectAvailability();
   interruptionLayer.onPanic();
 });
 transportOn('state', (data, move) => {
@@ -175,6 +196,7 @@ transportOn('gyroState', (data) => {
   }
 });
 transportOn('gyroTick', (data, dev) => {
+  relayGyroTickCount++;
   cubeScene.setCubeQuat(data);
   stateUi.updateExpression(data, dev);
 });
@@ -329,7 +351,7 @@ resetBtn.addEventListener('click', () => {
 
 document.getElementById('zeroBtn').addEventListener('click', () => {
   cubeScene.zeroGyro();
-  wsSend({ type: 'zero_gyro' });
+  sendZeroGyroToRelay('button');
 });
 
 // Cosmology cycle: alpha-cosmo -> beta-cosmo -> mandala-cosmo -> alpha-cosmo.
@@ -390,18 +412,32 @@ document.getElementById('resetBtnVisible')?.addEventListener('click', async () =
 
 const gyroSmoothSlider = document.getElementById('gyroSmoothing');
 const gyroSmoothVal = document.getElementById('gyroSmoothVal');
+function applyGyroSmoothing(val, persist = true) {
+  currentGyroSmoothing = clampFloat(val, 0, 1, 0.50);
+  gyroSmoothSlider.value = currentGyroSmoothing.toFixed(2);
+  gyroSmoothVal.textContent = currentGyroSmoothing.toFixed(2);
+  wsSend({ type: 'set_gyro_smoothing', value: currentGyroSmoothing });
+  if (persist) localStorage.setItem('gyroSmoothing', currentGyroSmoothing.toFixed(2));
+}
+const savedGyroSmoothing = parseFloat(localStorage.getItem('gyroSmoothing'));
+applyGyroSmoothing(isFinite(savedGyroSmoothing) ? savedGyroSmoothing : 0.50, false);
 gyroSmoothSlider.addEventListener('input', () => {
-  const val = parseFloat(gyroSmoothSlider.value);
-  gyroSmoothVal.textContent = val.toFixed(2);
-  wsSend({ type: 'set_gyro_smoothing', value: val });
+  applyGyroSmoothing(parseFloat(gyroSmoothSlider.value));
 });
 
 const stillThresholdSlider = document.getElementById('stillThreshold');
 const stillThresholdVal = document.getElementById('stillThresholdVal');
+function applyStillThreshold(val, persist = true) {
+  currentStillThreshold = clampFloat(val, 0.02, 0.5, 0.10);
+  stillThresholdSlider.value = currentStillThreshold.toFixed(2);
+  stillThresholdVal.textContent = currentStillThreshold.toFixed(2);
+  wsSend({ type: 'set_still_threshold', value: currentStillThreshold });
+  if (persist) localStorage.setItem('stillThreshold', currentStillThreshold.toFixed(2));
+}
+const savedStillThreshold = parseFloat(localStorage.getItem('stillThreshold'));
+applyStillThreshold(isFinite(savedStillThreshold) ? savedStillThreshold : 0.10, false);
 stillThresholdSlider.addEventListener('input', () => {
-  const val = parseFloat(stillThresholdSlider.value);
-  stillThresholdVal.textContent = val.toFixed(2);
-  wsSend({ type: 'set_still_threshold', value: val });
+  applyStillThreshold(parseFloat(stillThresholdSlider.value));
 });
 
 const motionStillEl = document.getElementById('motionStill');
@@ -447,6 +483,16 @@ const cubeColorsPanel = document.getElementById('cubeColorsPanel');
 const cubeColorsClose = document.getElementById('cubeColorsClose');
 const cubeColorsEditor = document.getElementById('cubeColorsEditor');
 const resetCubeColorsBtn = document.getElementById('resetCubeColors');
+const dashboardPresetsToggle = document.getElementById('dashboardPresetsToggle');
+const dashboardPresetsPanel = document.getElementById('dashboardPresetsPanel');
+const dashboardPresetsClose = document.getElementById('dashboardPresetsClose');
+const dashboardPresetSelect = document.getElementById('dashboardPresetSelect');
+const dashboardPresetName = document.getElementById('dashboardPresetName');
+const dashboardPresetLoad = document.getElementById('dashboardPresetLoad');
+const dashboardPresetSaveNew = document.getElementById('dashboardPresetSaveNew');
+const dashboardPresetUpdate = document.getElementById('dashboardPresetUpdate');
+const dashboardPresetDelete = document.getElementById('dashboardPresetDelete');
+const dashboardPresetStatus = document.getElementById('dashboardPresetStatus');
 const spectrumLatencySlider = document.getElementById('spectrumLatency');
 const spectrumLatencyValEl = document.getElementById('spectrumLatencyVal');
 const spectrumNudgeSlider = document.getElementById('spectrumNudge');
@@ -483,7 +529,10 @@ function setLayerButton(btn, active) {
 
 function setSpectrogramSettingsOpen(open) {
   const active = open === true;
-  if (active) setCubeColorsOpen(false);
+  if (active) {
+    setCubeColorsOpen(false);
+    setDashboardPresetsOpen(false);
+  }
   if (spectrogramSettingsPanel) spectrogramSettingsPanel.hidden = !active;
   if (spectrogramSettingsToggle) {
     spectrogramSettingsToggle.classList.toggle('active', active);
@@ -494,12 +543,30 @@ function setSpectrogramSettingsOpen(open) {
 
 function setCubeColorsOpen(open) {
   const active = open === true;
-  if (active) setSpectrogramSettingsOpen(false);
+  if (active) {
+    setSpectrogramSettingsOpen(false);
+    setDashboardPresetsOpen(false);
+  }
   if (cubeColorsPanel) cubeColorsPanel.hidden = !active;
   if (cubeColorsToggle) {
     cubeColorsToggle.classList.toggle('active', active);
     cubeColorsToggle.setAttribute('aria-pressed', active ? 'true' : 'false');
     cubeColorsToggle.setAttribute('aria-expanded', active ? 'true' : 'false');
+  }
+}
+
+function setDashboardPresetsOpen(open) {
+  const active = open === true;
+  if (active) {
+    setSpectrogramSettingsOpen(false);
+    setCubeColorsOpen(false);
+    refreshDashboardPresets();
+  }
+  if (dashboardPresetsPanel) dashboardPresetsPanel.hidden = !active;
+  if (dashboardPresetsToggle) {
+    dashboardPresetsToggle.classList.toggle('active', active);
+    dashboardPresetsToggle.setAttribute('aria-pressed', active ? 'true' : 'false');
+    dashboardPresetsToggle.setAttribute('aria-expanded', active ? 'true' : 'false');
   }
 }
 
@@ -581,12 +648,21 @@ cubeColorsToggle?.addEventListener('click', () => {
 cubeColorsClose?.addEventListener('click', () => {
   setCubeColorsOpen(false);
 });
+dashboardPresetsToggle?.addEventListener('click', () => {
+  setDashboardPresetsOpen(dashboardPresetsPanel?.hidden !== false);
+});
+dashboardPresetsClose?.addEventListener('click', () => {
+  setDashboardPresetsOpen(false);
+});
 document.addEventListener('keydown', (e) => {
   if (e.key === 'Escape' && spectrogramSettingsPanel?.hidden === false) {
     setSpectrogramSettingsOpen(false);
   }
   if (e.key === 'Escape' && cubeColorsPanel?.hidden === false) {
     setCubeColorsOpen(false);
+  }
+  if (e.key === 'Escape' && dashboardPresetsPanel?.hidden === false) {
+    setDashboardPresetsOpen(false);
   }
 });
 spectrumLatencySlider?.addEventListener('input', () => {
@@ -1174,6 +1250,195 @@ function clampFloat(v, lo, hi, fallback) {
   return Math.max(lo, Math.min(hi, v));
 }
 
+let dashboardPresetsDoc = { version: 1, activePresetId: null, presets: [] };
+
+function setDashboardPresetStatus(text, isError = false) {
+  if (!dashboardPresetStatus) return;
+  dashboardPresetStatus.textContent = text || '';
+  dashboardPresetStatus.style.color = isError ? 'var(--warm)' : 'var(--slider-color)';
+}
+
+function setSnapshotValue(settings, key, value) {
+  if (!SYNCED_KEYS.has(key) || value == null) return;
+  settings[key] = String(value);
+}
+
+function dashboardSettingsSnapshot() {
+  const settings = gatherSyncedSettings();
+  const look = spectrumScore.getLookSettings();
+
+  setSnapshotValue(settings, 'gyroSmoothing', currentGyroSmoothing.toFixed(2));
+  setSnapshotValue(settings, 'stillThreshold', currentStillThreshold.toFixed(2));
+  setSnapshotValue(settings, 'uiHidden', document.body.classList.contains('ui-hidden') ? '1' : '0');
+  setSnapshotValue(settings, 'scoreSpeed', String(currentScoreSpeed | 0));
+  setSnapshotValue(settings, 'midiBrushEnabled', midiBrushEnabled ? '1' : '0');
+  setSnapshotValue(settings, 'spectrogramEnabled', spectrumEnabled ? '1' : '0');
+  setSnapshotValue(settings, 'spectrumLatencyMs', String(currentSpectrumLatencyMs | 0));
+  setSnapshotValue(settings, 'spectrumNudgeMs', String(currentSpectrumNudgeMs | 0));
+  setSnapshotValue(settings, 'spectrumGainDb', String(Math.round(look.gainOffsetDb || 0)));
+  setSnapshotValue(settings, 'spectrumCeilingDb', String(Math.round(look.ceilingDb || -15)));
+  setSnapshotValue(settings, 'spectrumFloorDb', String(Math.round(look.floorDb || -95)));
+  setSnapshotValue(settings, 'spectrumBgPct', String(Math.round((look.minUnit || 0) * 100)));
+  setSnapshotValue(settings, 'spectrumBgColor', spectrumScore.getModalityBackgroundColor());
+  setSnapshotValue(settings, 'spectrumCeilingColor', spectrumScore.getModalityCeilingColor());
+  setSnapshotValue(settings, 'spectrumSmoothPct', String(Math.round((look.smoothDensity || 0) * 100)));
+  setSnapshotValue(settings, 'spectrumBlurTenths', String(Math.round((look.blurPx || 0) * 10)));
+  setSnapshotValue(settings, 'spectrumTimePct', String(Math.round((look.temporalSmoothing || 0) * 100)));
+  setSnapshotValue(settings, 'spectrumPalette', spectrumPaletteEl?.value || look.palette || 'auto');
+  setSnapshotValue(settings, 'spectrumModalityPalettes', JSON.stringify(modalityPaletteStorageShape()));
+  setSnapshotValue(settings, 'spectrumModalityTransfer', JSON.stringify(modalityTransferStorageShape()));
+  setSnapshotValue(settings, 'cubeColorSettings', JSON.stringify({
+    cube: cubeScene.getAppearance(),
+    triangle: triangle.getAppearance(),
+  }));
+  setSnapshotValue(settings, 'ghostSize', (parseFloat(ghostSizeSlider?.value) || 1).toFixed(2));
+  setSnapshotValue(settings, 'cubeDepth', (parseFloat(cubeDepthSlider?.value) || 0).toFixed(2));
+  setSnapshotValue(settings, 'quality',
+    qualityCtrl?.querySelector('.q-btn.active')?.dataset.level || localStorage.getItem('quality') || 'med');
+  setSnapshotValue(settings, 'recordMode', recordModeEl?.value || 'visible');
+  setSnapshotValue(settings, 'mandalaEnabled', mandalaApi.isEnabled() ? '1' : '0');
+  return settings;
+}
+
+function selectedDashboardPreset() {
+  const id = dashboardPresetSelect?.value || dashboardPresetsDoc.activePresetId;
+  return dashboardPresetsDoc.presets.find((preset) => preset.id === id) || null;
+}
+
+function renderDashboardPresetPanel(doc = dashboardPresetsDoc) {
+  dashboardPresetsDoc = {
+    version: 1,
+    activePresetId: doc?.activePresetId || null,
+    presets: Array.isArray(doc?.presets) ? doc.presets : [],
+  };
+  if (!dashboardPresetSelect) return;
+  const presets = dashboardPresetsDoc.presets;
+  const selectedId = dashboardPresetsDoc.activePresetId || presets[0]?.id || '';
+  dashboardPresetSelect.textContent = '';
+  if (presets.length === 0) {
+    const opt = document.createElement('option');
+    opt.value = '';
+    opt.textContent = 'no presets';
+    dashboardPresetSelect.appendChild(opt);
+  } else {
+    for (const preset of presets) {
+      const opt = document.createElement('option');
+      opt.value = preset.id;
+      opt.textContent = preset.name || preset.id;
+      dashboardPresetSelect.appendChild(opt);
+    }
+    dashboardPresetSelect.value = presets.some((p) => p.id === selectedId) ? selectedId : presets[0].id;
+  }
+
+  const selected = selectedDashboardPreset();
+  if (dashboardPresetName) dashboardPresetName.value = selected?.name || '';
+  const hasPreset = !!selected;
+  if (dashboardPresetLoad) dashboardPresetLoad.disabled = !hasPreset;
+  if (dashboardPresetUpdate) dashboardPresetUpdate.disabled = !hasPreset;
+  if (dashboardPresetDelete) dashboardPresetDelete.disabled = !hasPreset;
+  setDashboardPresetStatus(presets.length === 1 ? '1 preset' : `${presets.length} presets`);
+}
+
+async function refreshDashboardPresets() {
+  if (!dashboardPresetsPanel) return;
+  try {
+    renderDashboardPresetPanel(await fetchDashboardPresets());
+  } catch (err) {
+    setDashboardPresetStatus('preset fetch failed', true);
+    console.warn('[dashboard presets] fetch failed:', err);
+  }
+}
+
+async function writeActiveSettingsAndReload(settings) {
+  const safe = {};
+  for (const key of SYNCED_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(settings, key) && settings[key] != null) {
+      safe[key] = String(settings[key]);
+      localStorage.setItem(key, safe[key]);
+    } else {
+      localStorage.removeItem(key);
+    }
+  }
+  await saveActiveSettings(safe);
+  window.location.reload();
+}
+
+async function loadSelectedDashboardPreset() {
+  const preset = selectedDashboardPreset();
+  if (!preset) return;
+  setDashboardPresetStatus('loading...');
+  try {
+    await writeActiveSettingsAndReload(preset.settings || {});
+  } catch (err) {
+    setDashboardPresetStatus('load failed', true);
+    console.warn('[dashboard presets] load failed:', err);
+  }
+}
+
+function currentPresetName(fallback = 'Dashboard preset') {
+  const typed = dashboardPresetName?.value?.trim();
+  return typed || fallback;
+}
+
+async function saveNewDashboardPreset() {
+  setDashboardPresetStatus('saving...');
+  try {
+    const settings = dashboardSettingsSnapshot();
+    const doc = await saveDashboardPreset({
+      name: currentPresetName('Dashboard preset'),
+      settings,
+    });
+    await saveActiveSettings(settings);
+    renderDashboardPresetPanel(doc);
+    setDashboardPresetStatus('saved');
+  } catch (err) {
+    setDashboardPresetStatus('save failed', true);
+    console.warn('[dashboard presets] save failed:', err);
+  }
+}
+
+async function updateSelectedDashboardPreset() {
+  const preset = selectedDashboardPreset();
+  if (!preset) return;
+  setDashboardPresetStatus('updating...');
+  try {
+    const settings = dashboardSettingsSnapshot();
+    const doc = await saveDashboardPreset({
+      id: preset.id,
+      name: currentPresetName(preset.name),
+      settings,
+    });
+    await saveActiveSettings(settings);
+    renderDashboardPresetPanel(doc);
+    setDashboardPresetStatus('updated');
+  } catch (err) {
+    setDashboardPresetStatus('update failed', true);
+    console.warn('[dashboard presets] update failed:', err);
+  }
+}
+
+async function deleteSelectedDashboardPreset() {
+  const preset = selectedDashboardPreset();
+  if (!preset) return;
+  if (!window.confirm(`Delete preset "${preset.name}"?`)) return;
+  setDashboardPresetStatus('deleting...');
+  try {
+    renderDashboardPresetPanel(await deleteDashboardPreset(preset.id));
+    setDashboardPresetStatus('deleted');
+  } catch (err) {
+    setDashboardPresetStatus('delete failed', true);
+    console.warn('[dashboard presets] delete failed:', err);
+  }
+}
+
+dashboardPresetSelect?.addEventListener('change', () => {
+  const preset = selectedDashboardPreset();
+  if (dashboardPresetName) dashboardPresetName.value = preset?.name || '';
+});
+dashboardPresetLoad?.addEventListener('click', loadSelectedDashboardPreset);
+dashboardPresetSaveNew?.addEventListener('click', saveNewDashboardPreset);
+dashboardPresetUpdate?.addEventListener('click', updateSelectedDashboardPreset);
+dashboardPresetDelete?.addEventListener('click', deleteSelectedDashboardPreset);
 
 if (recordModeEl) {
   const savedRecordMode = localStorage.getItem('recordMode');
@@ -1309,6 +1574,303 @@ const macInput = document.getElementById('macAddress');
 const SOLVED_FACELETS = 'UUUUUUUUURRRRRRRRRFFFFFFFFFDDDDDDDDDLLLLLLLLLBBBBBBBBB';
 let activeCube = null;
 let lastSolvedReport = true;
+let cubeConnectSeq = 0;
+const CUBE_STREAM_BOOT_WARN_MS = 2500;
+const CUBE_GYRO_FAIL_LOG_MS = 2000;
+const CUBE_GYRO_STALE_MS = 1800;
+const CUBE_STREAM_DIAG_MS = 5000;
+const CUBE_GYRO_FORWARD_FAIL_LOG_MS = 2000;
+const CUBE_RELAY_OFFLINE_LOG_MS = 2000;
+let lastCubeGyroFailAt = -Infinity;
+let cubeGyroFailSuppressed = 0;
+let cubeStreamDiagTimer = null;
+let pendingZeroGyroMirror = false;
+let pendingCubeGyroPayload = null;
+let pendingCubeGyroFrame = null;
+let moveInlineGyroCount = 0;
+let cubeGyroSeq = 0;
+let cubeGyroQueued = 0;
+let cubeGyroCoalesced = 0;
+let cubeGyroForwarded = 0;
+let cubeGyroForwardFailed = 0;
+let relayGyroTickCount = 0;
+let lastCubeGyroForwardFailAt = -Infinity;
+let cubeGyroForwardFailSuppressed = 0;
+let lastCubeRelayOfflineAt = -Infinity;
+let cubeRelayOfflineSuppressed = 0;
+
+function isCubeRelayOpen() {
+  return relayConnected && transportIsOpen();
+}
+
+function logCubeRelayOffline(detail) {
+  const now = performance.now();
+  if (now - lastCubeRelayOfflineAt >= CUBE_RELAY_OFFLINE_LOG_MS) {
+    const suffix = cubeRelayOfflineSuppressed > 0
+      ? ` (suppressed ${cubeRelayOfflineSuppressed} repeated offline events)`
+      : '';
+    console.error(
+      `[CUBE RELAY OFFLINE] ${detail}; start relay from Max ` +
+      'via node.script relay-controller.js -> "relay" / "start relay"' +
+      suffix
+    );
+    lastCubeRelayOfflineAt = now;
+    cubeRelayOfflineSuppressed = 0;
+  } else {
+    cubeRelayOfflineSuppressed++;
+  }
+}
+
+function updateCubeConnectAvailability({ preserveStatus = false } = {}) {
+  if (!connectBtn) return;
+  if (activeCube) {
+    connectBtn.disabled = true;
+    connectBtn.textContent = 'Connected';
+    connectBtn.classList.add('connected');
+    return;
+  }
+  const ok = isCubeRelayOpen();
+  connectBtn.disabled = !ok;
+  connectBtn.textContent = ok ? 'Connect' : 'Relay Offline';
+  connectBtn.classList.toggle('connected', false);
+  if (!preserveStatus) {
+    cubeStatus.textContent = ok ? '' : 'relay offline';
+    cubeStatus.className = ok ? '' : 'err';
+  }
+}
+
+function invalidateCubeSessionForRelayClose() {
+  if (!activeCube) return;
+  const cube = activeCube;
+  activeCube = null;
+  cubeConnectSeq++;
+  stopCubeStreamDiagnostics();
+  clearPendingCubeGyro();
+  pendingZeroGyroMirror = false;
+  logCubeRelayOffline('relay WebSocket closed while BLE cube was connected; ending cube forwarding session');
+  try {
+    if (typeof cube.disconnect === 'function') cube.disconnect();
+  } catch (err) {
+    console.warn('[CUBE RELAY OFFLINE] cube disconnect failed:', err);
+  }
+  cubeScene.revertConnectView();
+}
+
+function eventKeys(event) {
+  if (!event || typeof event !== 'object') return 'non-object';
+  return Object.keys(event).slice(0, 10).join(',') || 'none';
+}
+
+function normalizeQuatCandidate(candidate) {
+  if (!candidate) return null;
+  let vals = null;
+  if (Array.isArray(candidate) && candidate.length >= 4) {
+    vals = candidate.slice(0, 4);
+  } else if (typeof candidate === 'object') {
+    vals = [candidate.x, candidate.y, candidate.z, candidate.w];
+  }
+  if (!vals) return null;
+  const nums = vals.map(Number);
+  if (!nums.every(Number.isFinite)) return null;
+  const norm2 = nums[0] * nums[0] + nums[1] * nums[1] + nums[2] * nums[2] + nums[3] * nums[3];
+  if (!Number.isFinite(norm2) || norm2 < 1e-12) return null;
+  const invNorm = 1 / Math.sqrt(norm2);
+  return { x: nums[0] * invNorm, y: nums[1] * invNorm, z: nums[2] * invNorm, w: nums[3] * invNorm };
+}
+
+function cubeEventQuaternion(event) {
+  const candidates = [
+    event?.quaternion,
+    event?.gyro?.quaternion,
+    event?.gyro,
+    event?.data?.quaternion,
+    event?.data,
+    event,
+  ];
+  for (const candidate of candidates) {
+    const q = normalizeQuatCandidate(candidate);
+    if (q) return q;
+  }
+  return null;
+}
+
+function isCubeGyroEvent(event) {
+  return event?.type === 'GYRO' ||
+    event?.type === 'GYROSCOPE' ||
+    !!event?.quaternion ||
+    !!event?.gyro;
+}
+
+function logCubeGyroFail(detail, event) {
+  const now = performance.now();
+  if (now - lastCubeGyroFailAt >= CUBE_GYRO_FAIL_LOG_MS) {
+    const suffix = cubeGyroFailSuppressed > 0
+      ? ` (suppressed ${cubeGyroFailSuppressed} repeated failures)`
+      : '';
+    console.error(`[CUBE GYRO FAIL] ${detail}; eventType=${event?.type || 'unknown'} keys=${eventKeys(event)}${suffix}`);
+    lastCubeGyroFailAt = now;
+    cubeGyroFailSuppressed = 0;
+  } else {
+    cubeGyroFailSuppressed++;
+  }
+}
+
+function cubeGyroPayload(q, event) {
+  return {
+    type: 'gyro',
+    data: {
+      quaternion: q,
+      velocity: event?.velocity || event?.gyro?.velocity || null,
+      seq: ++cubeGyroSeq,
+      sampleMs: Math.round(performance.now()),
+    },
+  };
+}
+
+function logCubeGyroForwardFail(reason) {
+  const now = performance.now();
+  if (now - lastCubeGyroForwardFailAt >= CUBE_GYRO_FORWARD_FAIL_LOG_MS) {
+    const suffix = cubeGyroForwardFailSuppressed > 0
+      ? ` (suppressed ${cubeGyroForwardFailSuppressed} repeated forward failures)`
+      : '';
+    console.warn(`[CUBE GYRO FORWARD FAIL] latest gyro not sent (${reason})${suffix}`);
+    lastCubeGyroForwardFailAt = now;
+    cubeGyroForwardFailSuppressed = 0;
+  } else {
+    cubeGyroForwardFailSuppressed++;
+  }
+}
+
+function sendCubeGyroPayloadNow(payload, reason = 'flush') {
+  if (!payload) return true;
+  if (!isCubeRelayOpen()) {
+    logCubeRelayOffline(`keeping latest gyro queued (${reason})`);
+    return false;
+  }
+  const ok = wsSend(payload);
+  if (ok) {
+    cubeGyroForwarded++;
+    return true;
+  }
+  cubeGyroForwardFailed++;
+  logCubeGyroForwardFail(reason);
+  return false;
+}
+
+function queueCubeGyroForRelay(payload) {
+  if (!payload) return false;
+  if (pendingCubeGyroPayload) cubeGyroCoalesced++;
+  pendingCubeGyroPayload = payload;
+  cubeGyroQueued++;
+  if (!isCubeRelayOpen()) {
+    logCubeRelayOffline('keeping latest gyro queued while relay WebSocket is closed');
+    return true;
+  }
+  if (pendingCubeGyroFrame === null) {
+    pendingCubeGyroFrame = requestAnimationFrame(() => {
+      pendingCubeGyroFrame = null;
+      flushPendingCubeGyroToRelay('frame');
+    });
+  }
+  return true;
+}
+
+function flushPendingCubeGyroToRelay(reason = 'flush') {
+  if (pendingCubeGyroFrame !== null) {
+    cancelAnimationFrame(pendingCubeGyroFrame);
+    pendingCubeGyroFrame = null;
+  }
+  if (!pendingCubeGyroPayload) return true;
+  const payload = pendingCubeGyroPayload;
+  const sent = sendCubeGyroPayloadNow(payload, reason);
+  if (sent) {
+    pendingCubeGyroPayload = null;
+    if (pendingZeroGyroMirror && !String(reason).startsWith('pre-zero')) {
+      flushPendingZeroGyroToRelay(`after-gyro:${reason}`);
+    }
+  }
+  return sent;
+}
+
+function clearPendingCubeGyro() {
+  if (pendingCubeGyroFrame !== null) {
+    cancelAnimationFrame(pendingCubeGyroFrame);
+    pendingCubeGyroFrame = null;
+  }
+  pendingCubeGyroPayload = null;
+}
+
+function resetCubeGyroForwardState() {
+  clearPendingCubeGyro();
+  pendingZeroGyroMirror = false;
+  moveInlineGyroCount = 0;
+  cubeGyroSeq = 0;
+  cubeGyroQueued = 0;
+  cubeGyroCoalesced = 0;
+  cubeGyroForwarded = 0;
+  cubeGyroForwardFailed = 0;
+  relayGyroTickCount = 0;
+  lastCubeGyroForwardFailAt = -Infinity;
+  cubeGyroForwardFailSuppressed = 0;
+  lastCubeRelayOfflineAt = -Infinity;
+  cubeRelayOfflineSuppressed = 0;
+}
+
+function sendZeroGyroToRelay(reason = 'zero') {
+  // Keep the engine zero anchored to the same physical pose the dashboard
+  // just adopted. If a gyro sample is waiting for the rAF coalescer, push it
+  // first so the relay captures zero against the latest Kalman input.
+  if (!flushPendingCubeGyroToRelay(`pre-zero:${reason}`)) {
+    pendingZeroGyroMirror = true;
+    return false;
+  }
+  if (!isCubeRelayOpen()) {
+    logCubeRelayOffline(`zero_gyro mirror not sent (${reason})`);
+    pendingZeroGyroMirror = true;
+    return false;
+  }
+  if (wsSend({ type: 'zero_gyro' })) {
+    pendingZeroGyroMirror = false;
+    return true;
+  }
+  pendingZeroGyroMirror = true;
+  return false;
+}
+
+function flushPendingZeroGyroToRelay(reason = 'flush') {
+  if (!pendingZeroGyroMirror) return true;
+  return sendZeroGyroToRelay(reason);
+}
+
+function sendCubeGyroEvent(event, opts = {}) {
+  const q = cubeEventQuaternion(event);
+  if (!q) {
+    logCubeGyroFail('cube gyro event did not contain a finite quaternion', event);
+    return false;
+  }
+  const payload = cubeGyroPayload(q, event);
+  const sent = opts.forceRelay
+    ? sendCubeGyroPayloadNow(payload, opts.reason || 'force')
+    : queueCubeGyroForRelay(payload);
+  if (opts.forceRelay && !sent) queueCubeGyroForRelay(payload);
+  return true;
+}
+
+async function requestCubeFacelets(cube, reason = 'bootstrap') {
+  if (!cube || typeof cube.sendCubeCommand !== 'function') return;
+  try {
+    await cube.sendCubeCommand({ type: 'REQUEST_FACELETS' });
+  } catch (err) {
+    console.warn(`[CUBE BOOTSTRAP] REQUEST_FACELETS failed (${reason}):`, err);
+  }
+}
+
+function stopCubeStreamDiagnostics() {
+  if (cubeStreamDiagTimer !== null) {
+    clearInterval(cubeStreamDiagTimer);
+    cubeStreamDiagTimer = null;
+  }
+}
 
 // ---- Move-remap verifier --------------------------------------------------
 //
@@ -1385,7 +1947,7 @@ function checkZeroGestureFromGanMove(move) {
     const span = Math.round(now - _zeroQuadHistory[0]);
     _zeroQuadHistory.length = 0;
     cubeScene.zeroGyro();
-    wsSend({ type: 'zero_gyro' });
+    sendZeroGyroToRelay('gesture');
     console.log(
       `[CUBE ZERO GESTURE] raw GAN U' x${ZERO_QUAD_COUNT} in ${span}ms — zeroing gyro`,
     );
@@ -1396,8 +1958,14 @@ function checkZeroGestureFromGanMove(move) {
 // dashboard drafts stored `ganMacAddress` in localStorage, which can resurrect
 // stale addresses even after the HTML default is removed.
 localStorage.removeItem('ganMacAddress');
+updateCubeConnectAvailability();
 
 connectBtn.addEventListener('click', async () => {
+  if (!isCubeRelayOpen()) {
+    logCubeRelayOffline('blocked BLE connect because relay WebSocket is closed');
+    updateCubeConnectAvailability();
+    return;
+  }
   const macAddress = macInput.value.trim().toUpperCase();
   const macRegex = /^([0-9A-F]{2}[:-]){5}([0-9A-F]{2})$/;
   if (!macRegex.test(macAddress)) {
@@ -1412,6 +1980,7 @@ connectBtn.addEventListener('click', async () => {
 
   try {
     const cube = await connectGanCube(async (device, isFallbackCall) => macAddress);
+    resetCubeGyroForwardState();
     activeCube = cube;
 
     cubeStatus.textContent = 'connected';
@@ -1421,13 +1990,47 @@ connectBtn.addEventListener('click', async () => {
     connectBtn.disabled = true;
     cubeScene.applyConnectView();
     armMoveRemapVerifier();
+    const thisConnectSeq = ++cubeConnectSeq;
+    let seenCubeEvent = false;
+    let seenGyroEvent = false;
+    let seenFaceletsEvent = false;
+    let moveCount = 0;
+    let gyroCount = 0;
+    let faceletsCount = 0;
+    let lastCubeEventAt = performance.now();
+    let lastMoveAt = -Infinity;
+    let lastGyroAt = -Infinity;
+    let staleRecoveryInFlight = false;
 
     cube.events$.subscribe((event) => {
+      if (activeCube !== cube || thisConnectSeq !== cubeConnectSeq) return;
+      const eventNow = performance.now();
+      seenCubeEvent = true;
+      lastCubeEventAt = eventNow;
       if (event.type === 'MOVE') {
+        moveCount++;
+        lastMoveAt = eventNow;
         recordSentMove(event.move);
-        wsSend({ type: 'move', value: event.move });
+        const moveEnvelope = { type: 'move', value: event.move };
+        const gyroFlushed = flushPendingCubeGyroToRelay('pre-move');
+        if (!gyroFlushed && pendingCubeGyroPayload?.data) {
+          // If the low-priority gyro lane is backed up, carry the latest
+          // pose on the non-droppable move lane. Relay applies it before
+          // engine.onTurn, preserving read-head/phrase ordering.
+          moveEnvelope.gyro = pendingCubeGyroPayload.data;
+          moveEnvelope.gyroInlineReason = 'pre-move-flush-failed';
+        }
+        const moveSent = wsSend(moveEnvelope);
+        if (moveSent && moveEnvelope.gyro) {
+          moveInlineGyroCount++;
+          clearPendingCubeGyro();
+        } else if (!moveSent) {
+          console.error(`[CUBE MOVE FAIL] websocket was not open while forwarding move ${event.move}`);
+        }
         checkZeroGestureFromGanMove(event.move);
       } else if (event.type === 'FACELETS') {
+        faceletsCount++;
+        seenFaceletsEvent = true;
         const solved = event.facelets === SOLVED_FACELETS;
         if (solved && !lastSolvedReport) {
           // Edge fires only through the relay → WS solve message → setSolvedBadge,
@@ -1437,24 +2040,77 @@ connectBtn.addEventListener('click', async () => {
           stateUi.setSolvedBadge(false, false);
         }
         lastSolvedReport = solved;
-      } else if (event.type === 'GYRO' || event.type === 'GYROSCOPE' || event.gyro) {
-        wsSend({ type: 'gyro', data: event.gyro || event });
+      } else if (isCubeGyroEvent(event)) {
+        const sent = sendCubeGyroEvent(event, {
+          forceRelay: !seenGyroEvent,
+          reason: 'first-gyro',
+        });
+        if (sent) {
+          gyroCount++;
+          lastGyroAt = eventNow;
+          seenGyroEvent = true;
+        }
+      } else if (event.type === 'HARDWARE' && event.gyroSupported === false) {
+        console.error('[CUBE GYRO FAIL] connected cube reports gyroSupported=false; live cube and ghost snap need a gyro-capable cube');
       } else if (event.type === 'DISCONNECT') {
         activeCube = null;
+        cubeConnectSeq++;
+        stopCubeStreamDiagnostics();
+        clearPendingCubeGyro();
+        pendingZeroGyroMirror = false;
         cubeStatus.textContent = 'disconnected';
         cubeStatus.className = 'err';
-        connectBtn.textContent = 'Connect';
-        connectBtn.classList.remove('connected');
-        connectBtn.disabled = false;
+        updateCubeConnectAvailability({ preserveStatus: true });
         cubeScene.revertConnectView();
         interruptionLayer.onPanic();
       }
     });
+    requestCubeFacelets(cube, 'connect');
+    stopCubeStreamDiagnostics();
+    cubeStreamDiagTimer = setInterval(async () => {
+      if (activeCube !== cube || thisConnectSeq !== cubeConnectSeq) {
+        stopCubeStreamDiagnostics();
+        return;
+      }
+      const now = performance.now();
+      const gyroAge = Number.isFinite(lastGyroAt) ? Math.round(now - lastGyroAt) : null;
+      const moveAge = Number.isFinite(lastMoveAt) ? Math.round(now - lastMoveAt) : null;
+      console.log(
+        `[CUBE STREAM] events=${seenCubeEvent ? 'yes' : 'no'} move=${moveCount} gyro=${gyroCount} facelets=${faceletsCount} ` +
+        `lastMoveMs=${moveAge ?? 'never'} lastGyroMs=${gyroAge ?? 'never'} lastEventMs=${Math.round(now - lastCubeEventAt)} ` +
+        `gyroQueue=${cubeGyroQueued} coalesced=${cubeGyroCoalesced} fwd=${cubeGyroForwarded}/${cubeGyroForwardFailed} ` +
+        `inline=${moveInlineGyroCount} relayTicks=${relayGyroTickCount}`
+      );
+      const moveStreamAlive = Number.isFinite(lastMoveAt) && now - lastMoveAt <= CUBE_STREAM_DIAG_MS + 500;
+      const gyroDead = !Number.isFinite(lastGyroAt) || now - lastGyroAt >= CUBE_GYRO_STALE_MS;
+      if (moveStreamAlive && gyroDead && !staleRecoveryInFlight) {
+        staleRecoveryInFlight = true;
+        console.error(
+          `[CUBE GYRO STALE] move stream is alive but no GYRO event for ${gyroAge ?? 'never'} ms; ` +
+          'requesting facelets only and leaving moves active'
+        );
+        await requestCubeFacelets(cube, 'gyro-stale');
+        staleRecoveryInFlight = false;
+      }
+    }, CUBE_STREAM_DIAG_MS);
+    setTimeout(() => {
+      if (activeCube !== cube || thisConnectSeq !== cubeConnectSeq) return;
+      if (!seenCubeEvent) {
+        console.error('[CUBE STREAM FAIL] Bluetooth connected but no cube events arrived after connect; check BLE notifications and cube selection');
+      } else {
+        if (!seenFaceletsEvent) {
+          console.warn('[CUBE BOOTSTRAP] no FACELETS event after REQUEST_FACELETS; moves may be blocked by the cube protocol');
+        }
+        if (!seenGyroEvent) {
+          console.error('[CUBE GYRO FAIL] Bluetooth connected but no valid GYRO quaternion reached the dashboard after connect');
+        }
+      }
+    }, CUBE_STREAM_BOOT_WARN_MS);
 
   } catch (err) {
     console.error('Cube connect error:', err);
     cubeStatus.textContent = 'failed: ' + err.message;
     cubeStatus.className = 'err';
-    connectBtn.disabled = false;
+    updateCubeConnectAvailability({ preserveStatus: true });
   }
 });

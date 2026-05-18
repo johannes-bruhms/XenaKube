@@ -35,7 +35,7 @@ npm run gen:max
 npm run check:doc-sizes
 npm run check:agents
 npm run check:docs
-npx tsx relay.js
+npx tsx relay.js      # dev/debug direct relay; performance starts from Max node.script relay-controller.js -> relay
 npm run dev
 ```
 
@@ -46,6 +46,7 @@ npm run dev
 - Never hand-edit `max/gen_includes.js`. It is generated from `src/osc-schema.ts`, `src/swam-mapping.ts`, and `src/face-gesture.ts`.
 - Keep the Max patch thin. New synthesis logic belongs in `max/xk_swam.js`, not in a growing web of patch objects.
 - Keep `public/dashboard.html` structural. Dashboard logic belongs in `public/js/*.js`; styling belongs in `public/css/main.css`.
+- Keep relay lifecycle single-path: last dashboard disconnect exits immediately by default, Max `stop relay` goes through relay's loopback shutdown API, and controller/script shutdown must not orphan a relay child.
 - Recurrent bugs in this repo are usually silent-failure surfaces. Do not ship a local fix without the invariant or telemetry that proves the bug and guards it from returning.
 - If code and docs diverge, fix the docs in the same change.
 - The physical solved edge is a cosmology anchor: alpha-cosmo returns to beta-cosmo with the normal structural reset; already-beta sessions stay in place.

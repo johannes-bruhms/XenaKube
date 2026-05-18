@@ -944,6 +944,9 @@ const snapTarget = new THREE.Quaternion(0, 0, 0, 1);
 const ghostQuatTarget = new THREE.Quaternion();
 let hasSnapTarget = false;
 const GHOST_SLERP_RATE = 0.18;  // per-frame; ~3 frames to noticeable arrival
+const GHOST_SNAP_FAIL_LOG_MS = 2000;
+let lastGhostSnapFailAt = -Infinity;
+let ghostSnapFailSuppressed = 0;
 
 const ACTIVE_STEP_MS = 100;
 const sphereScaleFrom = new Float32Array(8).fill(1.0);
@@ -999,8 +1002,8 @@ const gyroZeroInv = new THREE.Quaternion(0, 0, 0, 1);
 // Decouples on-screen orientation from however the cube is physically held
 // at connect time. Set by applyConnectView; consumed by setCubeQuat on the
 // first sample which adopts it as the zero and fires the onAutoZero callback
-// (main.js wires it to transport.send({type:'zero_gyro'}) so the engine's
-// snap cells re-center on the same rest pose).
+// (main.js mirrors it after flushing any pending BLE gyro sample so the
+// engine snap cells re-center on the same rest pose).
 let autoZeroPending = false;
 let _onAutoZero = null;
 
@@ -1151,12 +1154,11 @@ const _activePairCPullLocal = new THREE.Vector3();
 const _activePairKLabelWorld = new THREE.Vector3();
 const _activePairCLabelWorld = new THREE.Vector3();
 const _activePairLabelMergeWorld = new THREE.Vector3();
-const _activePairCardAnchorWorld = new THREE.Vector3();
 const _activePairCameraRight = new THREE.Vector3();
 const _activePairCameraUp = new THREE.Vector3();
 const _activePairLabelLocal = new THREE.Vector3();
-const _activePairCardProj = new THREE.Vector3();
-let activePairCardAnchorReady = false;
+const _activeCardGhostCenterWorld = new THREE.Vector3();
+const _activeCardGhostCenterProj = new THREE.Vector3();
 let contrastLineCount = 0;
 
 function projectToContrast(v, out) {
@@ -1441,12 +1443,10 @@ function resetActivePairLabelOpacity() {
 function startActivePairConjure() {
   activePairConjureActive = true;
   activePairConjureStart = performance.now();
-  activePairCardAnchorReady = false;
   resetActivePairLabelOpacity();
 }
 
 function applyActivePairConjure(now) {
-  activePairCardAnchorReady = false;
   if (!activePairConjureActive || !activeAnimReady || !cActiveAnimReady || !ghostGroup.visible) {
     resetActivePairLabelOpacity();
     return;
@@ -1504,9 +1504,6 @@ function applyActivePairConjure(now) {
   for (let c = 0; c < ghostLabels.length; c++) {
     labelOpacity(ghostLabels[c], c === currentActiveC ? labelAlpha : 1);
   }
-
-  _activePairCardAnchorWorld.copy(_activePairLabelMergeWorld).addScaledVector(_activePairCameraRight, 0.22);
-  activePairCardAnchorReady = true;
 }
 
 function paintActiveVertex(slot, activeK) {
@@ -1983,8 +1980,7 @@ export function update(state, move) {
   // be phrase-locked so material selection remains stable while notes draw;
   // using it here would visually freeze the ghost during the phrase.
   if (state.snapQuat && state.snapQuat.length === 4) {
-    snapTarget.set(state.snapQuat[0], state.snapQuat[1], state.snapQuat[2], state.snapQuat[3]);
-    hasSnapTarget = true;
+    hasSnapTarget = setSnapTargetFromState(state.snapQuat);
     assertGhostSnapSource(state);
   }
   if (phraseTriggered) {
@@ -2007,18 +2003,71 @@ function resolveActiveGhostC(state, activeIdx) {
   return assigned;
 }
 
+function logGhostSnapFail(detail) {
+  const now = performance.now();
+  if (now - lastGhostSnapFailAt >= GHOST_SNAP_FAIL_LOG_MS) {
+    const suffix = ghostSnapFailSuppressed > 0
+      ? ` (suppressed ${ghostSnapFailSuppressed} repeated snap failures)`
+      : '';
+    console.error(`[GHOST SNAP FAIL] ${detail}${suffix}`);
+    lastGhostSnapFailAt = now;
+    ghostSnapFailSuppressed = 0;
+  } else {
+    ghostSnapFailSuppressed++;
+  }
+}
+
+function snapQuatMetrics(q) {
+  if (!q || q.length !== 4) return null;
+  const vals = q.map(Number);
+  if (!vals.every(Number.isFinite)) return null;
+  const norm2 = vals[0] * vals[0] + vals[1] * vals[1] + vals[2] * vals[2] + vals[3] * vals[3];
+  if (!Number.isFinite(norm2) || norm2 < 1e-12) return null;
+  const invNorm = 1 / Math.sqrt(norm2);
+  return {
+    vals,
+    norm2,
+    unit: [
+      vals[0] * invNorm,
+      vals[1] * invNorm,
+      vals[2] * invNorm,
+      vals[3] * invNorm,
+    ],
+  };
+}
+
+function setSnapTargetFromState(q) {
+  const metrics = snapQuatMetrics(q);
+  if (!metrics) {
+    logGhostSnapFail('state.snapQuat is invalid; ghost snap target ignored');
+    return false;
+  }
+  snapTarget.set(metrics.unit[0], metrics.unit[1], metrics.unit[2], metrics.unit[3]);
+  return true;
+}
+
 function assertGhostSnapSource(state) {
-  const q = state.snapQuat;
+  const metrics = snapQuatMetrics(state.snapQuat);
+  if (!metrics || !hasSnapTarget) {
+    logGhostSnapFail('state.snapQuat is invalid; check engine getState() snap target generation');
+    return;
+  }
+  if (Math.abs(metrics.norm2 - 1) > 1e-8) {
+    logGhostSnapFail(
+      `state.snapQuat is not unit length (norm2=${metrics.norm2.toFixed(8)}); ` +
+      'check src/quaternion.ts S4 table generation'
+    );
+  }
   const dot = Math.abs(
-    snapTarget.x * q[0] +
-    snapTarget.y * q[1] +
-    snapTarget.z * q[2] +
-    snapTarget.w * q[3]
+    snapTarget.x * metrics.unit[0] +
+    snapTarget.y * metrics.unit[1] +
+    snapTarget.z * metrics.unit[2] +
+    snapTarget.w * metrics.unit[3]
   );
   const drift = 1 - Math.min(1, dot);
   if (drift > 1e-6) {
-    console.error(
-      '[GHOST SNAP FAIL] ghost target is not state.snapQuat; ' +
+    logGhostSnapFail(
+      'ghost target is not state.snapQuat; ' +
       'check cube-scene.js update() for accidental cQuat/phrase-lock coupling'
     );
   }
@@ -2079,25 +2128,25 @@ export function getCWorldPos(c, out) {
   return out;
 }
 
-/** Project the active pair's conjure point (fallback: active ghost C) to CSS pixels. */
+/** Project the active ghost C anchor to CSS pixels, with side hint for cards. */
 export function getActiveCardAnchorScreenPos(out = {}) {
   if (!ghostGroup.visible) {
     out.x = 0;
     out.y = 0;
     out.visible = false;
+    out.side = 'right';
     return out;
   }
-  if (activePairCardAnchorReady) {
-    _activeCScreenWorld.copy(_activePairCardAnchorWorld);
-  } else {
-    ghostGroup.updateMatrixWorld(true);
-    ghostVertMeshes[currentActiveC].getWorldPosition(_activeCScreenWorld);
-  }
+  ghostGroup.updateMatrixWorld(true);
+  ghostVertMeshes[currentActiveC].getWorldPosition(_activeCScreenWorld);
+  ghostGroup.getWorldPosition(_activeCardGhostCenterWorld);
   _activeCScreenProj.copy(_activeCScreenWorld).project(camera);
+  _activeCardGhostCenterProj.copy(_activeCardGhostCenterWorld).project(camera);
   const r = canvas.getBoundingClientRect();
   out.x = r.left + (_activeCScreenProj.x * 0.5 + 0.5) * r.width;
   out.y = r.top + (-_activeCScreenProj.y * 0.5 + 0.5) * r.height;
   out.visible = _activeCScreenProj.z >= -1 && _activeCScreenProj.z <= 1;
+  out.side = _activeCScreenProj.x >= _activeCardGhostCenterProj.x ? 'left' : 'right';
   return out;
 }
 

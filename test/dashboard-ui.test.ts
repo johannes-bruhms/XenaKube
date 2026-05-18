@@ -57,7 +57,7 @@ describe('Dashboard UI collapse behavior', () => {
     expect(cubeScene).toContain('renderAdaptiveWireframes();');
   });
 
-  it('conjures active K/C cards from the active K/C label pair after phrase trigger', () => {
+  it('conjures active K/C cards from the ghost active C anchor after phrase trigger', () => {
     expect(main).toContain('stateUi.init({');
     expect(main).toContain('getActiveCardAnchorScreenPos: cubeScene.getActiveCardAnchorScreenPos');
     expect(cubeScene).toContain('export function getActiveCardAnchorScreenPos(out = {})');
@@ -72,8 +72,13 @@ describe('Dashboard UI collapse behavior', () => {
     expect(cubeScene).toContain('ghostLabels[currentActiveC].sprite.position.copy(_activePairLabelLocal);');
     expect(cubeScene).toContain('labelOpacity(vertexLabels[k], k === currentActiveK ? labelAlpha : 1);');
     expect(cubeScene).toContain('labelOpacity(ghostLabels[c], c === currentActiveC ? labelAlpha : 1);');
-    expect(cubeScene).toContain('_activeCScreenWorld.copy(_activePairCardAnchorWorld);');
+    expect(cubeScene).toContain('ghostVertMeshes[currentActiveC].getWorldPosition(_activeCScreenWorld);');
+    expect(cubeScene).toContain('ghostGroup.getWorldPosition(_activeCardGhostCenterWorld);');
+    expect(cubeScene).toContain("out.side = _activeCScreenProj.x >= _activeCardGhostCenterProj.x ? 'left' : 'right';");
+    expect(cubeScene).not.toContain('_activePairCardAnchorWorld');
     expect(stateUi).toContain('getActiveCardAnchorScreenPos');
+    expect(stateUi).toContain("const preferLeft = anchor.side === 'left';");
+    expect(stateUi).toContain('let x = preferLeft ? anchor.x - w - gap : anchor.x + gap;');
     expect(stateUi).toContain('if (move) showActiveCards();');
     expect(stateUi).toContain('showActiveCards();');
     expect(stateUi).toContain("activeCardsEl.classList.add('conjuring');");
@@ -190,7 +195,9 @@ describe('Dashboard UI collapse behavior', () => {
   it('keeps the physical U-prime zero gesture independent of engine upFace calibration', () => {
     expect(main).toContain('function checkZeroGestureFromGanMove(move)');
     expect(main).toContain('raw GAN `U\'`');
-    expect(main).toMatch(/wsSend\(\{ type: 'move', value: event\.move \}\);\s*checkZeroGestureFromGanMove\(event\.move\);/);
+    expect(main).toContain("const moveEnvelope = { type: 'move', value: event.move };");
+    expect(main).toMatch(/const moveSent = wsSend\(moveEnvelope\);[\s\S]*checkZeroGestureFromGanMove\(event\.move\);/);
+    expect(main).toContain('[CUBE MOVE FAIL]');
     expect(main).toContain("moveStr !== \"U'\"");
     expect(main).not.toContain('checkTopFaceZeroGesture');
     expect(main).not.toMatch(/upFace\s*!==\s*['"]U['"]/);

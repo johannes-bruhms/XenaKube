@@ -2,8 +2,8 @@
 //
 // Phase 2.3 — WebSocket transport between the dashboard and the relay
 // (`relay.js`). Owns the single WS connection, auto-reconnects on
-// close/error with a 2 s backoff, parses inbound JSON envelopes, and
-// dispatches typed events to subscribers via `on(name, cb)`.
+// close/error with a 2 s backoff while the page is live, parses inbound JSON
+// envelopes, and dispatches typed events to subscribers via `on(name, cb)`.
 //
 // All outbound WS messages flow through `send(obj)` (BLE move events,
 // gyro mirrors, mode changes, diagram selection, panic, etc.). The
@@ -16,6 +16,8 @@
 // this module too.
 
 let ws = null;
+let reconnectTimer = null;
+let lifecycleClosing = false;
 
 // Browser -> relay backpressure guard. Gyro mirrors are continuous telemetry
 // and can be dropped; cube moves are live control messages and must always be
@@ -40,7 +42,7 @@ function _logBackpressure(kind, buffered, dropped) {
 
 // Event handler registry. One array per event name.
 //   open           — WS connection established (no args).
-//   close          — WS closed; transport will auto-reconnect (no args).
+//   close          — WS closed; transport will auto-reconnect unless page is unloading. (no args).
 //   state          — `{ type: 'state', data, move }` from the engine. (data, move).
 //   gyroState      — `{ type: 'gyro_state', data }` BLE-rate full state burst. (data).
 //   gyroTick       — `{ type: 'gyro_tick', data, dev }` 60 Hz Kalman pose. (data, dev).
@@ -81,6 +83,28 @@ function emit(name, ...args) {
   }
 }
 
+function clearReconnectTimer() {
+  if (reconnectTimer !== null) {
+    clearTimeout(reconnectTimer);
+    reconnectTimer = null;
+  }
+}
+
+function scheduleReconnect() {
+  if (lifecycleClosing) return;
+  clearReconnectTimer();
+  reconnectTimer = setTimeout(connect, 2000);
+}
+
+function closeForPageLifecycle() {
+  lifecycleClosing = true;
+  clearReconnectTimer();
+  if (ws && (ws.readyState === WebSocket.OPEN || ws.readyState === WebSocket.CONNECTING)) {
+    try { ws.close(1001, 'page lifecycle'); }
+    catch (e) { /* noop */ }
+  }
+}
+
 /** Subscribe to a transport event. Multiple subscribers per name allowed. */
 export function on(name, fn) {
   if (!handlers[name]) {
@@ -105,14 +129,22 @@ export function send(obj) {
   return false;
 }
 
+/** True only while the dashboard has an open relay WebSocket. */
+export function isOpen() {
+  return !!(ws && ws.readyState === WebSocket.OPEN);
+}
+
 /** Open the WebSocket. Auto-reconnects on close / error. */
 export function connect() {
+  lifecycleClosing = false;
+  clearReconnectTimer();
   ws = new WebSocket('ws://' + window.location.host);
 
   ws.onopen  = () => emit('open');
   ws.onclose = () => {
     emit('close');
-    setTimeout(connect, 2000);
+    ws = null;
+    scheduleReconnect();
   };
   ws.onerror = () => { try { ws.close(); } catch (e) { /* noop */ } };
 
@@ -139,3 +171,6 @@ export function connect() {
     }
   };
 }
+
+window.addEventListener('pagehide', closeForPageLifecycle, { capture: true });
+window.addEventListener('beforeunload', closeForPageLifecycle, { capture: true });

@@ -101,13 +101,11 @@ npm install
 
 Open the SWAM Cello bridge patch in Max 9+ (see `max/` + `CLAUDE.md` → "Synthesis Bridge — Max/MSP + SWAM Cello").
 
-**2. Start the relay**
+**2. Start the relay from Max**
 
-```bash
-npx tsx relay.js
-```
+In the patch, use `node.script relay-controller.js`: start the controller, then send it `relay` or `start relay`. The controller launches `relay.js`, opens `http://localhost:3000`, and owns shutdown via `stop relay`.
 
-Default cosmology is `beta-cosmo`. To boot the historical walk path for A/B testing:
+Default cosmology is `beta-cosmo`. For developer A/B testing outside Max only, you can still run the relay directly:
 
 ```bash
 $env:XK_COSMO = 'alpha-cosmo'

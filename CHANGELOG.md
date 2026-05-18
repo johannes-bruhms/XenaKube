@@ -4,6 +4,31 @@ All notable changes to XenaKube are documented here.
 
 **Entry format**: dated section per release/working-day; under it, `### Added / Changed / Fixed` headers; under each header, **terse bullets** — one or two sentences naming the user-visible change and the file(s) touched. Long rationale, root-cause analyses, and D-coded design narratives belong in `docs/revision_roadmap.md` (bridge / SWAM) or `docs/research_notes.md` (engine / dashboard). When in doubt, link rather than copy. Older entries below predate this discipline and are kept as-is.
 
+## 2026-05-18
+
+### Fixed
+- Removed low-expression onset masking from slow-start face gestures. Normal phrase starts now seed CC 11 through shared `ONSET_EXPRESSION_MIN`, so C8 on `D'`/yellow counterclockwise hairpins speaks immediately instead of ramping up from near-silent expression (`src/swam-mapping.ts`, `max/xk_swam.js`, `src/phrase-plan.ts`, `relay.js`, `docs/bridge-invariants.md`).
+- Tightened C5/C6/C7 half-turn punctuation into a single short one-direction bend stroke with no target re-attack, and generated the shared gliss constants into Max so the bridge and TS planner stay aligned (`src/swam-mapping.ts`, `scripts/gen-max-include.js`, `max/xk_swam.js`, `src/phrase-plan.ts`, `test/max-bridge.test.ts`, `test/phrase-plan.test.ts`, `docs/bridge-invariants.md`).
+- Rebalanced C5/C6/C7 half-turn gliss spans so C5 is a very wide stroke, C6 stays medium, and C7 is a half-step instead of a small generic slide (`src/swam-mapping.ts`, `max/gen_includes.js`, `test/swam-mapping.test.ts`, `test/phrase-plan.test.ts`, `docs/synthesis-bridge.md`).
+- Fixed Bluetooth cube stream stalls and reduced gyro transport pressure. The dashboard now unit-normalizes GAN gyro events, coalesces outbound gyro to a latest-only relay queue, flushes pending gyro before `move` and `zero_gyro` messages, carries latest gyro inside a move if the low-priority gyro send is blocked, requests facelets-only bootstrap after connect, detects move-alive/gyro-stale splits, and the relay re-normalizes incoming gyro packets with explicit `[CUBE STREAM FAIL]` / `[CUBE GYRO FAIL]` / `[CUBE GYRO FORWARD FAIL]` / `[CUBE GYRO STALE]` / `[BLE GYRO DROP]` telemetry (`public/js/main.js`, `relay.js`, `test/transport-backpressure.test.ts`, `docs/dashboard-invariants.md`).
+- Restored relay `gyro_tick` as the sole live-cube pose writer after the BLE queue change, so the live cube uses the existing 60 Hz SLERP/upscaled visual stream instead of raw BLE cadence (`public/js/main.js`, `test/transport-backpressure.test.ts`, `docs/dashboard-invariants.md`).
+- Added relay-open gating to the Bluetooth cube flow. The Connect button now stays disabled while the relay WebSocket is down, active BLE forwarding is invalidated if the relay disconnects, and `[CUBE RELAY OFFLINE]` points to the Max `node.script relay-controller.js` start path instead of flooding gyro/move send failures (`public/js/transport.js`, `public/js/main.js`, `test/transport-backpressure.test.ts`, `docs/dashboard-invariants.md`).
+- Made half-turn punctuation technique-aware. C1 half-turns now stay pizzicato, C4 force-writes harmonics, C5/C6/C7 render one shared-duration big/medium/small gliss, and the remaining complexes keep the bowed dyad punctuation (`src/swam-mapping.ts`, `max/xk_swam.js`, `src/phrase-plan.ts`, `test/max-bridge.test.ts`, `test/phrase-plan.test.ts`, `docs/bridge-invariants.md`, `docs/synthesis-bridge.md`, `docs/performance-model.md`, `docs/xenakube-operation-manual.md`).
+
+## 2026-05-17
+
+### Added
+- Added persistent dashboard presets. The current repo-tracked dashboard settings are saved as the first preset in `data/dashboard-presets.json`; `relay.js` now serves `GET/POST /api/dashboard-presets`; and the dashboard has a bottom-right presets panel for load/save/update/delete alongside active settings sync (`public/dashboard.html`, `public/css/main.css`, `public/js/main.js`, `public/js/settings-sync.js`, `test/dashboard-settings-sync.test.ts`).
+
+### Changed
+- Changed phrase-triggered K/C card placement so the card cluster anchors to the active ghost C instead of live-cube motion, and flips inward from the selected ghost vertex side to keep cards centered around the cube (`public/js/cube-scene.js`, `public/js/state-ui.js`, `public/css/main.css`, `docs/dashboard-architecture.md`, `test/dashboard-ui.test.ts`).
+
+### Fixed
+- Hardened relay shutdown. The relay now exits immediately after the last dashboard disconnects by default, signal/API shutdowns share one panic-and-close path, browser page unload stops reconnecting, and Max `stop relay` / `kill process` no longer leave orphan relay children (`relay.js`, `public/js/transport.js`, `max/relay-controller.js`, `docs/bridge-invariants.md`, `test/transport-backpressure.test.ts`, `test/max-bridge.test.ts`).
+- Updated gamelan sample paths for the Max-local media layout. Manifest generation, D77 tests, docs, and `xk_sphere.js` now read samples from `max/media/gamelan/` (`scripts/build-gamelan-manifest.mjs`, `test/sphere-mapping.test.ts`, `max/xk_sphere.js`, `src/gamelan-manifest.ts`, `max/gen_sphere_includes.js`, `docs/sphere-engine.md`).
+- Fixed delayed repeated C3 attacks by removing C3 from cross-phrase legato-tail preservation and making same-pitch legato retriggers cut the old pitch before the fresh noteOn, with C3 stale-tail telemetry and static guards (`src/swam-mapping.ts`, `max/xk_swam.js`, `max/gen_includes.js`, `test/swam-mapping.test.ts`, `test/max-bridge.test.ts`, `docs/bridge-invariants.md`, `docs/synthesis-bridge.md`).
+- Fixed S4 snap quaternions so ghost snap targets are generated from the live group permutation table at exact unit length, eliminating repeated `[GHOST SNAP FAIL]` console floods and delayed turn handling in 90-degree rotated poses. Added quaternion geometry coverage and the rotated top-face `U'` -> C3 regression (`src/quaternion.ts`, `public/js/cube-scene.js`, `test/quaternion.test.ts`, `test/engine.test.ts`, `test/dashboard-ghost.test.ts`).
+
 ## 2026-05-12
 
 ### Added

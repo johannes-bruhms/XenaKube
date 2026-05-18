@@ -7,7 +7,8 @@
 // - `kill process` runs the port-3000 kill from inside Max.
 
 const path = require('path');
-const { exec, execFile, spawn } = require('child_process');
+const http = require('http');
+const { exec, execFile, spawn, spawnSync } = require('child_process');
 
 let Max;
 try {
@@ -21,9 +22,12 @@ process.chdir(projectRoot);
 
 const RELAY_PORT = 3000;
 const DASHBOARD_URL = 'http://localhost:3000';
+const STOP_GRACE_MS = 1500;
 let relayChild = null;
 let relayAddressInUse = false;
 let browserOpenTimer = null;
+let stopForceTimer = null;
+let controllerExiting = false;
 
 Max.post('relay-controller: cwd=' + process.cwd());
 Max.post('relay-controller: ready - send "relay" to start, "kill process" to free port 3000');
@@ -33,6 +37,13 @@ function postLines(prefix, text) {
     .split(/\r?\n/)
     .filter(Boolean)
     .forEach(line => Max.post(prefix + line));
+}
+
+function clearStopForceTimer() {
+  if (stopForceTimer) {
+    clearTimeout(stopForceTimer);
+    stopForceTimer = null;
+  }
 }
 
 function isAddressInUseText(text) {
@@ -106,6 +117,7 @@ function startRelay() {
   relayChild.on('exit', (code, signal) => {
     const wasAddressInUse = relayAddressInUse;
     relayChild = null;
+    clearStopForceTimer();
     if (browserOpenTimer) {
       clearTimeout(browserOpenTimer);
       browserOpenTimer = null;
@@ -118,17 +130,68 @@ function startRelay() {
   });
 }
 
+function requestRelayShutdown(reason, cb) {
+  const body = JSON.stringify({ reason });
+  const req = http.request({
+    hostname: '127.0.0.1',
+    port: RELAY_PORT,
+    path: '/api/shutdown',
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Content-Length': Buffer.byteLength(body),
+    },
+    timeout: 700,
+  }, (res) => {
+    res.resume();
+    res.on('end', () => cb(null, res.statusCode));
+  });
+  req.on('timeout', () => req.destroy(new Error('shutdown request timed out')));
+  req.on('error', cb);
+  req.end(body);
+}
+
+function forceKillRelayChild(reason) {
+  if (!relayChild || !relayChild.pid) return false;
+  const pid = relayChild.pid;
+  Max.post(`relay-controller: force killing relay child pid=${pid} (${reason})`);
+  if (process.platform === 'win32') {
+    execFile('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true }, (err, stdout, stderr) => {
+      if (err) Max.post('relay-controller: taskkill relay child failed - ' + err.message);
+      if (stdout) postLines('relay-controller: ', stdout);
+      if (stderr) postLines('relay-controller: ', stderr);
+    });
+  } else {
+    try { relayChild.kill('SIGKILL'); }
+    catch (e) { Max.post('relay-controller: SIGKILL relay child failed - ' + e.message); }
+  }
+  return true;
+}
+
 function stopRelay() {
   if (!relayChild) {
     Max.post('relay-controller: relay child is not running');
     return;
   }
   Max.post(`relay-controller: stopping relay child pid=${relayChild.pid}`);
-  relayChild.kill();
+  requestRelayShutdown('max stop relay', (err, statusCode) => {
+    if (err || statusCode !== 202) {
+      Max.post('relay-controller: graceful relay shutdown failed - ' + (err ? err.message : `HTTP ${statusCode}`));
+      forceKillRelayChild('graceful stop failed');
+    } else {
+      Max.post('relay-controller: relay accepted graceful shutdown');
+    }
+  });
+  clearStopForceTimer();
+  stopForceTimer = setTimeout(() => {
+    stopForceTimer = null;
+    forceKillRelayChild('stop relay timeout');
+  }, STOP_GRACE_MS);
 }
 
 function killRelayPortProcess() {
   Max.post(`relay-controller: killing listener on TCP port ${RELAY_PORT}`);
+  forceKillRelayChild('kill process');
 
   if (process.platform === 'win32') {
     const ps = [
@@ -178,6 +241,32 @@ function reportKillResult(err, stdout, stderr) {
       Max.post('relay-controller: ' + line);
     }
   }
+}
+
+function cleanupRelayChildOnControllerExit() {
+  if (controllerExiting) return;
+  controllerExiting = true;
+  if (browserOpenTimer) {
+    clearTimeout(browserOpenTimer);
+    browserOpenTimer = null;
+  }
+  clearStopForceTimer();
+  if (!relayChild || !relayChild.pid) return;
+  const pid = relayChild.pid;
+  Max.post(`relay-controller: controller exiting; killing relay child pid=${pid}`);
+  if (process.platform === 'win32') {
+    spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true });
+  } else {
+    try { process.kill(pid, 'SIGTERM'); } catch (e) { /* noop */ }
+  }
+}
+
+process.once('exit', cleanupRelayChildOnControllerExit);
+for (const signal of ['SIGINT', 'SIGTERM', 'SIGHUP']) {
+  process.once(signal, () => {
+    cleanupRelayChildOnControllerExit();
+    process.exit(0);
+  });
 }
 
 if (typeof Max.addHandler === 'function') {

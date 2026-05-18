@@ -43,6 +43,9 @@ describe('Dashboard ghost cube invariants', () => {
     expect(source).toContain('ghostVertPosTarget[c].copy(target);');
     expect(source).toContain('return assigned;');
     expect(source).toContain('[GHOST SNAP FAIL]');
+    expect(source).toContain('GHOST_SNAP_FAIL_LOG_MS');
+    expect(source).toContain('setSnapTargetFromState(state.snapQuat)');
+    expect(source).toContain('state.snapQuat is not unit length');
 
     const applyGhost = extractFunction('applyGhostCAssignmentMove');
     expect(applyGhost.indexOf("if (cosmology !== 'alpha-cosmo')")).toBeLessThan(

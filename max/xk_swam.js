@@ -498,6 +498,8 @@ function makeInstance(id) {
 		c3BowMotionCount: 0,
 		c3BowMotionMinExpr: 127,
 		c3BowMotionMaxRate: 0,
+		c3OnsetTailClears: 0,
+		legatoSamePitchRetriggers: 0,
 
 		// Gliss invariant telemetry (D42 + D46 + D59). Every C5/C6/C7 voice
 		// MUST emit ≥1 glissStep; scheduleRelease's offT checks the sum of
@@ -715,12 +717,10 @@ function removeActiveNote(inst, pitch) {
 	return idx >= 0;
 }
 
-// User-tuned floor for CC 11 (Expression) on PLAY-time writes. Generated
-// phrase materials (phrase arcs, attack/peak/sustain envelopes, chain
-// snaps, in-flight rampCC ticks) clamp at this minimum so soft dynamics
-// stay audibly above SWAM's perceptible threshold — pp passages with
-// peakExpr × ARC_FLOOR landing below ~10 read as silent, which the
-// performer experiences as "the cube stopped responding."
+// Generated expression floors come from src/swam-mapping.ts. PLAY-time
+// writes clamp at CC_EXPRESSION_FLOOR so soft dynamics stay perceptible.
+// Phrase-start seeds use ONSET_EXPRESSION_MIN, a higher live-onset floor,
+// so slow-start faces cannot sound like cube-turn latency.
 //
 // Silencing writes (release fade landing exactly at 0, voice steal flush
 // via stealInstance, bang/panic reset) are exempt: the val > 0 guard in
@@ -728,7 +728,6 @@ function removeActiveNote(inst, pitch) {
 // rampCC ticks plateau briefly at FLOOR right before the final tick lands
 // at 0 (start=peak, target=0 → ticks walk down through FLOOR), then the
 // MIDI noteoff fires and silences the voice — no audible artifact.
-var CC_EXPRESSION_FLOOR = 12;
 var BOW_POSITION_MIN = 0;
 var BOW_POSITION_MAX = 64;
 
@@ -736,11 +735,21 @@ function clampBowPosition(val) {
 	return clamp(Math.round(val), BOW_POSITION_MIN, BOW_POSITION_MAX);
 }
 
+function expressionCcValue(val) {
+	val = clamp(Math.round(val), 0, 127);
+	return (val > 0 && val < CC_EXPRESSION_FLOOR) ? CC_EXPRESSION_FLOOR : val;
+}
+
+function onsetExpressionValue(val) {
+	val = expressionCcValue(val);
+	return (val > 0 && val < ONSET_EXPRESSION_MIN) ? ONSET_EXPRESSION_MIN : val;
+}
+
 // Continuous CC — per-instance cache-suppressed. Use for 60 Hz streams.
 function cc(inst, num, val) {
 	if (!hasCC(num)) return;
 	val = (num === CC.BOW_POSITION) ? clampBowPosition(val) : clamp(Math.round(val), 0, 127);
-	if (num === CC.EXPRESSION && val > 0 && val < CC_EXPRESSION_FLOOR) val = CC_EXPRESSION_FLOOR;
+	if (num === CC.EXPRESSION) val = expressionCcValue(val);
 	if (inst.ccCache[num] === val) return;
 	inst.ccCache[num] = val;
 	emitMidi(inst, statusCC(MIDI_CH), num, val);
@@ -751,7 +760,7 @@ function cc(inst, num, val) {
 function ccForce(inst, num, val) {
 	if (!hasCC(num)) return;
 	val = (num === CC.BOW_POSITION) ? clampBowPosition(val) : clamp(Math.round(val), 0, 127);
-	if (num === CC.EXPRESSION && val > 0 && val < CC_EXPRESSION_FLOOR) val = CC_EXPRESSION_FLOOR;
+	if (num === CC.EXPRESSION) val = expressionCcValue(val);
 	inst.ccCache[num] = val;
 	emitMidi(inst, statusCC(MIDI_CH), num, val);
 	if (num === CC.EXPRESSION) emitEchoExpr(inst, val);
@@ -1181,6 +1190,7 @@ function scheduleRelease(inst, dur) {
 		var rm = REGIME_EXPR_RAMP_MULT[state.regime] || 1.0;
 		var faceRm = inst.faceReleaseMult || 1.0;
 		var fadeMs = Math.max(20, Math.round(rampMs * rm * faceRm));
+		if (inst.halfTurn) fadeMs = HALF_TURN_GESTURE_RELEASE_MS;
 
 		inst.status = 'RELEASING';
 		rampCC(inst, CC.EXPRESSION, 0, fadeMs);
@@ -1325,6 +1335,8 @@ function scheduleRelease(inst, dur) {
 				log("inst " + inst.id + " C3 bowMotion count=" + inst.c3BowMotionCount +
 				    " minExpr=" + inst.c3BowMotionMinExpr +
 				    " maxRate=" + inst.c3BowMotionMaxRate.toFixed(2) +
+				    " samePitchRetriggers=" + (inst.legatoSamePitchRetriggers | 0) +
+				    " tailClears=" + (inst.c3OnsetTailClears | 0) +
 				    " dur=" + dur.toFixed(2));
 			}
 			inst.c3BowMotionExpected = false;
@@ -1338,6 +1350,10 @@ function scheduleRelease(inst, dur) {
 			// Expression ramp hits 0 (bowed-mode release can be 2-10 s).
 			emitMidi(inst, statusCC(MIDI_CH), 120, 0);
 			emitMidi(inst, statusCC(MIDI_CH), 123, 0);
+			if (inst.halfTurn) {
+				cancelPitchbendRamp(inst);
+				if (inst.pitchbend !== PITCHBEND_CENTER) emitPitchbend(inst, PITCHBEND_CENTER);
+			}
 			inst.activeNotes = [];
 			inst.releaseTask = null;
 			inst.status = 'IDLE';
@@ -1367,7 +1383,7 @@ function scheduleExprEnvelope(inst, peakExpr, env, durMs) {
 	// read as face-oriented latency on pluck/stab single-note gestures.
 	// Seed the attack level synchronously; subsequent peak/sustain ramps still
 	// carry the face/compex envelope shape.
-	ccForce(inst, CC.EXPRESSION, Math.round(peakExpr * env.attack));
+	ccForce(inst, CC.EXPRESSION, onsetExpressionValue(peakExpr * env.attack));
 
 	var peakAt = Math.max(60, Math.round(durMs * 0.25));
 	scheduleAt(inst, peakAt, function() {
@@ -1433,8 +1449,9 @@ function phraseArcDirection(inst) {
 function schedulePhraseArc(inst, peakExpr, dir, durMs) {
 	var rm = Math.min(REGIME_EXPR_RAMP_MULT[state.regime] || 1.0, 1.0);
 	var rampMs = Math.max(60, Math.round(durMs * rm));
-	var lo = clamp(Math.round(peakExpr * ARC_FLOOR), 0, 127);
-	var hi = clamp(Math.round(peakExpr * ARC_CEIL),  0, 127);
+	var lo = expressionCcValue(peakExpr * ARC_FLOOR);
+	var onsetLo = onsetExpressionValue(lo);
+	var hi = onsetExpressionValue(peakExpr * ARC_CEIL);
 	var endVal = (dir === 'cresc') ? hi : lo;
 
 	var now = Date.now();
@@ -1451,12 +1468,12 @@ function schedulePhraseArc(inst, peakExpr, dir, durMs) {
 		// previous arc landed at (or where it was when stolen). No
 		// ccForce snap → no boundary step.
 		var cached = inst.ccCache[CC.EXPRESSION];
-		startVal = (cached != null) ? cached : ((dir === 'cresc') ? lo : hi);
+		startVal = onsetExpressionValue((cached != null) ? cached : ((dir === 'cresc') ? onsetLo : hi));
 		log("inst " + inst.id + " arcChain dir=" + dir +
 		    " inheritStart=" + startVal + " endVal=" + endVal +
 		    " gap=" + gap + "ms");
 	} else {
-		startVal = (dir === 'cresc') ? lo : hi;
+		startVal = (dir === 'cresc') ? onsetLo : hi;
 		ccForce(inst, CC.EXPRESSION, startVal);
 	}
 
@@ -1493,11 +1510,12 @@ function schedulePhraseHairpin(inst, peakExpr, dir, durMs) {
 	var rm = Math.min(REGIME_EXPR_RAMP_MULT[state.regime] || 1.0, 1.0);
 	var halfDur = Math.max(60, Math.round(durMs / 2));
 	var rampMs = Math.max(60, Math.round(halfDur * rm));
-	var lo = clamp(Math.round(peakExpr * ARC_FLOOR), 0, 127);
-	var hi = clamp(Math.round(peakExpr * ARC_CEIL),  0, 127);
+	var lo = expressionCcValue(peakExpr * ARC_FLOOR);
+	var onsetLo = onsetExpressionValue(lo);
+	var hi = onsetExpressionValue(peakExpr * ARC_CEIL);
 	var startVal, midVal;
 	if (dir === 'hairpin-up') {
-		startVal = lo;
+		startVal = onsetLo;
 		midVal   = hi;
 	} else {
 		startVal = hi;
@@ -1639,11 +1657,22 @@ function foldToRange(pitch, lo, hi) {
 // ================================================================
 // HALF-TURN PUNCTUATION
 // ================================================================
-function setupHalfTurnGesture(inst) {
-	setPlayMode(inst, "bow");
-	setHarmonics(inst, HARMONICS.OFF);
+function isHalfTurnGlissComplex(complexType) {
+	return complexType === 5 || complexType === 6 || complexType === 7;
+}
+
+function setupHalfTurnGesture(inst, complexType) {
+	var isPizz = complexType === 1;
+	var isHarmonic = complexType === 4;
+	var isGliss = isHalfTurnGlissComplex(complexType);
+	var cmx = COMPLEX[complexType] || COMPLEX[1];
+	var prevForceKS = inst.forceKS;
+	inst.forceKS = true;
+	setPlayMode(inst, isPizz ? "pizz" : "bow");
+	setHarmonics(inst, isHarmonic ? harmonicsForC4(inst) : HARMONICS.OFF);
 	setTremolo(inst, TREMOLO.OFF);
-	setBowPolyphony(inst, BOW_POLY.DOUBLE_HOLD);
+	inst.forceKS = prevForceKS;
+	setBowPolyphony(inst, isPizz ? COMPLEX[1].bowPoly : BOW_POLY.DOUBLE_HOLD);
 	cancelCCRamp(inst, CC.EXPRESSION);
 	cancelCCRamp(inst, CC.TREMOLO_RATE);
 	cancelCCRamp(inst, CC.BOW_POSITION);
@@ -1651,16 +1680,18 @@ function setupHalfTurnGesture(inst) {
 	inst.faceEnvelope = "half-turn";
 	inst.faceMotion = null;
 	inst.faceEnvProfile = null;
-	inst.faceOffVelOverride = 110;
+	inst.faceOffVelOverride = isPizz ? 80 : 110;
 	inst.faceReleaseMult = 0.5;
 	inst.phraseArcDir = null;
 	inst.peakExpr = HALF_TURN_GESTURE_EXPR;
-	inst.bowPosBase = clampBowPosition(HALF_TURN_GESTURE_BOW_POSITION);
-	inst.bowPressureBase = HALF_TURN_GESTURE_BOW_PRESSURE;
-	ccForce(inst, CC.BOW_POSITION, inst.bowPosBase);
+	inst.bowPosBase = (isPizz || cmx.bowPos == null)
+		? null
+		: clampBowPosition((isHarmonic || isGliss) ? cmx.bowPos : HALF_TURN_GESTURE_BOW_POSITION);
+	inst.bowPressureBase = (isPizz || isHarmonic || isGliss) ? cmx.bowPressure : HALF_TURN_GESTURE_BOW_PRESSURE;
+	if (inst.bowPosBase != null) ccForce(inst, CC.BOW_POSITION, inst.bowPosBase);
 	ccForce(inst, CC.BOW_PRESSURE, inst.bowPressureBase);
-	ccForce(inst, CC.PORTAMENTO_ON, 0);
-	ccForce(inst, CC.PORTAMENTO_TIME, 0);
+	ccForce(inst, CC.PORTAMENTO_ON, (isGliss && cmx.portamento && cmx.portamento.on) ? 127 : 0);
+	ccForce(inst, CC.PORTAMENTO_TIME, (isGliss && cmx.portamento) ? cmx.portamento.time : 0);
 	ccForce(inst, CC.EXPRESSION, HALF_TURN_GESTURE_EXPR);
 	// Punctuation temporarily overrides selectors while preserving the original
 	// complex number for MIDI echo. Force full setup on the next normal voice
@@ -1668,7 +1699,21 @@ function setupHalfTurnGesture(inst) {
 	inst.forceComplexSetup = true;
 }
 
-function phraseHalfTurn(inst, vel, dur) {
+function phraseHalfTurnPizz(inst, vel, dur) {
+	var p = humanPitch(pickPitch(1, inst));
+	var noteMs = Math.min(Math.round(dur * 1000), HALF_TURN_GESTURE_NOTE_MS);
+	scheduleAt(inst, 0, function() {
+		noteOn(inst, p, vel);
+		inst.activeNotes.push(p);
+	});
+	scheduleAt(inst, noteMs, function() {
+		noteOff(inst, p, 80);
+		removeActiveNote(inst, p);
+	});
+	scheduleRelease(inst, dur);
+}
+
+function phraseHalfTurnBowed(inst, vel, dur) {
 	var p = pickPitch(1, inst);
 	var companion = foldToRange(p + 7, DOUBLE_STOP_ROLL_MIN, DOUBLE_STOP_ROLL_MAX);
 	var noteMs = Math.min(Math.round(dur * 1000), HALF_TURN_GESTURE_NOTE_MS);
@@ -1689,6 +1734,59 @@ function phraseHalfTurn(inst, vel, dur) {
 		}
 	});
 	scheduleRelease(inst, dur);
+}
+
+function halfTurnGlissTarget(source, span) {
+	var dir = (Math.random() < 0.5) ? -1 : 1;
+	var target = source + dir * span;
+	if (target < CELLO_MIN || target > CELLO_MAX) {
+		dir *= -1;
+		target = source + dir * span;
+	}
+	return clamp(Math.round(target), CELLO_MIN, CELLO_MAX);
+}
+
+function halfTurnGlissStroke(inst, sourcePitch, targetPitch, durMs) {
+	var hpSource = clamp(Math.round(sourcePitch), CELLO_MIN, CELLO_MAX);
+	var hpTarget = clamp(Math.round(targetPitch), CELLO_MIN, CELLO_MAX);
+	var semis = hpTarget - hpSource;
+	var clamped = clamp(semis, -PITCHBEND_RANGE_SEMI, PITCHBEND_RANGE_SEMI);
+	if (clamped !== semis) {
+		log("HALF TURN GLISS CLIP inst " + inst.id + " C" + inst.activeComplex +
+		    " semis=" + semis + " range=+/-" + PITCHBEND_RANGE_SEMI);
+	}
+	var targetBend = clamp(PITCHBEND_CENTER + Math.round(clamped * 8192 / PITCHBEND_RANGE_SEMI), 0, 16383);
+	var strokeMs = Math.max(1, Math.round(durMs));
+	outlet(ECHO_OUTLET, OSC.MIDI_BENDSTEP, inst.voice,
+	       hpSource, hpTarget, strokeMs | 0,
+	       inst.activeComplex || 0, inst.planId || 0);
+	inst.glissBendCount = (inst.glissBendCount | 0) + 1;
+	rampPitchbend(inst, targetBend, strokeMs);
+}
+
+function phraseHalfTurnGliss(inst, vel, dur, complexType) {
+	var span = HALF_TURN_GLISS_SPAN_BY_COMPLEX[complexType] || 7;
+	var p = pickPitch(complexType, inst);
+	var target = halfTurnGlissTarget(p, span);
+	var durMs = Math.round(dur * 1000);
+	scheduleAt(inst, 0, function() {
+		noteOn(inst, p, vel);
+		inst.activeNotes.push(p);
+		halfTurnGlissStroke(inst, p, target, durMs);
+	});
+	scheduleRelease(inst, dur);
+}
+
+function phraseHalfTurn(inst, vel, dur, complexType) {
+	if (complexType === 1) {
+		phraseHalfTurnPizz(inst, vel, dur);
+		return;
+	}
+	if (isHalfTurnGlissComplex(complexType)) {
+		phraseHalfTurnGliss(inst, vel, dur, complexType);
+		return;
+	}
+	phraseHalfTurnBowed(inst, vel, dur);
 }
 
 // ================================================================
@@ -1910,16 +2008,31 @@ var TILT_EMA_ALPHA = 0.05;
 // line to BOW POS FLAP. The per-phrase line itself is always-on.
 var BOW_FLAP_RATE_FAIL = 10;
 
+function sameMidiPitch(a, b) {
+	return Math.round(a) === Math.round(b);
+}
+
 function legatoNoteOverlap(inst, pitch, vel, overlapMs) {
 	var oldNotes = inst.activeNotes.slice();
+	var overlapNotes = [];
+	for (var i = 0; i < oldNotes.length; i++) {
+		if (sameMidiPitch(oldNotes[i], pitch)) {
+			noteOff(inst, oldNotes[i]);
+			removeActiveNote(inst, oldNotes[i]);
+			inst.legatoSamePitchRetriggers = (inst.legatoSamePitchRetriggers | 0) + 1;
+		} else {
+			overlapNotes.push(oldNotes[i]);
+		}
+	}
+
 	noteOn(inst, pitch, vel);
 	inst.activeNotes.push(pitch);
 
-	if (oldNotes.length > 0) {
+	if (overlapNotes.length > 0) {
 		scheduleAt(inst, overlapMs, function() {
-			for (var i = 0; i < oldNotes.length; i++) {
-				noteOff(inst, oldNotes[i]);
-				var idx = inst.activeNotes.indexOf(oldNotes[i]);
+			for (var i = 0; i < overlapNotes.length; i++) {
+				noteOff(inst, overlapNotes[i]);
+				var idx = inst.activeNotes.indexOf(overlapNotes[i]);
 				if (idx >= 0) inst.activeNotes.splice(idx, 1);
 			}
 		});
@@ -3223,7 +3336,9 @@ function phraseC2(inst, vel, dur) {
 				var aNorm = (a - 0.55) / 0.45;                        // [0.0, 1.0]
 				var pitch = humanPitch(pickPitch(2, inst));
 				var v = humanVel(vel * stepVelScale(velCurve, idx, total) * a);
-				ccForce(inst, CC.EXPRESSION,   clamp(Math.round(peakExpr     * a), 1, 127));
+				var exprVal = clamp(Math.round(peakExpr * a), 1, 127);
+				if (idx === 0) exprVal = onsetExpressionValue(exprVal);
+				ccForce(inst, CC.EXPRESSION, exprVal);
 				ccForce(inst, CC.BOW_PRESSURE, bowPressure);
 				// bowPosBase: louder (aNorm=1) → at base; softer (aNorm=0)
 				// → +12 toward fingerboard. handleExprTilt picks up the
@@ -3860,7 +3975,9 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration, halfTurn
 	var incomingDuration = duration;
 	var durationSource = "vertex";
 	if (halfTurn) {
-		duration = HALF_TURN_GESTURE_DURATION_SEC;
+		duration = isHalfTurnGlissComplex(complexType)
+			? HALF_TURN_GLISS_DURATION_SEC
+			: HALF_TURN_GESTURE_DURATION_SEC;
 		durationSource = "half-turn";
 		intensity = HALF_TURN_GESTURE_INTENSITY;
 	} else if (state.face !== null) {
@@ -3914,11 +4031,22 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration, halfTurn
 	inst.faceReleaseMult    = state.faceReleaseMult;
 	inst.halfTurn = halfTurn;
 	inst.planId = pendingPlanId;
+	inst.c3OnsetTailClears = 0;
+	inst.legatoSamePitchRetriggers = 0;
 
-	// Preserve tail note for SWAM portamento when the incoming complex
-	// uses legato phrases. Only meaningful if we stole a PLAYING/RELEASING
+	// Preserve a cross-phrase tail only for complexes that need a portamento
+	// bed. C3 is internally legato, but no cross-phrase tail is allowed.
+	// Only meaningful if we stole a PLAYING/RELEASING
 	// instance — fresh IDLE instances have no tail.
-	cancelPhrase(inst, LEGATO_COMPLEX[complexType] === true);
+	var preserveTail = (complexType !== 3 && LEGATO_COMPLEX[complexType] === true);
+	cancelPhrase(inst, preserveTail);
+	if (complexType === 3 && inst.activeNotes.length > 0) {
+		log("C3 ONSET TAIL FAIL inst " + inst.id +
+		    " activeNotes=" + inst.activeNotes.join(",") +
+		    " - clearing stale tail before first note");
+		inst.c3OnsetTailClears = (inst.c3OnsetTailClears | 0) + 1;
+		allNotesOff(inst);
+	}
 	if (inst.releaseTask) { inst.releaseTask.cancel(); inst.releaseTask = null; }
 
 	// KS sync guard (D28) — first N voice events after reset force-write
@@ -3995,17 +4123,18 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration, halfTurn
 	inst.bowPosLastDir = 0;
 
 	if (halfTurn) {
-		inst.glissExpected = false;
+		inst.glissExpected = isHalfTurnGlissComplex(complexType);
 		inst.glissCompanionExpected = false;
 		inst.c3BowMotionExpected = false;
-		setupHalfTurnGesture(inst);
+		setupHalfTurnGesture(inst, complexType);
 		log("inst " + inst.id + " half-turn punctuation C" + complexType +
 		    " face=" + (state.face || "-") +
 		    " dur=" + duration.toFixed(2) + "s(" + durationSource + ")" +
 		    " int=" + intensity +
 		    " expr=" + HALF_TURN_GESTURE_EXPR +
-		    " vel=" + HALF_TURN_GESTURE_VELOCITY);
-		phraseHalfTurn(inst, HALF_TURN_GESTURE_VELOCITY, duration);
+		    " vel=" + HALF_TURN_GESTURE_VELOCITY +
+		    " tech=" + (complexType === 1 ? "pizz" : (isHalfTurnGlissComplex(complexType) ? "gliss" : "bowed-dyad")));
+		phraseHalfTurn(inst, HALF_TURN_GESTURE_VELOCITY, duration, complexType);
 		return;
 	}
 
@@ -4119,7 +4248,7 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration, halfTurn
 	} else if (complexType === 1) {
 		// D57 — pizz: static expression. Per-pluck velocity is the dynamic.
 		inst.phraseArcDir = null;
-		ccForce(inst, CC.EXPRESSION, Math.round(inst.peakExpr));
+		ccForce(inst, CC.EXPRESSION, onsetExpressionValue(inst.peakExpr));
 	} else if (complexType === 2) {
 		// C2 detache run: per-note CC 11 lives in phraseC2, shaped by
 		// phraseArcDirection. Seed CC 11 here synchronously so the
@@ -4133,7 +4262,7 @@ function handleVoice(vtxIdx, complexType, density, intensity, duration, halfTurn
 		// scheduled noteOn will write a few ms later.
 		var c2Dir = phraseArcDirection(inst);
 		var c2StartMul = (c2Dir === 'cresc' || c2Dir === 'hairpin-up') ? 0.55 : 1.00;
-		ccForce(inst, CC.EXPRESSION, clamp(Math.round(inst.peakExpr * c2StartMul), 1, 127));
+		ccForce(inst, CC.EXPRESSION, onsetExpressionValue(inst.peakExpr * c2StartMul));
 	} else {
 		inst.phraseArcDir = null;
 		scheduleExprEnvelope(inst, inst.peakExpr, envForPhrase, Math.max(duration * 1000, 250));
@@ -4562,6 +4691,8 @@ function resetInstance(inst) {
 	inst.c3BowMotionCount = 0;
 	inst.c3BowMotionMinExpr = 127;
 	inst.c3BowMotionMaxRate = 0;
+	inst.c3OnsetTailClears = 0;
+	inst.legatoSamePitchRetriggers = 0;
 	inst.intensity = "mf";
 	inst.density = 2.0;
 	inst.duration = 1.0;

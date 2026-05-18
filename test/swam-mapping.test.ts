@@ -4,8 +4,10 @@ import {
   HARMONICS, TREMOLO, BOW_POLY,
   HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,
   INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE,
+  CC_EXPRESSION_FLOOR, ONSET_EXPRESSION_MIN,
   LEGATO_COMPLEX, MAX_PHRASE_DURATION_SEC, COMPLEX_DURATION_FLOOR_SEC,
   HALF_TURN_WINDOW_MS, HALF_TURN_GESTURE_DURATION_SEC,
+  HALF_TURN_GLISS_DURATION_SEC, HALF_TURN_GLISS_SPAN_BY_COMPLEX,
   HALF_TURN_GESTURE_INTENSITY, HALF_TURN_GESTURE_EXPR,
   HALF_TURN_GESTURE_VELOCITY, HALF_TURN_GESTURE_NOTE_MS,
   HALF_TURN_GESTURE_RELEASE_MS, HALF_TURN_GESTURE_BOW_PRESSURE,
@@ -17,6 +19,7 @@ import {
   RATE_TREMOLO_GAIN_BY_COMPLEX, RATE_ACCENT_GAIN_BY_COMPLEX,
   // helpers
   clamp, harmonicsForC4,
+  expressionCcValue, onsetExpressionValue,
   phraseCountBounds, stepVelScale,
   commitSieveWalk, faceTranspose, resolvePhraseDuration,
   buildFaceMap,
@@ -59,6 +62,15 @@ describe('swam-mapping — tables', () => {
     expect(intensityEntry('f')).toEqual(INTENSITY_MAP.f);
   });
 
+  it('expression onset floor stays above the play-time CC 11 floor', () => {
+    expect(CC_EXPRESSION_FLOOR).toBeGreaterThan(0);
+    expect(ONSET_EXPRESSION_MIN).toBeGreaterThan(CC_EXPRESSION_FLOOR);
+    expect(expressionCcValue(1)).toBe(CC_EXPRESSION_FLOOR);
+    expect(expressionCcValue(0)).toBe(0);
+    expect(onsetExpressionValue(1)).toBe(ONSET_EXPRESSION_MIN);
+    expect(onsetExpressionValue(ONSET_EXPRESSION_MIN + 10)).toBe(ONSET_EXPRESSION_MIN + 10);
+  });
+
   it('ENV_PROFILE covers all 7 envelope shapes (drone replaced by hairpin-up + hairpin-down)', () => {
     const expected = ['pluck', 'swell', 'stab', 'hairpin-up', 'hairpin-down', 'fade', 'burst'] as const;
     for (const k of expected) expect(ENV_PROFILE[k]).toBeDefined();
@@ -94,6 +106,11 @@ describe('swam-mapping — tables', () => {
   it('half-turn punctuation constants define a short loud gesture', () => {
     expect(HALF_TURN_WINDOW_MS).toBe(150);
     expect(HALF_TURN_GESTURE_DURATION_SEC).toBeLessThan(0.4);
+    expect(HALF_TURN_GLISS_DURATION_SEC).toBeGreaterThan(0.2);
+    expect(HALF_TURN_GLISS_DURATION_SEC).toBeLessThanOrEqual(0.5);
+    expect(Math.round(HALF_TURN_GLISS_DURATION_SEC * 1000) + HALF_TURN_GESTURE_RELEASE_MS + 20)
+      .toBeLessThanOrEqual(500);
+    expect(HALF_TURN_GLISS_SPAN_BY_COMPLEX).toEqual({ 5: 24, 6: 7, 7: 1 });
     expect(HALF_TURN_GESTURE_INTENSITY).toBe('fff');
     expect(HALF_TURN_GESTURE_EXPR).toBe(127);
     expect(HALF_TURN_GESTURE_VELOCITY).toBeGreaterThanOrEqual(120);
@@ -104,8 +121,9 @@ describe('swam-mapping — tables', () => {
     expect(HALF_TURN_GESTURE_BOW_POSITION).toBeLessThanOrEqual(64);
   });
 
-  it('LEGATO_COMPLEX covers C2,C3,C5,C6,C7 only', () => {
-    expect(Object.keys(LEGATO_COMPLEX).sort()).toEqual(['2', '3', '5', '6', '7']);
+  it('LEGATO_COMPLEX preserves cross-phrase tails only where the next onset needs it', () => {
+    expect(Object.keys(LEGATO_COMPLEX).sort()).toEqual(['2', '5', '6', '7']);
+    expect(LEGATO_COMPLEX[3]).toBeUndefined();
   });
 
   it('phrase duration bounds cover all complexes and keep C5 identity protected', () => {

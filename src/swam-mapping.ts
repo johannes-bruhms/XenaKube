@@ -98,6 +98,12 @@ export function intensityEntry(label: string): IntensityEntry {
   return INTENSITY_MAP[label as IntensityLabel] ?? INTENSITY_MAP.mf;
 }
 
+// CC 11 below the play floor is perceived as silence in SWAM, and phrase
+// starts need a higher floor than in-flight fades so slow-start envelopes do
+// not read as cube-turn latency.
+export const CC_EXPRESSION_FLOOR = 12;
+export const ONSET_EXPRESSION_MIN = 32;
+
 // ================================================================
 // Envelope profiles — shape per-note envelope + per-phrase contour
 // ================================================================
@@ -209,12 +215,13 @@ export function buildFaceMap(): Record<FaceMove, FaceMapEntry> {
 }
 
 // ================================================================
-// Gliss complexes (legato with portamento bed)
+// Cross-phrase legato tail preservation.
+// C3 is internally legato inside phraseC3, but must not preserve a tail across
+// phrase starts: Double/Hold with no portamento can mask the next t=0 attack.
 // ================================================================
 
 export const LEGATO_COMPLEX: Record<number, boolean> = {
   2: true,
-  3: true,
   5: true,
   6: true,
   7: true,
@@ -252,9 +259,16 @@ export type DurationSource =
 
 // GAN reports a fast physical 180-degree flick as two same-direction quarter
 // turns. The second matching turn inside this window becomes a punctuation
-// gesture instead of inheriting the normal K/C/face phrase shape.
+// gesture instead of inheriting the normal K/face phrase shape. C1 keeps
+// pizzicato technique, C4 keeps harmonics, and C5-C7 use one short gliss.
 export const HALF_TURN_WINDOW_MS = 150;
 export const HALF_TURN_GESTURE_DURATION_SEC = 0.28;
+export const HALF_TURN_GLISS_DURATION_SEC = 0.42;
+export const HALF_TURN_GLISS_SPAN_BY_COMPLEX: Record<number, number> = {
+  5: 24,
+  6: 7,
+  7: 1,
+};
 export const HALF_TURN_GESTURE_INTENSITY = 'fff' as const;
 export const HALF_TURN_GESTURE_EXPR = 127;
 export const HALF_TURN_GESTURE_VELOCITY = 124;
@@ -353,6 +367,16 @@ export const RATE_ACCENT_GAIN_BY_COMPLEX: Record<number, number> = {
 /** Clamp `x` into `[lo, hi]`. */
 export function clamp(x: number, lo: number, hi: number): number {
   return x < lo ? lo : x > hi ? hi : x;
+}
+
+export function expressionCcValue(value: number): number {
+  const v = clamp(Math.round(value), 0, 127);
+  return v > 0 && v < CC_EXPRESSION_FLOOR ? CC_EXPRESSION_FLOOR : v;
+}
+
+export function onsetExpressionValue(value: number): number {
+  const v = expressionCcValue(value);
+  return v > 0 && v < ONSET_EXPRESSION_MIN ? ONSET_EXPRESSION_MIN : v;
 }
 
 /** Normalize turn rate into [0, 1] pressure without touching K identity. */

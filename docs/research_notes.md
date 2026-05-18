@@ -140,10 +140,10 @@ The 24 cube rotation quaternions fall into three geometric types (see `quaternio
 
 | Type | Count | Quaternion form | Geometric meaning |
 |------|-------|-----------------|-------------------|
-| Face rotations (90°/270°) | 6 | One component ≈ ±0.7071, w ≈ 0.7071 | 90° around face center |
-| Face rotations (180°) | 3 | One component = ±1, w = 0 | 180° around face center |
-| Vertex rotations (120°/240°) | 8 | Three components = ±0.5, w = 0.5 | 120° around body diagonal |
-| Edge rotations (180°) | 6 | Two components ≈ ±0.7071, w = 0 | 180° around edge midpoint |
+| Face rotations (90°/270°) | 6 | One vector component and w are exact square-root halves | 90° around face center |
+| Face rotations (180°) | 3 | One vector component = ±1, w = 0 | 180° around face center |
+| Vertex rotations (120°/240°) | 8 | Three vector components and w are exact halves | 120° around body diagonal |
+| Edge rotations (180°) | 6 | Two vector components are exact square-root halves, w = 0 | 180° around edge midpoint |
 | Identity | 1 | [0, 0, 0, 1] | No rotation |
 
 Snap-to-nearest uses `|dot product|` because q and -q represent the same rotation. Maximum angular distance between adjacent S4 elements is ~π/4 (45°). The deviation factor normalizes this to 0–1.
@@ -403,8 +403,8 @@ User report (2026-04-25): "the phrases lack certain fluidity… i would like a g
 
 Replace the 3-stage envelope, *for sustained multi-note complexes only* (C2, C3, C4, C8), with a single linear ramp across the full phrase duration:
 
-- **swell faces** (L, F, F') → **cresc**: CC 11 starts at `peakExpr × ARC_FLOOR` (0.30) and walks to `peakExpr × ARC_CEIL` (1.00) over the full duration.
-- **fade faces** (U', L') → **dim**: CC 11 starts at `peakExpr × ARC_CEIL` and walks down to `peakExpr × ARC_FLOOR`.
+- **swell faces** (L, F, F') → **cresc**: CC 11 starts at the onset-floored `peakExpr × ARC_FLOOR` and walks to the onset-floored `peakExpr × ARC_CEIL` over the full duration.
+- **fade faces** (U', L') → **dim**: CC 11 starts at the onset-floored `peakExpr × ARC_CEIL` and walks down to `peakExpr × ARC_FLOOR`.
 - **burst face** (R') → **dim**: the iterative flurry reads as energy releasing rather than accumulating; pairs naturally with R-stab as the right-pan percussive family.
 - **isSingle envelopes** (pluck/stab/drone) → no arc — the face collapses the phrase to one note via `faceShapedCount`, so directionality is moot. Falls back to `scheduleExprEnvelope`.
 - **gliss complexes** (C5/C6/C7) → no arc — the slide trajectory already owns the phrase's contour. Falls back to `scheduleExprEnvelope`.
@@ -434,7 +434,7 @@ User question (2026-04-26): "ideally i want these phrase shapes to take place th
 
 The "non-limiting" constraint rules out algorithm-bounded arcs (sexy-move opens, sexy-move closes — too coarse and decoupled from the face being turned) and count-bounded arcs (every N turns is one arc — N is arbitrary, has no musical meaning). The deepest answer is **adaptive chaining**: arcs *emerge* from coherent face-envelope sequences without any new algorithm, counter, or trigger.
 
-**The rule** (Phase 2 spec): if a new voice arrives within a tight onset-to-onset window (~< 1.0 s) of the previous voice AND its face envelope produces the *same arc direction*, the new voice's CC 11 starts at *wherever the previous voice ended* (carried via `state.lastArcCC11`) instead of restarting at `ARC_FLOOR`. The arc continues until either (a) the next turn's face envelope has the opposite direction, (b) the gap exceeds the window, or (c) the next turn is an isSingle face (pluck/stab/drone — natural caesuras break chains).
+**The rule** (Phase 2 spec): if a new voice arrives within the chain window of the previous voice AND its face envelope produces the *same arc direction*, the new voice's CC 11 starts from the previous voice's cached expression, clamped through `ONSET_EXPRESSION_MIN`, instead of restarting at the raw `ARC_FLOOR`. The arc continues until either (a) the next turn's face envelope has the opposite direction, (b) the gap exceeds the window, or (c) the next turn is an isSingle face (pluck/stab/drone — natural caesuras break chains).
 
 Concretely, the user's example `[K6-C3][K7-C4][K5-C7][K2-C3]`: whether this is one continuous arc, two short arcs, or four independent phrases depends entirely on **which face produced each turn** and **how tightly they were spaced**. If the four turns were L F F' L (all swell, all <1 s apart), one continuous cresc spans them — each voice's K-dynamic varies (K6, K7, K5, K2 each have their own peak height) but the expression line passes through them rather than restarting. If they were L F D L', the arc breaks at D (stab-isSingle) and resumes after.
 

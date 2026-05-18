@@ -4,7 +4,7 @@
 // Hand-transcribed from the Scala files shipped with the Latent
 // Sonorities pack (Khyam Allami + Counterpoint, analysed via Leimma):
 //
-//   media/gamelan/Latent-Sonorities-Tuning-Files-in-Scala/Latent
+//   max/media/gamelan/Latent-Sonorities-Tuning-Files-in-Scala/Latent
 //   Sonorities Tuning Files in Scala/Scala/*.scl
 //
 // Each scale gives cent offsets from the local "1" plus its absolute

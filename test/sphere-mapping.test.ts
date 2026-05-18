@@ -20,10 +20,10 @@ describe('Gamelan sample manifest', () => {
     expect(names.size).toBe(GAMELAN_SAMPLES.length);
   });
 
-  it('every manifest entry has a real .wav file under media/gamelan/', () => {
+  it('every manifest entry has a real .wav file under max/media/gamelan/', () => {
     // D77 — runtime sample-load completeness invariant must not falsely
     // accuse the user of a missing file when the manifest itself is wrong.
-    const files = new Set(readdirSync(resolve(__dirname, '..', 'media', 'gamelan')).filter(f => f.endsWith('.wav')));
+    const files = new Set(readdirSync(resolve(__dirname, '..', 'max', 'media', 'gamelan')).filter(f => f.endsWith('.wav')));
     for (const entry of GAMELAN_SAMPLES) {
       expect(files.has(entry.file), `manifest entry ${entry.canonical} points to missing file ${entry.file}`).toBe(true);
     }
@@ -31,7 +31,7 @@ describe('Gamelan sample manifest', () => {
 
   it('every .wav on disk appears in the manifest', () => {
     const declared = new Set(GAMELAN_SAMPLES.map(s => s.file));
-    const onDisk = readdirSync(resolve(__dirname, '..', 'media', 'gamelan')).filter(f => f.endsWith('.wav'));
+    const onDisk = readdirSync(resolve(__dirname, '..', 'max', 'media', 'gamelan')).filter(f => f.endsWith('.wav'));
     for (const f of onDisk) {
       expect(declared.has(f), `${f} present on disk but missing from manifest — re-run scripts/build-gamelan-manifest.mjs`).toBe(true);
     }

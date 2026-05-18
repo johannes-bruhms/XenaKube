@@ -3,9 +3,11 @@
 // Mirrors the dashboard's persisted localStorage keys to a project-tracked
 // JSON file via two relay routes (GET/POST /api/dashboard-settings) so
 // settings travel with the repo across machines instead of being trapped in
-// per-browser Chrome User Data. Recovery story: when Chrome state is lost in
-// a migration, opening the dashboard on the new machine reads the file at
-// boot and reseeds localStorage with the last-saved values.
+// per-browser Chrome User Data. Named snapshots live next to it at
+// data/dashboard-presets.json and are managed through /api/dashboard-presets.
+// Recovery story: when Chrome state is lost in a migration, opening the
+// dashboard on the new machine reads the file at boot and reseeds
+// localStorage with the last-saved values.
 //
 // Bootstrap-from-server happens via a synchronous inline XHR in
 // public/dashboard.html BEFORE this module loads, so by the time main.js
@@ -20,6 +22,8 @@
 // which is intentionally one-shot) are not synced.
 
 export const SYNCED_KEYS = new Set([
+  'gyroSmoothing',
+  'stillThreshold',
   'uiHidden',
   'scoreSpeed',
   'midiBrushEnabled',
@@ -47,31 +51,40 @@ export const SYNCED_KEYS = new Set([
 ]);
 
 const DEBOUNCE_MS = 800;
-const ENDPOINT = '/api/dashboard-settings';
+const SETTINGS_ENDPOINT = '/api/dashboard-settings';
+const PRESETS_ENDPOINT = '/api/dashboard-presets';
 
 let pendingTimer = null;
 let installed = false;
 
-function gather() {
+export function gatherSyncedSettings(extra = {}) {
   const out = {};
   for (const key of SYNCED_KEYS) {
     const v = localStorage.getItem(key);
     if (v !== null) out[key] = v;
   }
+  for (const [key, value] of Object.entries(extra || {})) {
+    if (!SYNCED_KEYS.has(key) || value == null) continue;
+    out[key] = String(value);
+  }
   return out;
+}
+
+export async function saveActiveSettings(settings = gatherSyncedSettings()) {
+  const res = await fetch(SETTINGS_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ version: 1, settings }),
+  });
+  if (!res.ok) {
+    throw new Error(`settings save rejected ${res.status}: ${await res.text().catch(() => '')}`);
+  }
 }
 
 async function push() {
   pendingTimer = null;
   try {
-    const res = await fetch(ENDPOINT, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ version: 1, settings: gather() }),
-    });
-    if (!res.ok) {
-      console.warn('[settings-sync] push rejected', res.status, await res.text().catch(() => ''));
-    }
+    await saveActiveSettings(gatherSyncedSettings());
   } catch (err) {
     console.warn('[settings-sync] push failed:', err);
   }
@@ -80,6 +93,34 @@ async function push() {
 function schedulePush() {
   if (pendingTimer != null) clearTimeout(pendingTimer);
   pendingTimer = setTimeout(push, DEBOUNCE_MS);
+}
+
+async function fetchJson(endpoint, options) {
+  const res = await fetch(endpoint, options);
+  if (!res.ok) {
+    throw new Error(`${endpoint} rejected ${res.status}: ${await res.text().catch(() => '')}`);
+  }
+  return res.json();
+}
+
+export async function fetchDashboardPresets() {
+  return fetchJson(PRESETS_ENDPOINT);
+}
+
+export async function saveDashboardPreset({ id = null, name, settings }) {
+  return fetchJson(PRESETS_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ version: 1, action: 'save', id, name, settings }),
+  });
+}
+
+export async function deleteDashboardPreset(id) {
+  return fetchJson(PRESETS_ENDPOINT, {
+    method: 'POST',
+    headers: { 'content-type': 'application/json' },
+    body: JSON.stringify({ version: 1, action: 'delete', id }),
+  });
 }
 
 export function install() {
@@ -100,8 +141,8 @@ export function install() {
       clearTimeout(pendingTimer);
       pendingTimer = null;
       try {
-        navigator.sendBeacon(ENDPOINT, new Blob(
-          [JSON.stringify({ version: 1, settings: gather() })],
+        navigator.sendBeacon(SETTINGS_ENDPOINT, new Blob(
+          [JSON.stringify({ version: 1, settings: gatherSyncedSettings() })],
           { type: 'application/json' },
         ));
       } catch {}

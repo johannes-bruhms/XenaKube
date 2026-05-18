@@ -96,7 +96,7 @@
   .ovl > * { pointer-events: auto; }
 
   /* Top-left column — title, conn-row, mode pills. Floating K/C cards live
-     in this DOM column but are fixed-positioned at the active label-merge point.
+     in this DOM column but are fixed-positioned from the active ghost C anchor.
      Single column,
      proportional width, natural font sizes (no zoom hack — sized directly so
      the rendered metrics match the rest of the HUD). */
@@ -458,8 +458,9 @@
   .seq-vertex-pip.active .pip-complex { color: var(--text); }
 
   /* Floating active vertex + complex cards. JS anchors this cluster at the
-     active K/C label-merge point after a phrase trigger; before the merge is
-     ready it falls back to the active ghost C projection for readability. */
+     active ghost C projection after a phrase trigger and places the card
+     inward: left-side ghost vertices open right, right-side vertices open
+     left. */
   .vertex-grid, .complex-grid { display: block; }
   .vertex-card, .complex-card {
     display: none;
@@ -1029,7 +1030,8 @@
     background: rgba(0, 204, 255, 0.10);
   }
   .spectrogram-settings-toggle-row .settings-toggle,
-  .cube-colors-toggle-row .settings-toggle {
+  .cube-colors-toggle-row .settings-toggle,
+  .dashboard-presets-toggle-row .settings-toggle {
     flex: 1;
     text-align: center;
   }
@@ -1062,11 +1064,13 @@
   }
 
   .spectrogram-settings-panel[hidden],
-  .cube-colors-panel[hidden] {
+  .cube-colors-panel[hidden],
+  .dashboard-presets-panel[hidden] {
     display: none !important;
   }
   .spectrogram-settings-panel,
-  .cube-colors-panel {
+  .cube-colors-panel,
+  .dashboard-presets-panel {
     position: fixed;
     right: calc(var(--br-cluster-w) + 22px);
     bottom: 14px;
@@ -1087,6 +1091,9 @@
   }
   .cube-colors-panel {
     width: min(680px, calc(100vw - var(--br-cluster-w) - 46px));
+  }
+  .dashboard-presets-panel {
+    width: min(430px, calc(100vw - var(--br-cluster-w) - 46px));
   }
   .spec-panel-head {
     display: flex;
@@ -1339,10 +1346,61 @@
     text-align: right;
     font-variant-numeric: tabular-nums;
   }
+  .dashboard-presets-body {
+    display: flex;
+    flex-direction: column;
+    gap: 9px;
+    min-width: 0;
+  }
+  .preset-field-row {
+    display: grid;
+    grid-template-columns: 58px minmax(0, 1fr);
+    align-items: center;
+    gap: 8px;
+    color: var(--text);
+    font-size: 12px;
+  }
+  .preset-field-row > span {
+    color: var(--text);
+    letter-spacing: 0.4px;
+  }
+  .preset-field-row input[type="text"] {
+    min-width: 0;
+    width: 100%;
+    height: 24px;
+    padding: 3px 6px;
+    font-family: inherit;
+    font-size: 11px;
+    color: var(--text);
+    background: rgba(0, 0, 0, 0.18);
+    border: 1px solid var(--border);
+    border-radius: 3px;
+  }
+  .preset-field-row input[type="text"]:focus-visible,
+  .preset-field-row select:focus-visible {
+    outline: 1px solid var(--accent2);
+    outline-offset: 1px;
+  }
+  .preset-action-grid {
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 5px;
+  }
+  .preset-status {
+    min-height: 16px;
+    color: var(--slider-color);
+    font-size: 11px;
+    line-height: 1.25;
+    text-align: right;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
 
   @media (max-width: 900px) {
     .spectrogram-settings-panel,
-    .cube-colors-panel {
+    .cube-colors-panel,
+    .dashboard-presets-panel {
       left: 14px;
       right: 14px;
       bottom: 76px;

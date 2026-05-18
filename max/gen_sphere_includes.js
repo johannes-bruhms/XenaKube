@@ -51,7 +51,7 @@ var OSC = {
 
 // ---------------- Gamelan sample manifest -------------------------
 // 314 samples — Latent Sonorities / RBI Berlin gamelan.
-// Each entry: { canonical (slot id), file (relative to media/gamelan/),
+// Each entry: { canonical (slot id), file (relative to max/media/gamelan/),
 //   instrument, tuning, degree, mallet, modifiers, velocity, velocityBucket }
 var GAMELAN_SAMPLES = [{
   canonical: "saron-pelog-1-softest-pekingmallet",

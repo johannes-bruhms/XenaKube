@@ -5,6 +5,7 @@ import { getPermutation, parseMoveToElement } from '../src/group.js';
 import { ComplexType } from '../src/types.js';
 import { HALF_TURN_WINDOW_MS } from '../src/swam-mapping.js';
 import type { VoiceOutput } from '../src/voice-engine.js';
+import type { Quaternion } from '../src/types.js';
 
 function withMockNow<T>(startMs: number, fn: (setNow: (ms: number) => void) => T): T {
   let now = startMs;
@@ -14,6 +15,14 @@ function withMockNow<T>(startMs: number, fn: (setNow: (ms: number) => void) => T
   } finally {
     spy.mockRestore();
   }
+}
+
+function axisAngle(ax: number, ay: number, az: number, theta: number): Quaternion {
+  const len = Math.sqrt(ax * ax + ay * ay + az * az);
+  ax /= len; ay /= len; az /= len;
+  const half = theta / 2;
+  const s = Math.sin(half);
+  return [ax * s, ay * s, az * s, Math.cos(half)];
 }
 
 describe('XenaKubeEngine', () => {
@@ -130,6 +139,24 @@ describe('XenaKubeEngine', () => {
     expect(emitted?.active[0]).toMatchObject({
       vertexIndex: 3,
       complex: ComplexType.IonizedAtom,
+    });
+  });
+
+  it('beta-cosmo rotated top-face counterturn activates the local C3 slot immediately', () => {
+    const engine = new XenaKubeEngine();
+    const emitted: VoiceOutput[] = [];
+    engine.onVoice(output => { emitted.push(output); });
+
+    const yaw90 = axisAngle(0, 1, 0, Math.PI / 2);
+    engine.onGyro(...yaw90);
+    const state = engine.onTurn("U'")!;
+
+    expect(state.upFace).toBe('U');
+    expect(state.activeVertex).toBe(2);
+    expect(state.cAssignments[state.activeVertex]).toBe(ComplexType.OrderedCloudFlat);
+    expect(emitted.at(-1)?.active[0]).toMatchObject({
+      vertexIndex: 2,
+      complex: ComplexType.OrderedCloudFlat,
     });
   });
 

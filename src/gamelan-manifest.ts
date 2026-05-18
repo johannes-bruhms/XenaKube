@@ -3,14 +3,14 @@
 // DO NOT EDIT BY HAND. Regenerate after adding/removing samples:
 //     node scripts/build-gamelan-manifest.mjs
 //
-// Source: media/gamelan/ (Latent Sonorities — RBI Berlin Javanese
+// Source: max/media/gamelan/ (Latent Sonorities — RBI Berlin Javanese
 // Gamêlan Agêng Tumbuk Nêm; tuning analysis by Khyam Allami).
 // ================================================================
 
 export interface GamelanSample {
   /** Canonical short name; used as polybuffer~ slot id and in /xk/sphere/strike. */
   canonical: string;
-  /** Raw filename relative to media/gamelan/. */
+  /** Raw filename relative to max/media/gamelan/. */
   file: string;
   /** Instrument family. */
   instrument: 'saron' | 'slenthem' | 'bonang' | 'kempyang' | 'kethuk' | 'kempul' | 'kempul-ensemble' | 'gong';

@@ -14,7 +14,9 @@ import {
   ENV_PROFILE,
   INTENSITY_MAP,
   clamp,
+  expressionCcValue,
   intensityEntry,
+  onsetExpressionValue,
   rateAccentValue,
   rateDensityMultiplier,
   rateExpressionMultiplier,
@@ -23,6 +25,8 @@ import {
   resolvePhraseDuration,
   stepVelScale,
   HALF_TURN_GESTURE_DURATION_SEC,
+  HALF_TURN_GLISS_DURATION_SEC,
+  HALF_TURN_GLISS_SPAN_BY_COMPLEX,
   HALF_TURN_GESTURE_INTENSITY,
   HALF_TURN_GESTURE_EXPR,
   HALF_TURN_GESTURE_VELOCITY,
@@ -52,6 +56,10 @@ const DOUBLE_STOP_ROLL_MIN = CELLO_MIN;
 const DOUBLE_STOP_ROLL_MAX = 84;
 
 type Rng = () => number;
+
+function isHalfTurnGlissComplex(complex: number): boolean {
+  return complex === 5 || complex === 6 || complex === 7;
+}
 
 export type PhraseEventKind =
   | 'exprShape'
@@ -226,7 +234,9 @@ export class PhrasePlanner {
         faceSnapshot.durationMult,
         ev.complex,
       );
-      const durationSec = isHalfTurn ? HALF_TURN_GESTURE_DURATION_SEC : resolved.durationSec;
+      const durationSec = isHalfTurn
+        ? (isHalfTurnGlissComplex(ev.complex) ? HALF_TURN_GLISS_DURATION_SEC : HALF_TURN_GESTURE_DURATION_SEC)
+        : resolved.durationSec;
       const durationSource: DurationSource = isHalfTurn ? 'half-turn' : resolved.durationSource;
       const intensity = isHalfTurn ? HALF_TURN_GESTURE_INTENSITY : ev.params.intensity;
       const intMap = intensityEntry(intensity);
@@ -338,19 +348,21 @@ export class PhrasePlanner {
         kind: 'exprShape',
         tMs: 0,
         shape: 'static',
+        start: onsetExpressionValue(peakExpr),
         peakExpr: Math.round(peakExpr),
         durationMs: ctx.durationMs,
       });
       return;
     }
     if (arc === 'cresc' || arc === 'dim') {
-      const lo = clamp(Math.round(peakExpr * 0.30), 0, 127);
-      const hi = clamp(Math.round(peakExpr), 0, 127);
+      const lo = expressionCcValue(peakExpr * 0.30);
+      const onsetLo = onsetExpressionValue(lo);
+      const hi = onsetExpressionValue(peakExpr);
       ctx.plan.events.push({
         kind: 'exprShape',
         tMs: 0,
         shape: arc,
-        start: arc === 'cresc' ? lo : hi,
+        start: arc === 'cresc' ? onsetLo : hi,
         end: arc === 'cresc' ? hi : lo,
         peakExpr: Math.round(peakExpr),
         durationMs: ctx.durationMs,
@@ -358,27 +370,28 @@ export class PhrasePlanner {
       return;
     }
     if (arc === 'hairpin-up' || arc === 'hairpin-down') {
-      const lo = clamp(Math.round(peakExpr * 0.30), 0, 127);
-      const hi = clamp(Math.round(peakExpr), 0, 127);
+      const lo = expressionCcValue(peakExpr * 0.30);
+      const onsetLo = onsetExpressionValue(lo);
+      const hi = onsetExpressionValue(peakExpr);
       ctx.plan.events.push({
         kind: 'exprShape',
         tMs: 0,
         shape: arc,
-        start: arc === 'hairpin-up' ? lo : hi,
+        start: arc === 'hairpin-up' ? onsetLo : hi,
         mid: arc === 'hairpin-up' ? hi : lo,
-        end: arc === 'hairpin-up' ? lo : hi,
+        end: arc === 'hairpin-up' ? onsetLo : hi,
         peakExpr: Math.round(peakExpr),
         durationMs: ctx.durationMs,
       });
       return;
     }
     const cmx = COMPLEX[ctx.plan.complex];
-    const attack = cmx ? Math.round(peakExpr * cmx.exprEnv.attack) : Math.round(peakExpr);
+    const attack = cmx ? peakExpr * cmx.exprEnv.attack : peakExpr;
     ctx.plan.events.push({
       kind: 'exprShape',
       tMs: 0,
       shape: 'legacy',
-      start: clamp(attack, 0, 127),
+      start: onsetExpressionValue(attack),
       peakExpr: Math.round(peakExpr),
       durationMs: ctx.durationMs,
     });
@@ -401,9 +414,18 @@ export class PhrasePlanner {
   }
 
   private phraseHalfTurn(ctx: VoiceContext): void {
-    const p = this.pickPitch(1, ctx);
-    const companion = foldToRange(p + 7, CELLO_MIN, DOUBLE_STOP_ROLL_MAX);
-    const offT = Math.min(ctx.durationMs, HALF_TURN_GESTURE_NOTE_MS);
+    if (ctx.plan.complex === 1) {
+      this.phraseHalfTurnPizz(ctx);
+      return;
+    }
+    if (isHalfTurnGlissComplex(ctx.plan.complex)) {
+      this.phraseHalfTurnGliss(ctx);
+      return;
+    }
+    this.phraseHalfTurnBowed(ctx);
+  }
+
+  private addHalfTurnEnvelope(ctx: VoiceContext): void {
     ctx.plan.events.push({
       kind: 'exprShape',
       tMs: 0,
@@ -411,10 +433,72 @@ export class PhrasePlanner {
       peakExpr: HALF_TURN_GESTURE_EXPR,
       durationMs: ctx.durationMs,
     });
+  }
+
+  private phraseHalfTurnPizz(ctx: VoiceContext): void {
+    const p = this.humanPitch(this.pickPitch(1, ctx));
+    const offT = Math.min(ctx.durationMs, HALF_TURN_GESTURE_NOTE_MS);
+    this.addHalfTurnEnvelope(ctx);
+    this.noteOn(ctx, 0, p, HALF_TURN_GESTURE_VELOCITY);
+    this.noteOff(ctx, offT, p);
+    ctx.plan.events.push({ kind: 'release', tMs: ctx.durationMs, fadeMs: HALF_TURN_GESTURE_RELEASE_MS });
+    ctx.plan.events.push({
+      kind: 'allNotesOff',
+      tMs: ctx.durationMs + HALF_TURN_GESTURE_RELEASE_MS + 20,
+    });
+  }
+
+  private phraseHalfTurnBowed(ctx: VoiceContext): void {
+    const p = this.pickPitch(1, ctx);
+    const companion = foldToRange(p + 7, CELLO_MIN, DOUBLE_STOP_ROLL_MAX);
+    const offT = Math.min(ctx.durationMs, HALF_TURN_GESTURE_NOTE_MS);
+    this.addHalfTurnEnvelope(ctx);
     this.noteOn(ctx, 0, p, HALF_TURN_GESTURE_VELOCITY);
     this.noteOn(ctx, 0, companion, Math.round(HALF_TURN_GESTURE_VELOCITY * 0.92), true);
     this.noteOff(ctx, offT, p);
     this.noteOff(ctx, offT, companion, true);
+    ctx.plan.events.push({ kind: 'release', tMs: ctx.durationMs, fadeMs: HALF_TURN_GESTURE_RELEASE_MS });
+    ctx.plan.events.push({
+      kind: 'allNotesOff',
+      tMs: ctx.durationMs + HALF_TURN_GESTURE_RELEASE_MS + 20,
+    });
+  }
+
+  private halfTurnGlissTarget(source: number, span: number): number {
+    let dir = this.rng() < 0.5 ? -1 : 1;
+    let target = source + dir * span;
+    if (target < CELLO_MIN || target > CELLO_MAX) {
+      dir *= -1;
+      target = source + dir * span;
+    }
+    return clamp(Math.round(target), CELLO_MIN, CELLO_MAX);
+  }
+
+  private halfTurnGlissStroke(ctx: VoiceContext, sourcePitch: number, targetPitch: number, durMs: number): void {
+    const fromPitch = Math.round(sourcePitch);
+    const toPitch = clamp(Math.round(targetPitch), CELLO_MIN, CELLO_MAX);
+    if (Math.abs(toPitch - fromPitch) > PITCHBEND_RANGE_SEMI) {
+      ctx.plan.warnings.push(`half-turn gliss exceeds pitchbend range C${ctx.plan.complex} ${fromPitch}->${toPitch}`);
+    }
+    ctx.plan.events.push({
+      kind: 'bendStep',
+      tMs: 0,
+      fromPitch,
+      toPitch,
+      durMs,
+      velocity: HALF_TURN_GESTURE_VELOCITY,
+    });
+    ctx.plan.expected.bendStepCount++;
+  }
+
+  private phraseHalfTurnGliss(ctx: VoiceContext): void {
+    const span = HALF_TURN_GLISS_SPAN_BY_COMPLEX[ctx.plan.complex] ?? 7;
+    const p = this.pickPitch(ctx.plan.complex, ctx);
+    const target = this.halfTurnGlissTarget(p, span);
+    const durMs = ctx.durationMs;
+    this.addHalfTurnEnvelope(ctx);
+    this.noteOn(ctx, 0, p, HALF_TURN_GESTURE_VELOCITY);
+    this.halfTurnGlissStroke(ctx, p, target, durMs);
     ctx.plan.events.push({ kind: 'release', tMs: ctx.durationMs, fadeMs: HALF_TURN_GESTURE_RELEASE_MS });
     ctx.plan.events.push({
       kind: 'allNotesOff',

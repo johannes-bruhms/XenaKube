@@ -231,6 +231,16 @@
       aria-expanded="false"
       aria-controls="cubeColorsPanel">colors</button>
   </div>
+  <div class="br-slider-row dashboard-presets-toggle-row" title="Save or load persistent dashboard presets from the repo data folder.">
+    <label>preset</label>
+    <button
+      type="button"
+      id="dashboardPresetsToggle"
+      class="settings-toggle"
+      aria-pressed="false"
+      aria-expanded="false"
+      aria-controls="dashboardPresetsPanel">presets</button>
+  </div>
   <div id="spectrogramSettingsPanel" class="spectrogram-settings-panel" hidden>
     <div class="spec-panel-head">
       <div class="spec-panel-title">spectrogram settings</div>
@@ -319,6 +329,29 @@
     <div id="cubeColorsEditor" class="cube-colors-editor"></div>
     <button type="button" id="resetCubeColors" class="spec-panel-action">reset cube colors</button>
   </div>
+  <div id="dashboardPresetsPanel" class="dashboard-presets-panel" hidden>
+    <div class="spec-panel-head">
+      <div class="spec-panel-title">dashboard presets</div>
+      <button type="button" id="dashboardPresetsClose" class="spec-panel-close">close</button>
+    </div>
+    <div class="dashboard-presets-body">
+      <label class="preset-field-row">
+        <span>preset</span>
+        <select id="dashboardPresetSelect" class="record-mode"></select>
+      </label>
+      <label class="preset-field-row">
+        <span>name</span>
+        <input type="text" id="dashboardPresetName" maxlength="80" autocomplete="off" placeholder="preset name">
+      </label>
+      <div class="preset-action-grid">
+        <button type="button" id="dashboardPresetLoad" class="record-action">load</button>
+        <button type="button" id="dashboardPresetSaveNew" class="record-action">save new</button>
+        <button type="button" id="dashboardPresetUpdate" class="record-action">update</button>
+        <button type="button" id="dashboardPresetDelete" class="record-action">delete</button>
+      </div>
+      <div class="preset-status" id="dashboardPresetStatus">idle</div>
+    </div>
+  </div>
   <div class="br-slider-row record-row" title="Record a long PNG from the rolling visual layers.">
     <label>record</label>
     <select id="recordMode" class="record-mode">
@@ -372,7 +405,7 @@
      sync. See public/AGENTS.md for the role and the full failure mode. -->
 <script>
 (function bootstrapDashboardSettings() {
-  var ALLOWED = ['uiHidden','scoreSpeed','midiBrushEnabled','spectrogramEnabled',
+  var ALLOWED = ['gyroSmoothing','stillThreshold','uiHidden','scoreSpeed','midiBrushEnabled','spectrogramEnabled',
     'spectrumLatencyMs','spectrumNudgeMs','spectrumGainDb','spectrumCeilingDb',
     'spectrumFloorDb','spectrumBgPct','spectrumBgColor','spectrumCeilingColor','spectrumSmoothPct','spectrumBlurTenths',
     'spectrumTimePct','spectrumPalette','spectrumModalityPalettes',

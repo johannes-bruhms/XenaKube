@@ -368,8 +368,10 @@ Half-turns are not independent face identities. GAN hardware reports quarter
 clicks, and the algorithm book stores half-turns as two counterclockwise
 quarter-turns. For performance, a fast same-direction physical half-turn is
 also detected as punctuation: the second matching quarter-turn gets a
-`halfTurn` flag and sounds as a short, loud, assertive bowed accent, overriding
-the normal K/C/face phrase for that one turn.
+`halfTurn` flag and sounds as short, loud punctuation, overriding
+the normal K/face phrase for that one turn. C1 remains pizzicato, C4 remains
+harmonic, C5-C7 become large/medium/half-step one-direction gliss strokes,
+and the remaining complexes use the bowed accent dyad.
 
 | Move | Family | Duration bias | Envelope | Articulation | Operational sound |
 |------|--------|---------------|----------|--------|-------------------|

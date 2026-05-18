@@ -40,11 +40,12 @@ Prefer editing `xk_swam.js` over growing patch logic. The patch is the host; `xk
 - `xk_spectrum.js`: optional v8 helper for formatting Max-side FFT analysis as `/xk/spectrum/frame`; used by `pfft-test.maxpat` and the toggle-gated analyzer block in `xenakube_swam.maxpat`.
 - `xenakube_swam.maxpat`: host patch.
 - `xenakube_main.swam`: SWAM preset expected by the patch (loaded by `xenakube_swam.maxpat` on `[loadbang]`).
+- `media/`: Max-local media assets. `media/gamelan/` holds the Latent Sonorities `.wav` samples and Scala references consumed by `xk_sphere.js`; from the repo root, regenerate `src/gamelan-manifest.ts` with `node scripts/build-gamelan-manifest.mjs` after sample adds/removes, then run `npm run gen:max`.
 - `gen_includes.js`: generated shared data from `src/` for `xk_swam.js`.
 - `gen_sphere_includes.js`: GENERATED — `xk_sphere.js`'s data table (OSC subset, full gamelan sample manifest, tuning hash). Regen via `npm run gen:max`; never hand-edit. Mirrors `src/gamelan-manifest.ts` + `src/gamelan-tuning.ts`.
 - `ks_logger.js`: optional debugging helper for keyswitch/MIDI inspection.
 - `onehot.js`: v8 helper used by the host patch.
-- `relay-controller.js`: Max-side helper for relay control workflows. `script start` launches only the controller; `relay` / `start relay` starts `relay.js` as a child process. It exposes explicit `kill process` / `kill_process` Max messages for killing a stale port-3000 listener; do not auto-start or auto-kill the relay from script start.
+- `relay-controller.js`: Max-side helper for relay control workflows. `script start` launches only the controller; `relay` / `start relay` starts `relay.js` as a child process. `stop relay` asks relay's loopback `/api/shutdown` to flush and exit, then force-kills on timeout. `kill process` / `kill_process` kills the known child and any stale port-3000 listener. Controller exit must not orphan the relay child; do not auto-start or auto-kill the relay from script start.
 - `package.json` / `package-lock.json`: local Node dependency metadata for Max support helpers.
 - `max_mcp.js`, `max_mcp_node.js`, `max_mcp_v8_add_on.js`: Max MCP bridge support files.
 - `demo.maxpat`, `derivations.maxpat`, `polish.maxpat`, `rave.maxpat`: reference/experimental Max patches, not the active performance host.

@@ -24,8 +24,10 @@ const {
   HARMONICS, TREMOLO, BOW_POLY,
   HARMONICS_CC_VAL, TREMOLO_CC_VAL, BOW_POLY_CC_VAL,
   INTENSITY_MAP, ENV_PROFILE, ART_OFF_VEL, MOTION_NUDGE,
+  CC_EXPRESSION_FLOOR, ONSET_EXPRESSION_MIN,
   LEGATO_COMPLEX, MAX_PHRASE_DURATION_SEC, COMPLEX_DURATION_FLOOR_SEC,
   HALF_TURN_WINDOW_MS, HALF_TURN_GESTURE_DURATION_SEC,
+  HALF_TURN_GLISS_DURATION_SEC, HALF_TURN_GLISS_SPAN_BY_COMPLEX,
   HALF_TURN_GESTURE_INTENSITY, HALF_TURN_GESTURE_EXPR,
   HALF_TURN_GESTURE_VELOCITY, HALF_TURN_GESTURE_NOTE_MS,
   HALF_TURN_GESTURE_RELEASE_MS, HALF_TURN_GESTURE_BOW_PRESSURE,
@@ -90,6 +92,9 @@ lines.push(block('TREMOLO_CC_VAL',   TREMOLO_CC_VAL));
 lines.push(block('BOW_POLY_CC_VAL',  BOW_POLY_CC_VAL));
 lines.push('// ---------------- Intensity → Expr/Vel/Bow/Density/Trem ---------');
 lines.push(block('INTENSITY_MAP', INTENSITY_MAP));
+lines.push('// ---------------- Expression onset / play floors -----------------');
+lines.push(block('CC_EXPRESSION_FLOOR', CC_EXPRESSION_FLOOR));
+lines.push(block('ONSET_EXPRESSION_MIN', ONSET_EXPRESSION_MIN));
 lines.push('// ---------------- Envelope profiles (per-note + per-phrase) ------');
 lines.push(block('ENV_PROFILE', ENV_PROFILE));
 lines.push('// ---------------- Articulation → note-off velocity ---------------');
@@ -98,7 +103,7 @@ lines.push('// ---------------- Motion metadata (neutral for pitch) ------------
 lines.push(block('MOTION_NUDGE', MOTION_NUDGE));
 lines.push('// ---------------- 12 face signatures (derived from TS source) ----');
 lines.push(block('FACE_MAP', buildFaceMap()));
-lines.push('// ---------------- Gliss (legato/portamento) complexes ------------');
+lines.push('// ---------------- Cross-phrase legato tail complexes --------------');
 lines.push(block('LEGATO_COMPLEX', LEGATO_COMPLEX));
 lines.push('// ---------------- Phrase duration bounds -------------------------');
 lines.push(block('MAX_PHRASE_DURATION_SEC', MAX_PHRASE_DURATION_SEC));
@@ -106,6 +111,8 @@ lines.push(block('COMPLEX_DURATION_FLOOR_SEC', COMPLEX_DURATION_FLOOR_SEC));
 lines.push('// ---------------- Half-turn punctuation --------------------------');
 lines.push(block('HALF_TURN_WINDOW_MS', HALF_TURN_WINDOW_MS));
 lines.push(block('HALF_TURN_GESTURE_DURATION_SEC', HALF_TURN_GESTURE_DURATION_SEC));
+lines.push(block('HALF_TURN_GLISS_DURATION_SEC', HALF_TURN_GLISS_DURATION_SEC));
+lines.push(block('HALF_TURN_GLISS_SPAN_BY_COMPLEX', HALF_TURN_GLISS_SPAN_BY_COMPLEX));
 lines.push(block('HALF_TURN_GESTURE_INTENSITY', HALF_TURN_GESTURE_INTENSITY));
 lines.push(block('HALF_TURN_GESTURE_EXPR', HALF_TURN_GESTURE_EXPR));
 lines.push(block('HALF_TURN_GESTURE_VELOCITY', HALF_TURN_GESTURE_VELOCITY));
@@ -151,7 +158,7 @@ sphereLines.push('// ---------------- OSC addresses (shared with SWAM) ---------
 sphereLines.push(block('OSC', OSC));
 sphereLines.push('// ---------------- Gamelan sample manifest -------------------------');
 sphereLines.push(`// ${GAMELAN_SAMPLE_COUNT} samples — Latent Sonorities / RBI Berlin gamelan.`);
-sphereLines.push('// Each entry: { canonical (slot id), file (relative to media/gamelan/),');
+sphereLines.push('// Each entry: { canonical (slot id), file (relative to max/media/gamelan/),');
 sphereLines.push('//   instrument, tuning, degree, mallet, modifiers, velocity, velocityBucket }');
 sphereLines.push(block('GAMELAN_SAMPLES', GAMELAN_SAMPLES));
 sphereLines.push(block('GAMELAN_SAMPLE_COUNT', GAMELAN_SAMPLE_COUNT));
